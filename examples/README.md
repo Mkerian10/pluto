@@ -56,6 +56,14 @@ Demonstrates `select` for channel multiplexing: waiting on multiple channels sim
 cargo run -- run examples/select/main.pt
 ```
 
+## timeouts
+
+Bounded waits: `rx.recv_timeout(ms)` raising a typed `TimedOut` (with `ChannelClosed` still winning on a closed channel), and the select `after` arm — a Raft-flavored follower waits for heartbeats with a randomized election timeout whose window re-randomizes on every loop iteration (the `after` expression is re-evaluated on each select entry).
+
+```bash
+cargo run -- run examples/timeouts/main.pt --stdlib stdlib
+```
+
 ## concurrency
 
 Demonstrates `spawn` for concurrent execution: spawning functions on separate threads, collecting results with `.get()`, error handling with `catch`, and void tasks.

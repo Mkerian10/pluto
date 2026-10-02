@@ -1,0 +1,72 @@
+// Timeouts: bounded waits on channels and the select `after` arm.
+//
+// Two primitives (issue #370):
+//
+//   rx.recv_timeout(ms)  — a bounded recv: raises TimedOut when the deadline
+//                          elapses (ChannelClosed still wins when closed).
+//
+//   select { ... after ms { ... } }
+//                        — a timeout arm in the Erlang receive...after
+//                          lineage. The duration expression is re-evaluated
+//                          on EACH select entry, which is exactly what
+//                          Raft's randomized election window needs.
+//
+// A timeout is a fact about absence: "nothing arrived within the deadline."
+// It licenses reacting to silence — it never proves the peer failed.
+
+import std.random
+
+// A flaky leader: sends a few heartbeats, then goes silent (crashes).
+fn leader(tx: Sender<int>) {
+    let mut term = 1
+    while term <= 3 {
+        tx.send(term)!
+        term = term + 1
+    }
+    // ... leader dies. No close(), no goodbye — just silence.
+}
+
+// A follower waits for heartbeats with a randomized election timeout.
+// Re-entering the select re-arms the window with fresh jitter each loop —
+// no timer object, no cancellation handle.
+fn follower(rx: Receiver<int>) int {
+    let mut heartbeats = 0
+    while true {
+        select {
+            term = rx.recv() {
+                heartbeats = heartbeats + 1
+                print(f"heartbeat received (term {term})")
+            }
+            after 150 + random.between(0, 150) {
+                print(f"election timeout after {heartbeats} heartbeats — becoming candidate")
+                return heartbeats
+            }
+        }
+    }
+    return heartbeats
+}
+
+fn main() {
+    // ── Raft-flavored election loop ─────────────────────────────────────
+    let (tx, rx) = chan<int>(8)
+    let t = spawn leader(tx)
+    let seen = follower(rx) catch -1
+    t.get()!
+    print(f"follower saw {seen} heartbeats before the leader went quiet")
+
+    // ── recv_timeout: a bounded single wait ─────────────────────────────
+    let (tx2, rx2) = chan<string>(1)
+    tx2.send("prompt reply")!
+    let fast = rx2.recv_timeout(1000)!
+    print(f"within deadline: {fast}")
+
+    // Quiet channel: the deadline fires and raises a typed TimedOut.
+    let slow = rx2.recv_timeout(100) catch err: TimedOut { "no reply in 100ms" }
+    print(f"after deadline: {slow}")
+
+    // Closed beats the clock: a closed, drained channel is a definite
+    // state, not a bounded wait — ChannelClosed, never TimedOut.
+    tx2.close()
+    let closed = rx2.recv_timeout(60000) catch err: ChannelClosed { "channel closed" }
+    print(f"closed channel: {closed}")
+}
