@@ -5273,7 +5273,17 @@ pub fn lower_function(
 
     // Initialize GC at start of non-app main
     if is_main {
-        ctx.call_runtime_void("__pluto_gc_init", &[]);
+        // Pass a real stack anchor: the address of a slot in main's frame
+        // approximates the bottom (highest address) of the program stack for
+        // conservative root scanning. See the matching entry-synthesis sites
+        // in codegen/mod.rs; previously no argument was passed while the C
+        // side reads one, so gc_stack_bottom was register residue — sometimes
+        // NULL, which silently disabled collection entirely.
+        let gc_anchor_slot = ctx.builder.create_sized_stack_slot(
+            cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot, 8, 3));
+        let gc_anchor = ctx.builder.ins().stack_addr(types::I64, gc_anchor_slot, 0);
+        ctx.call_runtime_void("__pluto_gc_init", &[gc_anchor]);
 
         // Initialize rwlocks for synchronized singletons and objects: plain
         // fn-main programs never run the DI synthesis that does this for

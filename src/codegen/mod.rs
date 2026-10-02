@@ -908,7 +908,17 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
 
             // Initialize GC
             let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
-            builder.ins().call(gc_init_ref, &[]);
+            // Pass a real stack anchor: the address of a slot in this entry
+            // frame marks the bottom (highest address) of the program stack
+            // for conservative root scanning. Previously this call passed no
+            // argument while the C side reads one, so gc_stack_bottom was
+            // whatever happened to sit in the first argument register —
+            // sometimes NULL, which silently disabled collection entirely.
+            let gc_anchor_slot = builder.create_sized_stack_slot(
+                cranelift_codegen::ir::StackSlotData::new(
+                    cranelift_codegen::ir::StackSlotKind::ExplicitSlot, 8, 3));
+            let gc_anchor = builder.ins().stack_addr(types::I64, gc_anchor_slot, 0);
+            builder.ins().call(gc_init_ref, &[gc_anchor]);
 
             // Initialize rwlocks for synchronized singletons/objects (test
             // binaries run no DI synthesis; see the app-main equivalent)
@@ -1061,7 +1071,17 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
 
             // Initialize GC before any allocations
             let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
-            builder.ins().call(gc_init_ref, &[]);
+            // Pass a real stack anchor: the address of a slot in this entry
+            // frame marks the bottom (highest address) of the program stack
+            // for conservative root scanning. Previously this call passed no
+            // argument while the C side reads one, so gc_stack_bottom was
+            // whatever happened to sit in the first argument register —
+            // sometimes NULL, which silently disabled collection entirely.
+            let gc_anchor_slot = builder.create_sized_stack_slot(
+                cranelift_codegen::ir::StackSlotData::new(
+                    cranelift_codegen::ir::StackSlotKind::ExplicitSlot, 8, 3));
+            let gc_anchor = builder.ins().stack_addr(types::I64, gc_anchor_slot, 0);
+            builder.ins().call(gc_init_ref, &[gc_anchor]);
 
             // Initialize coverage if enabled
             if let Some(cov_map) = coverage_map {
@@ -1225,7 +1245,17 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
 
             // Initialize GC before any allocations
             let gc_init_ref = module.declare_func_in_func(runtime.get("__pluto_gc_init"), builder.func);
-            builder.ins().call(gc_init_ref, &[]);
+            // Pass a real stack anchor: the address of a slot in this entry
+            // frame marks the bottom (highest address) of the program stack
+            // for conservative root scanning. Previously this call passed no
+            // argument while the C side reads one, so gc_stack_bottom was
+            // whatever happened to sit in the first argument register —
+            // sometimes NULL, which silently disabled collection entirely.
+            let gc_anchor_slot = builder.create_sized_stack_slot(
+                cranelift_codegen::ir::StackSlotData::new(
+                    cranelift_codegen::ir::StackSlotKind::ExplicitSlot, 8, 3));
+            let gc_anchor = builder.ins().stack_addr(types::I64, gc_anchor_slot, 0);
+            builder.ins().call(gc_init_ref, &[gc_anchor]);
 
             // Initialize coverage if enabled
             if let Some(cov_map) = coverage_map {
