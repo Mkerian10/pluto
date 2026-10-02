@@ -5932,3 +5932,86 @@ tests[scheduler: Exhaustive] {
     assert!(!stderr.contains("deadlock"), "sleep never deadlocks; stderr: {stderr}");
     assert_eq!(code, 0);
 }
+
+// ── select `after` arm under the deterministic scheduler ─────────────────
+
+#[test]
+fn exhaustive_select_after_explores_both_outcomes() {
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn sender(tx: Sender<int>) {
+    tx.send(3)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "after race" {
+        let (tx, rx) = chan<int>(1)
+        let t = spawn sender(tx)
+        select {
+            v = rx.recv() {
+                print("OUTCOME value")
+            }
+            after 150 {
+                print("OUTCOME after")
+            }
+        }
+        t.detach()
+    }
+}
+"#);
+    assert_eq!(code, 0, "stderr: {stderr}\nstdout: {stdout}");
+    assert!(stdout.contains("OUTCOME after"),
+        "exhaustive must explore the after-fires outcome; stdout: {stdout}");
+    assert!(stdout.contains("OUTCOME value"),
+        "exhaustive must explore the value-arrives outcome; stdout: {stdout}");
+    assert!(stderr.contains("2 schedules explored"), "stderr: {stderr}");
+}
+
+#[test]
+fn sequential_select_after_fires_where_deadlock_would_be() {
+    // Sequential select with no ready arm used to exit with a deadlock
+    // report; with an after arm, the timeout fires instead.
+    let (stdout, _stderr, code) = compile_test_and_run(r#"
+test "after instead of deadlock" {
+    let (tx, rx) = chan<int>(1)
+    let mut fired = 0
+    select {
+        v = rx.recv() {
+            fired = v
+        }
+        after 50 {
+            fired = -1
+        }
+    }
+    expect(fired).to_equal(-1)
+    tx.close()
+}
+"#);
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn exhaustive_select_after_never_deadlocks() {
+    // A select with an after arm is always enabled (the timeout transition
+    // exists), so it can never contribute to a reported deadlock.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+tests[scheduler: Exhaustive] {
+    test "no deadlock with after" {
+        let (tx, rx) = chan<int>(1)
+        let mut r = 0
+        select {
+            v = rx.recv() {
+                r = v
+            }
+            after 100 {
+                r = -1
+            }
+        }
+        expect(r).to_equal(-1)
+        tx.close()
+    }
+}
+"#);
+    assert_eq!(code, 0, "stderr: {stderr}\nstdout: {stdout}");
+    assert!(!stderr.contains("deadlock"), "after-select never deadlocks; stderr: {stderr}");
+}

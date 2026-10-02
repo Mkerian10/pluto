@@ -161,6 +161,7 @@ The compiler infers channel errors automatically:
 - `rx.recv()` → can raise `ChannelClosed`
 - `tx.try_send(v)` → can raise `ChannelClosed`, `ChannelFull`
 - `rx.try_recv()` → can raise `ChannelClosed`, `ChannelEmpty`
+- `rx.recv_timeout(ms)` → can raise `ChannelClosed`, `TimedOut`
 
 ### For-in Desugaring
 
@@ -221,8 +222,17 @@ Both `Sender<T>` and `Receiver<T>` are I64 pointers to the same underlying chann
 - **Reference counting / implicit close-on-drop** — Auto-close when last sender goes out of scope. Needs scope-exit hooks. Phase 2.
 - **True rendezvous (capacity 0)** — Sender blocks until receiver is ready. Phase 2.
 - **Stdlib channel methods** (`.connections()`, `.lines()`, `.stream()`) — Expose I/O as channels.
-- ~~**Select/race** — Multiplexing across multiple channels.~~ Implemented: `select { val = rx.recv() { ... } tx.send(v) { ... } default { ... } }`
-- ~~**Timeouts** (`rx.recv_timeout(duration)`)~~ — Implemented: `rx.recv_timeout(ms)` raising `TimedOut` (see "Receiving"). Duration stayed a plain `int` of ms; a `Duration` type remains future work.
+- ~~**Select/race** — Multiplexing across multiple channels.~~ Implemented: `select { val = rx.recv() { ... } tx.send(v) { ... } default { ... } }`, plus the timeout arm (Erlang `receive ... after` lineage):
+
+  ```
+  select {
+      hb = rx.recv() { handle(hb) }
+      after election_timeout_ms { become_candidate() }
+  }
+  ```
+
+  `after <int-expr> { ... }` — at most one per select, mutually exclusive with `default` (`default` is `after 0`). The duration expression is **re-evaluated on each select entry**, so `after base + jitter()` re-randomizes every loop iteration (exactly Raft's randomized election window). Taking the arm is NOT an error — it runs the arm's block; a select with `after` never contributes to deadlock detection (its timeout transition is always enabled). All-channels-closed still raises `ChannelClosed` — a fully closed select can never complete, so there is nothing to wait out. In deterministic tests the arm is an enabled scheduler choice: exhaustive exploration covers both the arm-fires and arm-loses outcomes of every race.
+- ~~**Timeouts** (`rx.recv_timeout(duration)`)~~ — Implemented: `rx.recv_timeout(ms)` raising `TimedOut` (see "Receiving"), and the select `after` arm above. Duration stayed a plain `int` of ms; a `Duration` type remains future work.
 - **Move semantics** — Send copies the pointer for heap types (shared reference). Real ownership transfer is future work.
 - **Cross-pod channels** — Compiler-synthesized serialization for channels across pod boundaries.
 

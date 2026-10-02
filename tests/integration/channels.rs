@@ -1133,3 +1133,203 @@ fn main() {
 }
 "#, "recv_timeout() expects int milliseconds");
 }
+
+// ── select `after` arm ──────────────────────────────────────────────────────
+
+#[test]
+fn select_after_fires_on_quiet_channel() {
+    // Raft-shaped loop: wait for heartbeats with an election timeout; a
+    // quiet channel trips the after arm.
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let mut elections = 0
+    let mut running = true
+    while running {
+        select {
+            hb = rx.recv() {
+                print(f"heartbeat {hb}")
+            }
+            after 50 {
+                elections = elections + 1
+                if elections == 2 {
+                    running = false
+                }
+            }
+        }
+    }
+    print(f"elections {elections}")
+    tx.close()
+}
+"#);
+    assert_eq!(out.trim(), "elections 2");
+}
+
+#[test]
+fn select_after_does_not_fire_when_arm_ready() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.send(5)!
+    select {
+        v = rx.recv() {
+            print(f"got {v}")
+        }
+        after 5000 {
+            print("should not fire")
+        }
+    }
+}
+"#);
+    assert_eq!(out.trim(), "got 5");
+}
+
+#[test]
+fn select_after_waits_roughly_the_deadline() {
+    let out = compile_and_run_stdout(r#"
+extern fn __pluto_time_ns() int
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let start = __pluto_time_ns()
+    select {
+        v = rx.recv() {
+            print(v)
+        }
+        after 100 {
+            let elapsed_ms = (__pluto_time_ns() - start) / 1000000
+            if elapsed_ms >= 80 {
+                print("waited")
+            } else {
+                print(f"too fast: {elapsed_ms}ms")
+            }
+        }
+    }
+    tx.close()
+}
+"#);
+    assert_eq!(out.trim(), "waited");
+}
+
+#[test]
+fn select_after_duration_reevaluated_each_entry() {
+    // The deadline expression runs on EVERY select entry (the Raft
+    // randomized-window requirement): a side-effecting duration function
+    // must be called once per loop iteration.
+    let out = compile_and_run_stdout(r#"
+fn next_window() int {
+    print("eval")
+    return 30
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let mut i = 0
+    while i < 3 {
+        select {
+            v = rx.recv() {
+                print(v)
+            }
+            after next_window() {
+                i = i + 1
+            }
+        }
+    }
+    tx.close()
+}
+"#);
+    assert_eq!(out.trim(), "eval\neval\neval");
+}
+
+#[test]
+fn select_after_taking_arm_is_not_an_error() {
+    // Taking the after arm runs its block and the select completes normally
+    // — no handling (`!`/catch wrapping of the select) beyond the usual
+    // all-closed ChannelClosed is demanded, and nothing is raised.
+    let code = compile_and_run(r#"
+fn wait_once(rx: Receiver<int>) int {
+    select {
+        v = rx.recv() {
+            return v
+        }
+        after 20 {
+            return -1
+        }
+    }
+    return 0
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let r = wait_once(rx) catch -99
+    if r == -1 {
+        tx.close()
+    }
+}
+"#);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn select_after_all_closed_still_raises_channel_closed() {
+    // A fully closed select can never complete — ChannelClosed wins over
+    // waiting out the deadline.
+    let out = compile_and_run_stdout(r#"
+fn ruled_out(rx: Receiver<int>) int {
+    select {
+        v = rx.recv() {
+            return v
+        }
+        after 60000 {
+            return -1
+        }
+    }
+    return 0
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.close()
+    let r = ruled_out(rx) catch err: ChannelClosed { -2 }
+    print(r)
+}
+"#);
+    assert_eq!(out.trim(), "-2");
+}
+
+#[test]
+fn select_after_plus_default_rejected() {
+    compile_should_fail_with(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    select {
+        v = rx.recv() {
+            print(v)
+        }
+        default {
+            print(0)
+        }
+        after 100 {
+            print(1)
+        }
+    }
+}
+"#, "select cannot have both a default arm and an after arm");
+}
+
+#[test]
+fn select_after_duration_must_be_int() {
+    compile_should_fail_with(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    select {
+        v = rx.recv() {
+            print(v)
+        }
+        after "soon" {
+            print(1)
+        }
+    }
+}
+"#, "select after expects int milliseconds");
+}

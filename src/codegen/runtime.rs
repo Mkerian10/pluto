@@ -219,7 +219,7 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_chan_close", &[types::I64], &[])?;
         reg.declare(module, "__pluto_chan_sender_inc", &[types::I64], &[])?;
         reg.declare(module, "__pluto_chan_sender_dec", &[types::I64], &[])?;
-        reg.declare(module, "__pluto_select", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_select", &[types::I64, types::I64, types::I64, types::I64], &[types::I64])?;
 
         // Contracts
         reg.declare(module, "__pluto_requires_violation", &[types::I64, types::I64], &[])?;

@@ -1158,7 +1158,7 @@ impl PrettyPrinter {
                 }
                 self.write(")");
             }
-            Stmt::Select { arms, default } => {
+            Stmt::Select { arms, default, after } => {
                 self.write("select {");
                 self.newline();
                 self.indent();
@@ -1185,6 +1185,14 @@ impl PrettyPrinter {
                     self.write_indent();
                     self.write("default ");
                     self.emit_block(&def.node);
+                    self.newline();
+                }
+                if let Some(a) = after {
+                    self.write_indent();
+                    self.write("after ");
+                    self.emit_expr(&a.duration.node, 0);
+                    self.write(" ");
+                    self.emit_block(&a.body.node);
                     self.newline();
                 }
                 self.dedent();

@@ -665,7 +665,7 @@ fn collect_dangling_in_stmt(stmt: &Stmt, span: Span, target: Uuid, out: &mut Vec
                 collect_dangling_in_expr(&cap.node, cap.span, target, out);
             }
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => {
@@ -680,6 +680,10 @@ fn collect_dangling_in_stmt(stmt: &Stmt, span: Span, target: Uuid, out: &mut Vec
             }
             if let Some(def) = default {
                 collect_dangling_in_block(&def.node, target, out);
+            }
+            if let Some(a) = after {
+                collect_dangling_in_expr(&a.duration.node, a.duration.span, target, out);
+                collect_dangling_in_block(&a.body.node, target, out);
             }
         }
         Stmt::Break | Stmt::Continue => {}
@@ -1001,7 +1005,7 @@ fn rename_in_stmt(stmt: &mut Stmt, id: Uuid, kind: DeclKindSimple, old_name: &st
                 rename_in_expr(&mut cap.node, id, kind, old_name, new_name);
             }
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &mut arm.op {
                     SelectOp::Recv { channel, .. } => {
@@ -1016,6 +1020,10 @@ fn rename_in_stmt(stmt: &mut Stmt, id: Uuid, kind: DeclKindSimple, old_name: &st
             }
             if let Some(def) = default {
                 rename_in_block(&mut def.node, id, kind, old_name, new_name);
+            }
+            if let Some(a) = after {
+                rename_in_expr(&mut a.duration.node, id, kind, old_name, new_name);
+                rename_in_block(&mut a.body.node, id, kind, old_name, new_name);
             }
         }
         Stmt::Break | Stmt::Continue => {}

@@ -469,7 +469,7 @@ fn collect_stmt_effects(stmt: &Stmt, ctx: &mut EffectCtx) {
                 collect_expr_effects(cap, ctx);
             }
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => {
@@ -485,8 +485,14 @@ fn collect_stmt_effects(stmt: &Stmt, ctx: &mut EffectCtx) {
             if let Some(def) = default {
                 collect_block_stmts(&def.node.stmts, ctx);
             }
+            if let Some(a) = after {
+                collect_expr_effects(&a.duration, ctx);
+                collect_block_stmts(&a.body.node.stmts, ctx);
+            }
             // Select without default is implicitly fallible — raises ChannelClosed
-            // when all channels are closed
+            // when all channels are closed. An `after` arm does not change
+            // this: taking the timeout is not an error, but all-closed still
+            // raises (there is nothing left to wait for).
             if default.is_none() {
                 ctx.raise("ChannelClosed".to_string());
             }
@@ -967,7 +973,7 @@ fn enforce_stmt(
             }
             Ok(())
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => {
@@ -982,6 +988,10 @@ fn enforce_stmt(
             }
             if let Some(def) = default {
                 enforce_block(&def.node, current_fn, env, lenient)?;
+            }
+            if let Some(a) = after {
+                enforce_expr(&a.duration.node, a.duration.span, current_fn, env, lenient)?;
+                enforce_block(&a.body.node, current_fn, env, lenient)?;
             }
             Ok(())
         }

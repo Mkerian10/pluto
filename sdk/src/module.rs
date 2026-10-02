@@ -553,7 +553,7 @@ fn find_stmt_nested<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Stmt> {
                 }
             }
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 if let Some(s) = find_stmt_in_block(&arm.body.node, target) {
                     return Some(s);
@@ -561,6 +561,11 @@ fn find_stmt_nested<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Stmt> {
             }
             if let Some(def) = default {
                 if let Some(s) = find_stmt_in_block(&def.node, target) {
+                    return Some(s);
+                }
+            }
+            if let Some(a) = after {
+                if let Some(s) = find_stmt_in_block(&a.body.node, target) {
                     return Some(s);
                 }
             }
@@ -621,7 +626,7 @@ fn find_expr_in_stmt<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Expr> {
         Stmt::LetChan { capacity, .. } => {
             capacity.as_ref().and_then(|c| find_expr_recursive(&c.node, c.span, target))
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => {
@@ -643,7 +648,15 @@ fn find_expr_in_stmt<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Expr> {
                 }
             }
             if let Some(def) = default {
-                return find_expr_in_block(&def.node, target);
+                if let Some(e) = find_expr_in_block(&def.node, target) {
+                    return Some(e);
+                }
+            }
+            if let Some(a) = after {
+                if let Some(e) = find_expr_recursive(&a.duration.node, a.duration.span, target) {
+                    return Some(e);
+                }
+                return find_expr_in_block(&a.body.node, target);
             }
             None
         }

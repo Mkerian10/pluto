@@ -1926,17 +1926,22 @@ void __pluto_chan_sender_dec(long handle) {
 // ── Select (channel multiplexing) ──────────────────────────
 
 /*
- * __pluto_select(buffer, count, has_default) -> case index
+ * __pluto_select(buffer, count, has_default, timeout_ms) -> case index
  *
  * Buffer layout (3 * count i64 slots):
  *   buffer[0..count)          = channel handles
  *   buffer[count..2*count)    = ops (0 = recv, 1 = send)
  *   buffer[2*count..3*count)  = values (send values in, recv values out)
  *
+ * timeout_ms: -1 = no deadline; >= 0 = the select's `after` arm fires when
+ * that many milliseconds elapse with no arm ready (mutually exclusive with
+ * has_default at the language level). Taking the timeout is NOT an error.
+ *
  * Returns:
  *   >= 0  : index of the case that completed
  *   -1    : default case (only when has_default)
  *   -2    : all channels closed (error raised via TLS)
+ *   -4    : deadline elapsed (only when timeout_ms >= 0)
  */
 #ifdef PLUTO_TEST_MODE
 
@@ -1982,7 +1987,7 @@ static long select_try_arms(long *handles, long *ops, long *values, int n, int *
     return -3;  // no ready arm, not all closed
 }
 
-long __pluto_select(long buffer_ptr, long count, long has_default) {
+long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_ms) {
     long *buf = (long *)buffer_ptr;
     long *handles = &buf[0];
     long *ops     = &buf[count];
@@ -2006,21 +2011,36 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
             exhaustive_record_channel(g_scheduler->current_fiber, (void *)handles[si]);
         }
 
-        // Fiber mode: loop with yield
+        // Fiber mode: loop with yield. With a timeout, the blocked select is
+        // an enabled choice (duration erased) — the scheduler may resume it
+        // as "timed out" at any yield point; a select with `after` therefore
+        // never contributes to deadlock detection.
+        Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
         while (1) {
+            if (timeout_ms >= 0 && cur->timed_out) {
+                cur->timed_out = 0;
+                cur->has_timeout = 0;
+                return -4;
+            }
             long result = select_try_arms(handles, ops, values, n, indices);
-            if (result >= 0) return result;
+            if (result >= 0) {
+                cur->has_timeout = 0;
+                cur->timed_out = 0;
+                return result;
+            }
             if (has_default) return -1;
             if (result == -2) {
+                cur->has_timeout = 0;
+                cur->timed_out = 0;
                 chan_raise_error_typed("ChannelClosed", "channel closed");
                 return -2;
             }
             // Block and yield
-            Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
             cur->state = FIBER_BLOCKED_SELECT;
             cur->blocked_on = (void *)buf;
+            if (timeout_ms >= 0) cur->has_timeout = 1;
             fiber_yield_to_scheduler();
-            // Resumed — retry all arms
+            // Resumed — retry all arms (or observe timed_out)
         }
     }
 
@@ -2032,6 +2052,11 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
         chan_raise_error_typed("ChannelClosed", "channel closed");
         return -2;
     }
+    if (timeout_ms >= 0) {
+        // Progress rule: the timeout fires exactly where the sequential
+        // scheduler would otherwise report deadlock.
+        return -4;
+    }
     fprintf(stderr, "pluto: deadlock detected — select with no ready channels in sequential test mode\n");
     exit(1);
 }
@@ -2040,7 +2065,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
 
 // ── Production mode: spin-poll select ──
 
-long __pluto_select(long buffer_ptr, long count, long has_default) {
+long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_ms) {
     long *buf = (long *)buffer_ptr;
     long *handles = &buf[0];
     long *ops     = &buf[count];
@@ -2059,6 +2084,9 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
         int j = (int)((seed >> 33) % (unsigned long)(i + 1));
         int tmp = indices[i]; indices[i] = indices[j]; indices[j] = tmp;
     }
+
+    /* Absolute monotonic-ns deadline for the `after` arm (-1 = none) */
+    long deadline_ns = timeout_ms >= 0 ? __pluto_time_ns() + timeout_ms * 1000000L : -1;
 
     /* Spin-poll loop */
     long spin_us = 100;  /* start at 100 microseconds */
@@ -2113,16 +2141,29 @@ long __pluto_select(long buffer_ptr, long count, long has_default) {
         }
 
         if (all_closed) {
-            /* Raise ChannelClosed error */
+            /* Raise ChannelClosed error (wins over the deadline: a fully
+             * closed select can never complete — nothing to wait for) */
             chan_raise_error_typed("ChannelClosed", "channel closed");
             return -2;
+        }
+
+        /* Deadline check, folded into the existing poll iteration */
+        if (deadline_ns >= 0 && __pluto_time_ns() >= deadline_ns) {
+            return -4;
         }
 
         /* Participate in stop-the-world while polling (no locks held here) */
         __pluto_safepoint();
 
-        /* Adaptive sleep: 100us -> 200us -> ... -> 1ms max */
-        usleep((useconds_t)spin_us);
+        /* Adaptive sleep: 100us -> 200us -> ... -> 1ms max (never past the
+         * deadline) */
+        long nap_us = spin_us;
+        if (deadline_ns >= 0) {
+            long remaining_us = (deadline_ns - __pluto_time_ns()) / 1000;
+            if (remaining_us < 1) remaining_us = 1;
+            if (nap_us > remaining_us) nap_us = remaining_us;
+        }
+        usleep((useconds_t)nap_us);
         if (spin_us < 1000) spin_us = spin_us * 2;
         if (spin_us > 1000) spin_us = 1000;
     }

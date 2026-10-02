@@ -535,7 +535,7 @@ impl<'a> LowerContext<'a> {
                 *terminated = true;
                 Ok(())
             }
-            Stmt::Select { arms, default } => self.lower_select(arms, default, terminated),
+            Stmt::Select { arms, default, after } => self.lower_select(arms, default, after, terminated),
             Stmt::Scope { seeds, bindings, body } => self.lower_scope(seeds, bindings, body),
             Stmt::Assert { expr } => {
                 let result = self.lower_expr(&expr.node)?;
@@ -2395,6 +2395,7 @@ impl<'a> LowerContext<'a> {
         &mut self,
         arms: &[SelectArm],
         default: &Option<crate::span::Spanned<Block>>,
+        after: &Option<crate::parser::ast::SelectAfter>,
         terminated: &mut bool,
     ) -> Result<(), CompileError> {
         let count = arms.len() as i64;
@@ -2432,10 +2433,16 @@ impl<'a> LowerContext<'a> {
             }
         }
 
-        // 3. Call __pluto_select(buffer, count, has_default)
+        // 3. Call __pluto_select(buffer, count, has_default, timeout_ms).
+        // The after-arm duration is evaluated HERE, on each select entry —
+        // `after base + jitter()` re-randomizes every loop iteration.
         let count_val = self.builder.ins().iconst(types::I64, count);
         let has_default_val = self.builder.ins().iconst(types::I64, if default.is_some() { 1 } else { 0 });
-        let result = self.call_runtime("__pluto_select", &[buffer, count_val, has_default_val]);
+        let timeout_val = match after {
+            Some(a) => self.lower_expr(&a.duration.node)?,
+            None => self.builder.ins().iconst(types::I64, -1),
+        };
+        let result = self.call_runtime("__pluto_select", &[buffer, count_val, has_default_val, timeout_val]);
 
         // 4. If no default and result == -2 → error path (TLS already set by runtime)
         let merge_bb = self.builder.create_block();
@@ -2457,9 +2464,32 @@ impl<'a> LowerContext<'a> {
             self.builder.seal_block(dispatch_bb);
         }
 
-        // 5. Default check: if result == -1 and default exists → jump to default block
+        // 5. Timeout check: if result == -4 and an after arm exists → run it.
+        // Taking the after arm is NOT an error — it runs the arm's block.
         let first_arm_check_bb = self.builder.create_block();
 
+        if let Some(a) = after {
+            let neg4 = self.builder.ins().iconst(types::I64, -4i64);
+            let is_timeout = self.builder.ins().icmp(IntCC::Equal, result, neg4);
+            let after_bb = self.builder.create_block();
+            let post_after_bb = self.builder.create_block();
+            self.builder.ins().brif(is_timeout, after_bb, &[], post_after_bb, &[]);
+
+            self.builder.switch_to_block(after_bb);
+            self.builder.seal_block(after_bb);
+            let mut after_terminated = false;
+            for s in &a.body.node.stmts {
+                self.lower_stmt_covered(s, &mut after_terminated)?;
+            }
+            if !after_terminated {
+                self.builder.ins().jump(merge_bb, &[]);
+            }
+
+            self.builder.switch_to_block(post_after_bb);
+            self.builder.seal_block(post_after_bb);
+        }
+
+        // 6. Default check: if result == -1 and default exists → jump to default block
         if let Some(def) = default {
             let neg1 = self.builder.ins().iconst(types::I64, -1i64);
             let is_default = self.builder.ins().icmp(IntCC::Equal, result, neg1);
@@ -2560,7 +2590,7 @@ impl<'a> LowerContext<'a> {
             }
         }
 
-        if all_terminated && default.is_none() {
+        if all_terminated && default.is_none() && after.is_none() {
             *terminated = true;
         }
 

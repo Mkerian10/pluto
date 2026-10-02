@@ -567,7 +567,7 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
             }
             substitute_in_block(&mut body.node, bindings);
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &mut arm.op {
                     SelectOp::Recv { channel, .. } => {
@@ -582,6 +582,10 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
             }
             if let Some(def) = default {
                 substitute_in_block(&mut def.node, bindings);
+            }
+            if let Some(a) = after {
+                substitute_in_expr(&mut a.duration.node, bindings);
+                substitute_in_block(&mut a.body.node, bindings);
             }
         }
         Stmt::Yield { value, .. } => {
@@ -2504,6 +2508,7 @@ mod tests {
                     is_mut: false,
                 })],
             })),
+            after: None,
         };
 
         let mut bindings = HashMap::new();
@@ -2512,7 +2517,7 @@ mod tests {
 
         substitute_in_stmt(&mut stmt, &bindings);
 
-        if let Stmt::Select { arms, default } = stmt {
+        if let Stmt::Select { arms, default, .. } = stmt {
             // Check Recv arm body
             if let Stmt::Let { ty, .. } = &arms[0].body.node.stmts[0].node {
                 assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "int"));

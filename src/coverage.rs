@@ -352,12 +352,15 @@ impl<'a> CoverageScanner<'a> {
                     self.scan_block(&arm.body.node);
                 }
             }
-            Stmt::Select { arms, default, .. } => {
+            Stmt::Select { arms, default, after } => {
                 for arm in arms {
                     self.scan_block(&arm.body.node);
                 }
                 if let Some(def) = default {
                     self.scan_block(&def.node);
+                }
+                if let Some(a) = after {
+                    self.scan_block(&a.body.node);
                 }
             }
             Stmt::Scope { body, .. } => {

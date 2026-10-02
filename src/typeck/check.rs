@@ -703,7 +703,7 @@ fn check_stmt(
             env.define(sender.node.clone(), PlutoType::Sender(Box::new(elem.clone())), sender.span)?;
             env.define(receiver.node.clone(), PlutoType::Receiver(Box::new(elem)), receiver.span)?;
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { binding, channel } => {
@@ -749,6 +749,16 @@ fn check_stmt(
             }
             if let Some(def) = default {
                 check_block(&def.node, env, return_type)?;
+            }
+            if let Some(a) = after {
+                let dur_type = infer_expr(&a.duration.node, a.duration.span, env, None)?;
+                if dur_type != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("select after expects int milliseconds, found {dur_type}"),
+                        a.duration.span,
+                    ));
+                }
+                check_block(&a.body.node, env, return_type)?;
             }
         }
         Stmt::Scope { seeds, bindings, body } => {

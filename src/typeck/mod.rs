@@ -465,12 +465,15 @@ fn collect_unreachable_warnings(
             Stmt::Scope { body, .. } => {
                 collect_unreachable_warnings(&body.node, warnings);
             }
-            Stmt::Select { arms, default } => {
+            Stmt::Select { arms, default, after } => {
                 for arm in arms {
                     collect_unreachable_warnings(&arm.body.node, warnings);
                 }
                 if let Some(def) = default {
                     collect_unreachable_warnings(&def.node, warnings);
+                }
+                if let Some(a) = after {
+                    collect_unreachable_warnings(&a.body.node, warnings);
                 }
             }
             _ => {}
