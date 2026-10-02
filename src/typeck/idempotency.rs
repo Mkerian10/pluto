@@ -1457,7 +1457,7 @@ impl<'a> Analyzer<'a> {
                 self.undefine(&receiver.node);
                 false
             }
-            Stmt::Select { arms, default } => {
+            Stmt::Select { arms, default, after } => {
                 self.havoc();
                 self.note_field_mutation();
                 for arm in arms {
@@ -1468,6 +1468,11 @@ impl<'a> Analyzer<'a> {
                 if let Some(d) = default {
                     self.push_scope();
                     self.walk_block(&d.node);
+                    self.pop_scope();
+                }
+                if let Some(a) = after {
+                    self.push_scope();
+                    self.walk_block(&a.body.node);
                     self.pop_scope();
                 }
                 self.havoc();
