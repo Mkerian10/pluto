@@ -34,12 +34,13 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
         return Ok(()); // No stages, RPC boundaries, or entity boundaries: no marshaling needed
     }
 
-    // Marshaling needs std.wire. For stage-only programs we skip silently (back-
-    // compat); for RPC with complex types it's an error to omit the import.
-    let has_wire = program.functions.iter().any(|f| {
-        f.node.name.node == "wire.wire_value_encoder"
-    });
-    if !has_wire {
+    // Marshaling needs std.wire — under whatever flattened prefix it landed:
+    // an entry-level `import std.wire` yields `wire.*`, while a library
+    // module's own import flattens to `<lib>.wire.*`. For stage-only programs
+    // we skip silently (back-compat); for RPC with complex types it's an
+    // error to omit the import.
+    let wire_prefix = wire_binding_prefix(program);
+    if wire_prefix.is_none() {
         // Only fail if an RPC interface actually carries a non-primitive type.
         let needs_wire = !collect_types_from_stage_methods(program)?.is_empty()
             || !rpc_container_types(program).is_empty();
@@ -50,6 +51,7 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
         }
         return Ok(());
     }
+    let wire_prefix = wire_prefix.unwrap();
 
     // Collect all types that need marshalers. Stage/RPC-seeded types are
     // required (generation failures are compile errors, as before); types
@@ -192,6 +194,10 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
         generated_functions.push(generate_container_wire_decode(cty, &suffix)?);
     }
 
+    // The generators emit canonical `wire.*` references; requalify them to
+    // the prefix the flattened program actually carries.
+    qualify_wire_names(&mut generated_functions, &wire_prefix);
+
     // Inject generated functions and instantiated types into the program
     program.functions.extend(generated_functions);
     program.classes.extend(instantiated_classes);
@@ -224,14 +230,12 @@ pub fn generate_marshalers_phase_b(
         return Ok(());
     }
 
-    // Skip marshaler generation if wire module isn't available
-    // Check for wire.wire_value_encoder function (proves wire module was imported and flattened)
-    let has_wire = program.functions.iter().any(|f| {
-        f.node.name.node == "wire.wire_value_encoder"
-    });
-    if !has_wire {
-        return Ok(());
-    }
+    // Skip marshaler generation if no copy of the wire module is available
+    // (under any flattened prefix — see wire_binding_prefix).
+    let wire_prefix = match wire_binding_prefix(program) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
 
     // Stage/RPC-seeded types are required (generation failures are compile
     // errors); entity-seeded types are best-effort, as in phase A.
@@ -302,7 +306,7 @@ pub fn generate_marshalers_phase_b(
                 for f in &fns {
                     env.functions.insert(
                         f.node.name.node.clone(),
-                        phase_b_func_sig(&f.node.name.node, &sanitized, &value_ty),
+                        phase_b_func_sig(&f.node.name.node, &sanitized, &value_ty, &wire_prefix),
                     );
                 }
                 generated_functions.extend(fns);
@@ -312,6 +316,7 @@ pub fn generate_marshalers_phase_b(
         }
     }
 
+    qualify_wire_names(&mut generated_functions, &wire_prefix);
     program.functions.extend(generated_functions);
 
     Ok(())
@@ -322,10 +327,11 @@ fn phase_b_func_sig(
     fn_name: &str,
     sanitized: &str,
     value_ty: &PlutoType,
+    wire_prefix: &str,
 ) -> crate::typeck::env::FuncSig {
     use crate::typeck::env::FuncSig;
-    let enc_ty = PlutoType::Class("wire.WireValueEncoder".to_string());
-    let dec_ty = PlutoType::Class("wire.WireValueDecoder".to_string());
+    let enc_ty = PlutoType::Class(format!("{wire_prefix}wire.WireValueEncoder"));
+    let dec_ty = PlutoType::Class(format!("{wire_prefix}wire.WireValueDecoder"));
     if fn_name == format!("__marshal_{sanitized}") {
         FuncSig {
             params: vec![value_ty.clone(), enc_ty],
@@ -547,6 +553,77 @@ fn collect_entity_signature_types(program: &Program) -> HashSet<String> {
     expand_nested_types(program, &mut types);
     retain_non_object_touching(program, &mut types);
     types
+}
+
+/// The flattened name prefix under which std.wire's declarations live.
+///
+/// Module flattening prefixes hierarchically: `import std.wire` at the entry
+/// yields `wire.wire_value_encoder` (empty prefix), while the same import
+/// inside a library module `m` flattens to `m.wire.wire_value_encoder`
+/// (prefix `"m."`). A program whose only wire copy arrived through a library
+/// (e.g. `import std.blob`, where std.blob itself imports std.wire) still
+/// needs marshalers for its entity placement boundaries — generated against
+/// that nested copy. The entry-level copy wins when both exist.
+fn wire_binding_prefix(program: &Program) -> Option<String> {
+    const PROBE: &str = "wire.wire_value_encoder";
+    let mut nested: Option<String> = None;
+    for f in &program.functions {
+        let name = &f.node.name.node;
+        if name == PROBE {
+            return Some(String::new());
+        }
+        if nested.is_none()
+            && let Some(prefix) = name.strip_suffix(PROBE)
+            && prefix.ends_with('.')
+        {
+            nested = Some(prefix.to_string());
+        }
+    }
+    nested
+}
+
+/// Rewrites the canonical `wire.*` references the generators emit to the
+/// prefix the flattened program actually carries (no-op for the common
+/// entry-level import). Touches exactly the positions the generators use
+/// wire names in: call names, raised error names, and named types.
+fn qualify_wire_names(functions: &mut [Spanned<Function>], wire_prefix: &str) {
+    if wire_prefix.is_empty() {
+        return;
+    }
+    struct Qualifier<'a> {
+        prefix: &'a str,
+    }
+    impl Qualifier<'_> {
+        fn fix(&self, name: &mut String) {
+            if name.starts_with("wire.") {
+                *name = format!("{}{}", self.prefix, name);
+            }
+        }
+    }
+    impl crate::visit::VisitMut for Qualifier<'_> {
+        fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+            if let Expr::Call { name, .. } = &mut expr.node {
+                self.fix(&mut name.node);
+            }
+            crate::visit::walk_expr_mut(self, expr);
+        }
+        fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+            if let Stmt::Raise { error_name, .. } = &mut stmt.node {
+                self.fix(&mut error_name.node);
+            }
+            crate::visit::walk_stmt_mut(self, stmt);
+        }
+        fn visit_type_expr_mut(&mut self, te: &mut Spanned<TypeExpr>) {
+            if let TypeExpr::Named(name) = &mut te.node {
+                self.fix(name);
+            }
+            crate::visit::walk_type_expr_mut(self, te);
+        }
+    }
+    let mut q = Qualifier { prefix: wire_prefix };
+    for f in functions {
+        crate::visit::walk_function_mut(&mut q, f);
+    }
 }
 
 /// Whether a type expression mentions any of the given type parameter names.
