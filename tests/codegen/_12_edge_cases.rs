@@ -53,8 +53,11 @@ fn main() {
     print(result)
 }
 "#;
-    // Wraps around (undefined behavior, but test what actually happens)
-    assert_eq!(compile_and_run_stdout(source).trim(), "-9223372036854775808");
+    // Overflow is a defect and traps (issue #416); wrapping_add is the
+    // explicit escape hatch.
+    let (_stdout, stderr, code) = compile_and_run_output(source);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("pluto: defect: integer overflow in '+'"), "stderr: {stderr}");
 }
 
 #[test]
@@ -66,8 +69,10 @@ fn main() {
     print(result)
 }
 "#;
-    // Wraps around
-    assert_eq!(compile_and_run_stdout(source).trim(), "9223372036854775807");
+    // Overflow is a defect and traps (issue #416).
+    let (_stdout, stderr, code) = compile_and_run_output(source);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("pluto: defect: integer overflow in '-'"), "stderr: {stderr}");
 }
 
 #[test]
@@ -79,8 +84,10 @@ fn main() {
     print(result)
 }
 "#;
-    // Wraps around
-    assert_eq!(compile_and_run_stdout(source).trim(), "-2");
+    // Overflow is a defect and traps (issue #416).
+    let (_stdout, stderr, code) = compile_and_run_output(source);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("pluto: defect: integer overflow in '*'"), "stderr: {stderr}");
 }
 
 #[test]

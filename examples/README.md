@@ -104,6 +104,14 @@ Demonstrates Pluto's built-in test framework with `test` blocks, `expect()` asse
 cargo run -- test examples/testing/main.pt
 ```
 
+## wrapping
+
+Demonstrates integer overflow semantics: signed 64-bit overflow on `+`/`-`/`*` is a defect that aborts the program (never a catchable error), and the `wrapping_add`/`wrapping_sub`/`wrapping_mul` builtins are the explicit escape hatch for deliberately-modular arithmetic (an FNV-style string mixer whose state multiply wraps mod 2^64).
+
+```bash
+cargo run -- run examples/wrapping/main.pt
+```
+
 ## json
 
 Demonstrates the `std.json` module: parsing JSON strings, accessing nested values, building JSON programmatically, and round-tripping through stringify/parse.

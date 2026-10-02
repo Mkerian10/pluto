@@ -1,5 +1,8 @@
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail_with};
+use common::{
+    compile_and_run_output, compile_and_run_stdout, compile_should_fail_with,
+    compile_test_and_run,
+};
 
 // ── Type casting (as) ─────────────────────────────────────────────────────────
 
@@ -314,4 +317,274 @@ fn main() {
 "#,
     );
     assert_eq!(out.trim(), "inf\n-inf\nnan\nnan\ngot nan and 2.5");
+}
+
+// ── Integer overflow defects (issue #416: conditions raise, defects trap) ────
+//
+// Signed i64 overflow on + - *, unary negation, and MIN / -1 — like
+// division/modulo by zero — is a defect: the process prints
+// "pluto: defect: ..." to stderr and aborts. Defects never become typed
+// errors and never enter error inference.
+
+fn assert_defect(source: &str, expected_stderr: &str) {
+    let (_stdout, stderr, code) = compile_and_run_output(source);
+    assert_ne!(code, 0, "expected defect abort, got exit 0; stderr: {stderr}");
+    assert!(
+        stderr.contains(expected_stderr),
+        "expected stderr containing '{expected_stderr}', got: {stderr}"
+    );
+}
+
+#[test]
+fn add_overflow_traps() {
+    assert_defect(
+        r#"
+fn main() {
+    let a = 9223372036854775807
+    let b = a + 1
+    print(b)
+}
+"#,
+        "pluto: defect: integer overflow in '+': 9223372036854775807 + 1",
+    );
+}
+
+#[test]
+fn sub_overflow_traps() {
+    assert_defect(
+        r#"
+fn main() {
+    let a = -9223372036854775808
+    let b = a - 1
+    print(b)
+}
+"#,
+        "pluto: defect: integer overflow in '-': -9223372036854775808 - 1",
+    );
+}
+
+#[test]
+fn mul_overflow_traps() {
+    assert_defect(
+        r#"
+fn main() {
+    let a = -9223372036854775808
+    let b = a * -1
+    print(b)
+}
+"#,
+        "pluto: defect: integer overflow in '*': -9223372036854775808 * -1",
+    );
+}
+
+#[test]
+fn min_div_neg_one_traps() {
+    assert_defect(
+        r#"
+fn main() {
+    let a = -9223372036854775808
+    let d = -1
+    let b = a / d
+    print(b)
+}
+"#,
+        "pluto: defect: integer overflow in '/': -9223372036854775808 / -1",
+    );
+}
+
+#[test]
+fn div_by_zero_traps() {
+    assert_defect(
+        r#"
+fn zero() int {
+    return 0
+}
+
+fn main() {
+    let b = 7 / zero()
+    print(b)
+}
+"#,
+        "pluto: defect: division by zero: 7 / 0",
+    );
+}
+
+#[test]
+fn mod_by_zero_traps() {
+    assert_defect(
+        r#"
+fn zero() int {
+    return 0
+}
+
+fn main() {
+    let b = 7 % zero()
+    print(b)
+}
+"#,
+        "pluto: defect: modulo by zero: 7 % 0",
+    );
+}
+
+#[test]
+fn unary_neg_min_traps() {
+    assert_defect(
+        r#"
+fn main() {
+    let m = -9223372036854775808
+    let x = -m
+    print(x)
+}
+"#,
+        "pluto: defect: integer overflow in unary '-': -(-9223372036854775808)",
+    );
+}
+
+#[test]
+fn compound_add_overflow_traps() {
+    assert_defect(
+        r#"
+fn main() {
+    let mut x = 9223372036854775807
+    x += 1
+    print(x)
+}
+"#,
+        "pluto: defect: integer overflow in '+': 9223372036854775807 + 1",
+    );
+}
+
+#[test]
+fn pow_overflow_traps() {
+    assert_defect(
+        r#"
+fn main() {
+    print(pow(2, 64) catch 0)
+}
+"#,
+        "pluto: defect: integer overflow in pow(): pow(2, 64)",
+    );
+}
+
+// The i64::MIN literal: the lexer accepts i64::MAX + 1 after unary minus and
+// the parser folds the sign into the literal — no runtime negation, no trap.
+#[test]
+fn min_literal_is_not_a_defect() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    print(-9223372036854775808)
+    let m = -9223372036854775808
+    print(m + 1)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "-9223372036854775808\n-9223372036854775807");
+}
+
+// MIN % -1 is mathematically 0 (representable) — defined, not a defect.
+#[test]
+fn min_mod_neg_one_is_zero() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let a = -9223372036854775808
+    let d = -1
+    print(a % d)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "0");
+}
+
+// Boundary arithmetic that stays in range must not trap.
+#[test]
+fn boundary_arithmetic_in_range_is_fine() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let hi = 9223372036854775807
+    let lo = -9223372036854775808
+    print(hi + 0)
+    print(lo + 1)
+    print(hi - 1 + 1)
+    print(lo / -2)
+    print(hi * -1)
+}
+"#,
+    );
+    assert_eq!(
+        out.trim(),
+        "9223372036854775807\n-9223372036854775807\n9223372036854775807\n4611686018427387904\n-9223372036854775807"
+    );
+}
+
+// ── wrapping_* builtins: the visible escape hatch for modular arithmetic ─────
+
+#[test]
+fn wrapping_builtins_round_trip() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let hi = 9223372036854775807
+    let lo = -9223372036854775808
+    print(wrapping_add(hi, 1))
+    print(wrapping_sub(lo, 1))
+    print(wrapping_mul(lo, -1))
+    print(wrapping_add(wrapping_add(hi, 1), -1))
+    print(wrapping_add(2, 3))
+    print(wrapping_sub(10, 4))
+    print(wrapping_mul(6, 7))
+}
+"#,
+    );
+    assert_eq!(
+        out.trim(),
+        "-9223372036854775808\n9223372036854775807\n-9223372036854775808\n9223372036854775807\n5\n6\n42"
+    );
+}
+
+#[test]
+fn wrapping_builtin_wrong_arity_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = wrapping_add(1)\n    print(x)\n}",
+        "wrapping_add() expects 2 arguments",
+    );
+}
+
+#[test]
+fn wrapping_builtin_wrong_type_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = wrapping_add(1.0, 2.0)\n    print(x)\n}",
+        "wrapping_add() expects int arguments",
+    );
+}
+
+// A defect inside a `test` block fails that test: the binary aborts with the
+// defect message mid-run (same path as the other runtime aborts under the
+// deterministic runner) and the pluto CLI reports the non-zero exit.
+#[test]
+fn defect_in_test_block_fails_that_test() {
+    let (stdout, stderr, code) = compile_test_and_run(
+        r#"
+fn big() int {
+    return 9223372036854775807
+}
+
+test "passes first" {
+    expect(1).to_equal(1)
+}
+
+test "overflows" {
+    let x = big() + 1
+    expect(x).to_equal(0)
+}
+"#,
+    );
+    assert_ne!(code, 0, "defect in a test must fail the run; stdout: {stdout}");
+    assert!(stdout.contains("passes first ... ok"), "stdout: {stdout}");
+    assert!(
+        stderr.contains("pluto: defect: integer overflow in '+': 9223372036854775807 + 1"),
+        "stderr: {stderr}"
+    );
 }

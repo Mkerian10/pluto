@@ -69,7 +69,7 @@ Chaining only applies to comparison operators (`<`, `>`, `<=`, `>=`, `==`, `!=`)
 
 Integer division by zero is a contract violation that aborts the program. Floating-point division by zero produces `Infinity`, `-Infinity`, or `NaN` per IEEE 754.
 
-Integer overflow wraps silently using two's complement.
+Integer overflow is a defect and aborts the program (it is not a catchable error); use `wrapping_add`/`wrapping_sub`/`wrapping_mul` for deliberate two's-complement wraparound.
 
 ### Unary Arithmetic
 

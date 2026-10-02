@@ -1,0 +1,52 @@
+// Integer overflow semantics: defects trap, wrapping is explicit.
+//
+// Signed 64-bit overflow on `+`, `-`, `*`, unary `-`, and `int.min / -1` is
+// a DEFECT: the program prints
+//     pluto: defect: integer overflow in '+': 9223372036854775807 + 1
+// to stderr and aborts. Defects are not typed errors — they cannot be
+// caught, and they never enter error inference. Division and modulo by
+// zero trap the same way.
+//
+// Deliberately-modular arithmetic (hashes, PRNGs, checksums) must be
+// visible: the wrapping_add / wrapping_sub / wrapping_mul builtins wrap
+// two's-complement and never trap.
+
+// A tiny FNV-1a-style mixer over a string's bytes: the state multiply
+// deliberately wraps mod 2^64, so it uses wrapping_mul. Written with plain
+// `*` this would trap on the first large multiply.
+fn mix(s: string) int {
+    let mut h = (0xcbf29ce4 << 32) | 0x84222325
+    let n = s.len()
+    let mut i = 0
+    while i < n {
+        h = h ^ s.byte_at(i)
+        h = wrapping_mul(h, 0x100000001b3)
+        i = i + 1
+    }
+    return h
+}
+
+fn main() {
+    let hi = 9223372036854775807   // int.max
+    let lo = -9223372036854775808  // int.min
+
+    // Explicit wraparound at the edges of the i64 range:
+    print(f"int.max + 1 wraps to {wrapping_add(hi, 1)}")
+    print(f"int.min - 1 wraps to {wrapping_sub(lo, 1)}")
+    print(f"int.min * -1 wraps to {wrapping_mul(lo, -1)}")
+
+    // On in-range values the wrapping builtins are ordinary arithmetic:
+    print(f"wrapping_add(2, 3) = {wrapping_add(2, 3)}")
+
+    // Plain arithmetic is unchanged while results fit:
+    print(f"int.max - 1 + 1 = {hi - 1 + 1}")
+
+    // Deliberate modular arithmetic in practice:
+    let h1 = mix("hello")
+    let h2 = mix("world")
+    print(f"mix of hello = {h1}")
+    print(f"mix of world = {h2}")
+
+    // Uncomment to see a defect trap (aborts the program):
+    // let boom = hi + 1
+}

@@ -5,7 +5,7 @@
 // error stays legal.
 
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail_with};
+use common::{compile_and_run_output, compile_and_run_stdout, compile_should_fail_with};
 
 /// The RFC's motivating example: a guard that refutes the callee's raise
 /// condition removes the handling obligation at that site.
@@ -1597,5 +1597,53 @@ fn generic_method_propagated_variant_never_shrinks() {
         }
         "#,
         "call to fallible method 'poke' must be handled",
+    );
+}
+
+// ── Issue #416 honest-behavior pin: shrinking stays honest under traps ───────
+//
+// Attack shape: shrinking proved `Neg` unreachable from `amt <= a.bal` =>
+// `a.bal - amt >= 0` (mathematically true), so the call needed no handling —
+// then `a.bal - amt` wrapped negative and the "unreachable" raise fired as
+// an unhandled error escaping main. With trapping arithmetic the wrapping
+// subtraction is a defect: the program aborts at the overflow instead of
+// escaping through a shrunk error set.
+#[test]
+fn shrunk_error_set_overflow_traps_instead_of_escaping() {
+    let (_stdout, stderr, code) = compile_and_run_output(
+        r#"
+error Neg {
+    message: string
+}
+
+class Acc {
+    bal: int
+}
+
+fn take(mut a: Acc, amt: int) {
+    if a.bal - amt < 0 {
+        raise Neg { message: "negative" }
+    }
+    a.bal = a.bal - amt
+}
+
+fn main() {
+    let mut a = Acc { bal: 9223372036854775807 }
+    let amt = 0 - 1
+    if amt <= a.bal {
+        take(a, amt)
+    }
+    print(f"done; bal = {a.bal}")
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(
+        !stderr.contains("unhandled error"),
+        "the shrunk variant must not escape as an error; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("pluto: defect: integer overflow in '-': 9223372036854775807 - -1"),
+        "stderr: {stderr}"
     );
 }

@@ -20,12 +20,12 @@
 // shifted lanes. The mask after every step is what makes the shift
 // semantics a non-issue.
 //
-// FNV-1a 64 is different: it works in the full 64-bit lane, and Pluto's
-// integer arithmetic wraps on overflow (two's-complement, verified
-// empirically — multiplication and addition both wrap, they do not trap).
-// So the 64-bit FNV state simply lives in the int's natural wraparound and
-// needs no masking; the returned value is the digest's 64-bit pattern
-// reinterpreted as a signed int (it can be negative).
+// FNV-1a 64 is different: it works in the full 64-bit lane and relies on
+// mod-2^64 wraparound, which Pluto's `*` no longer provides (overflow is a
+// defect and traps). The state multiply therefore uses the explicit
+// wrapping_mul builtin — deliberate modular arithmetic must be visible.
+// The returned value is the digest's 64-bit pattern reinterpreted as a
+// signed int (it can be negative).
 //
 // Table initialization: Pluto has no module-level constants or one-time
 // static init, so the 256-entry CRC table and the 64-word SHA round-constant
@@ -381,14 +381,15 @@ pub fn sha256_hex(data: bytes) string {
 //
 // The offset basis 0xcbf29ce484222325 does not fit a signed-64 literal, so
 // it is assembled from two 32-bit halves; multiplication by the FNV prime
-// relies on Pluto's wrapping integer semantics.
+// deliberately wraps mod 2^64, hence wrapping_mul (plain `*` traps on
+// overflow).
 pub fn fnv1a64(data: bytes) int {
     let mut h = (0xcbf29ce4 << 32) | 0x84222325
     let n = data.len()
     let mut i = 0
     while i < n {
         h = h ^ (data[i] as int)
-        h = h * 0x100000001b3
+        h = wrapping_mul(h, 0x100000001b3)
         i = i + 1
     }
     return h
