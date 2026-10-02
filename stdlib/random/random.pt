@@ -11,10 +11,9 @@ pub fn next() int {
 }
 
 pub fn between(low: int, high: int) int {
-    let mut r = __pluto_random_int()
-    if r < 0 {
-        r = 0 - r
-    }
+    // Clear the sign bit instead of negating: the raw draw is a full
+    // 64-bit pattern, and negating int.min would be an overflow defect.
+    let r = __pluto_random_int() & 0x7FFFFFFFFFFFFFFF
     let range = high - low + 1
     return low + r % range
 }

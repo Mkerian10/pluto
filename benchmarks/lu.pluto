@@ -1,22 +1,22 @@
 // SciMark 2.0: LU Decomposition with Partial Pivoting
 // 1D array simulating 2D (row-major), N×N matrix
 
-fn lu_factor(a: [float], pivot: [int], n: int) {
+fn lu_factor(mut a: [float], mut pivot: [int], n: int) {
     // Initialize pivot array
-    let i = 0
+    let mut i = 0
     while i < n {
         pivot[i] = i
         i = i + 1
     }
 
-    let col = 0
+    let mut col = 0
     while col < n {
         // Find pivot: max |a[row][col]| for row >= col
-        let max_val = 0.0
-        let max_row = col
-        let row = col
+        let mut max_val = 0.0
+        let mut max_row = col
+        let mut row = col
         while row < n {
-            let v = a[row * n + col]
+            let mut v = a[row * n + col]
             if v < 0.0 {
                 v = 0.0 - v
             }
@@ -35,7 +35,7 @@ fn lu_factor(a: [float], pivot: [int], n: int) {
             pivot[max_row] = tmp_p
 
             // Swap row data
-            let k = 0
+            let mut k = 0
             while k < n {
                 let tmp = a[col * n + k]
                 a[col * n + k] = a[max_row * n + k]
@@ -55,7 +55,7 @@ fn lu_factor(a: [float], pivot: [int], n: int) {
         while row < n {
             let factor = a[row * n + col] / diag
             a[row * n + col] = factor
-            let k = col + 1
+            let mut k = col + 1
             while k < n {
                 a[row * n + k] = a[row * n + k] - factor * a[col * n + k]
                 k = k + 1
@@ -70,20 +70,20 @@ fn lu_factor(a: [float], pivot: [int], n: int) {
 fn main() {
     let n = 500
     let iterations = 10
-    let seed = 42
+    let mut seed = 42
     let lcg_a = 16807
     let lcg_m = 2147483647
 
     // Allocate matrix (n×n as 1D)
     let size = n * n
-    let a = [0.0]
-    let i = 1
+    let mut a = [0.0]
+    let mut i = 1
     while i < size {
         a.push(0.0)
         i = i + 1
     }
     // Working copy
-    let work = [0.0]
+    let mut work = [0.0]
     i = 1
     while i < size {
         work.push(0.0)
@@ -113,7 +113,7 @@ fn main() {
 
     let start = time_ns()
 
-    let iter = 0
+    let mut iter = 0
     while iter < iterations {
         // Copy a -> work
         i = 0
@@ -126,7 +126,7 @@ fn main() {
     }
 
     // Checksum: sum of diagonal of factored matrix
-    let checksum = 0.0
+    let mut checksum = 0.0
     i = 0
     while i < n {
         checksum = checksum + work[i * n + i]
@@ -135,6 +135,6 @@ fn main() {
 
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("checksum: {checksum}")
-    print("elapsed: {ms} ms")
+    print(f"checksum: {checksum}")
+    print(f"elapsed: {ms} ms")
 }

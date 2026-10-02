@@ -5,8 +5,8 @@ fn main() {
     let start = time_ns()
 
     // 1D array simulating 2D grid (n x n)
-    let grid = [0.0]
-    let i = 1
+    let mut grid = [0.0]
+    let mut i = 1
     while i < n * n {
         grid.push(0.0)
         i = i + 1
@@ -23,11 +23,11 @@ fn main() {
     }
 
     // SOR iterations
-    let iter = 0
+    let mut iter = 0
     while iter < iterations {
-        let row = 1
+        let mut row = 1
         while row < n - 1 {
-            let col = 1
+            let mut col = 1
             while col < n - 1 {
                 let idx = row * n + col
                 let avg = (grid[idx - 1] + grid[idx + 1] +
@@ -41,10 +41,10 @@ fn main() {
     }
 
     // Compute checksum: sum center region
-    let checksum = 0.0
-    let row = 1
+    let mut checksum = 0.0
+    let mut row = 1
     while row < n - 1 {
-        let col = 1
+        let mut col = 1
         while col < n - 1 {
             checksum = checksum + grid[row * n + col]
             col = col + 1
@@ -54,6 +54,6 @@ fn main() {
 
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("checksum: {checksum}")
-    print("elapsed: {ms} ms")
+    print(f"checksum: {checksum}")
+    print(f"elapsed: {ms} ms")
 }

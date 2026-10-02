@@ -364,6 +364,21 @@ then a stdlib import, not a language feature.
    coverage reporting may return later for `requires` call-site discharge.
 3. **No SMT.** *(Proposal.)* Fixed decidable domain: intervals, equalities, linear
    arithmetic, dominance. Extend the domain deliberately, primitive by primitive.
+4. **Integer semantics: defects trap; the provable fragment is justified.**
+   *(SETTLED 2026-10-02; issue #416.)* The fact kernel models `int` as
+   mathematical integers. That model is sound because the runtime does not
+   wrap: signed i64 overflow on `+`, `-`, `*`, unary negation, and
+   `i64::MIN / -1` — like division and modulo by zero — is a **defect**: it
+   prints a uniform message and aborts the process. Defects are not typed
+   errors, never enter error inference, and cannot be caught — conditions
+   raise, defects trap. Every normally-completing execution therefore agrees
+   with the mathematical model, so everything the kernel proves holds on
+   every execution that reaches the proven point (partial correctness).
+   Deliberate modular arithmetic (hashes, PRNGs) uses the explicit
+   `wrapping_add`/`wrapping_sub`/`wrapping_mul` builtins, whose results are
+   outside the affine fragment — no interval fact ever derives from them.
+   Phase 2 of #416 closes the loop: interval-proven arithmetic sites elide
+   their overflow checks, so contracts literally delete the checks.
 
 ## Open questions
 

@@ -10,6 +10,6 @@ fn main() {
     let result = fib(35)
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("fib(35) = {result}")
-    print("elapsed: {ms} ms")
+    print(f"fib(35) = {result}")
+    print(f"elapsed: {ms} ms")
 }

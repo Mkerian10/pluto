@@ -142,7 +142,8 @@ const PURE_SET_METHODS: &[&str] = &["contains", "len", "to_array"];
 
 /// Builtin free functions that neither run user code nor touch the outside
 /// world — the only calls that are not effects.
-const EFFECT_FREE_BUILTIN_FNS: &[&str] = &["abs", "min", "max", "time_ns", "len"];
+const EFFECT_FREE_BUILTIN_FNS: &[&str] =
+    &["abs", "min", "max", "time_ns", "len", "wrapping_add", "wrapping_sub", "wrapping_mul"];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Obligations and the dedup-field registry

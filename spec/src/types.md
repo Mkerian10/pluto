@@ -18,7 +18,7 @@ Pluto is a statically typed language. Every expression has a type known at compi
 
 The `int` type represents a signed 64-bit integer with a range of −9,223,372,036,854,775,808 to 9,223,372,036,854,775,807.
 
-Integer arithmetic wraps on overflow using two's complement semantics. A future version of the language may provide compile-time overflow detection through the contracts system.
+Integer overflow is a defect: `+`, `-`, `*`, unary negation, and `int.min / -1` abort the program with a defect message when the result does not fit in 64 bits. Deliberate modular arithmetic uses the `wrapping_add`/`wrapping_sub`/`wrapping_mul` builtins, which wrap two's complement and never trap.
 
 ### float
 
@@ -293,7 +293,7 @@ Integer division truncates toward zero. Division by zero is a contract violation
 
 The remainder operator `%` follows the same sign convention as the dividend: `-7 % 3 == -1`.
 
-Integer overflow wraps using two's complement semantics.
+Integer overflow is a defect and aborts the program; use `wrapping_add`/`wrapping_sub`/`wrapping_mul` for deliberate two's-complement wraparound.
 
 ### Floating-Point Arithmetic
 

@@ -92,7 +92,7 @@ for bench in "${BENCHMARKS[@]}"; do
     fi
 
     # Compile
-    if ! "$PLUTO" compile "$bench_dir/${bench}.pluto" -o "$bin" "${COMPILE_FLAGS[@]}" 2>/dev/null; then
+    if ! "$PLUTO" compile "$bench_dir/${bench}.pluto" -o "$bin" ${COMPILE_FLAGS[@]+"${COMPILE_FLAGS[@]}"} 2>/dev/null; then
         echo "FAIL  $bench (compilation error)"
         FAIL=$((FAIL + 1))
         continue

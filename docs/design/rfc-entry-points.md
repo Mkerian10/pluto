@@ -238,8 +238,9 @@ Stages do **not** need Erlang-style supervision trees or process isolation for c
 | Unhandled error | Compile error — can't happen | No |
 | Null dereference | Impossible — nullable types + `?` | No |
 | Type error | Impossible — static typing | No |
-| Array out of bounds | Runtime error (catchable) | No |
-| Division by zero | Runtime error (catchable) | No |
+| Array out of bounds | Defect — hard abort with message | Yes (by design) |
+| Division by zero | Defect — hard abort with message | Yes (by design) |
+| Integer overflow | Defect — hard abort with message (`wrapping_*` for deliberate wraparound) | Yes (by design) |
 | Contract violation | Hard abort (Phase 4 may change) | Yes (by design) |
 | OOM | Process dies | Yes (unrecoverable) |
 | Stack overflow | Process dies | Yes (unrecoverable) |

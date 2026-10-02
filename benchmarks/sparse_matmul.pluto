@@ -1,25 +1,25 @@
 // SciMark 2.0: Sparse Matrix Multiply
 // Sparse matrix in CSR format × dense vector, repeated iterations
 
-fn init_sparse(n: int, nnz: int, val: [float], col: [int], row: [int]) {
+fn init_sparse(n: int, nnz: int, mut val: [float], mut col: [int], mut row: [int]) {
     // Fill with pseudo-random sparse structure
     // Distribute nnz entries roughly evenly across rows
-    let seed = 42
+    let mut seed = 42
     let a = 16807
     let m = 2147483647
     let entries_per_row = nnz / n
 
-    let idx = 0
-    let r = 0
+    let mut idx = 0
+    let mut r = 0
     while r < n {
         row[r] = idx
-        let j = 0
+        let mut j = 0
         while j < entries_per_row {
             if idx >= nnz {
                 break
             }
             seed = (seed * a) % m
-            let c = seed % n
+            let mut c = seed % n
             if c < 0 {
                 c = 0 - c
             }
@@ -34,13 +34,13 @@ fn init_sparse(n: int, nnz: int, val: [float], col: [int], row: [int]) {
     row[n] = idx
 }
 
-fn sparse_matmul(val: [float], col: [int], row: [int], x: [float], y: [float], n: int) {
-    let r = 0
+fn sparse_matmul(val: [float], col: [int], row: [int], x: [float], mut y: [float], n: int) {
+    let mut r = 0
     while r < n {
-        let sum = 0.0
+        let mut sum = 0.0
         let start = row[r]
         let end = row[r + 1]
-        let k = start
+        let mut k = start
         while k < end {
             sum = sum + val[k] * x[col[k]]
             k = k + 1
@@ -57,7 +57,7 @@ fn main() {
 
     // Allocate CSR arrays
     let val = [0.0]
-    let i = 1
+    let mut i = 1
     while i < nnz {
         val.push(0.0)
         i = i + 1
@@ -76,7 +76,7 @@ fn main() {
     }
 
     // Dense vectors
-    let x = [0.0]
+    let mut x = [0.0]
     i = 1
     while i < n {
         x.push(0.0)
@@ -101,14 +101,14 @@ fn main() {
 
     let start = time_ns()
 
-    let iter = 0
+    let mut iter = 0
     while iter < iterations {
         sparse_matmul(val, col, row, x, y, n)
         iter = iter + 1
     }
 
     // Checksum
-    let checksum = 0.0
+    let mut checksum = 0.0
     i = 0
     while i < n {
         checksum = checksum + y[i]
@@ -117,6 +117,6 @@ fn main() {
 
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("checksum: {checksum}")
-    print("elapsed: {ms} ms")
+    print(f"checksum: {checksum}")
+    print(f"elapsed: {ms} ms")
 }

@@ -2,7 +2,7 @@
 // Comprehensive test suite for arithmetic, bitwise, and comparison operations.
 // Tests validate correct codegen behavior for all numeric operations.
 
-use super::common::compile_and_run_stdout;
+use super::common::{compile_and_run_output, compile_and_run_stdout};
 
 // ============================================================================
 // 1. Integer Arithmetic (20 tests)
@@ -433,8 +433,8 @@ fn main() {
 
 #[test]
 fn test_int_underflow_detection() {
-    // FIXED: Lexer doesn't support literals larger than i64::MAX (9223372036854775808)
-    // Use arithmetic to produce i64::MIN instead
+    // i64::MAX + 1 no longer wraps: overflow is a defect and traps
+    // (issue #416). i64::MIN is written as a literal instead.
     let source = r#"
 fn main() {
     let max_val = 9223372036854775807
@@ -442,8 +442,9 @@ fn main() {
     print(min_val)
 }
 "#;
-    // i64::MAX + 1 wraps to i64::MIN
-    assert_eq!(compile_and_run_stdout(source).trim(), "-9223372036854775808");
+    let (_stdout, stderr, code) = compile_and_run_output(source);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("pluto: defect: integer overflow in '+'"), "stderr: {stderr}");
 }
 
 #[test]

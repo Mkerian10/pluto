@@ -4,7 +4,7 @@ fn build_payload() string {
     let ob = __pluto_codepoint_to_string(123)
     let cb = __pluto_codepoint_to_string(125)
 
-    let p = ob + "\"name\":\"Alice\",\"age\":30,\"active\":true,"
+    let mut p = ob + "\"name\":\"Alice\",\"age\":30,\"active\":true,"
     p = p + "\"address\":" + ob + "\"street\":\"123 Main St\",\"city\":\"Springfield\",\"state\":\"IL\",\"zip\":\"62701\"" + cb + ","
     p = p + "\"scores\":[98,87,93,76,88],"
     p = p + "\"friends\":["
@@ -24,7 +24,7 @@ fn main() {
     let iterations = 10000
     let start = time_ns()
 
-    let i = 0
+    let mut i = 0
     while i < iterations {
         json.parse(payload) catch json.null()
         i = i + 1
@@ -32,6 +32,6 @@ fn main() {
 
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("json_parse: {iterations} iterations")
-    print("elapsed: {ms} ms")
+    print(f"json_parse: {iterations} iterations")
+    print(f"elapsed: {ms} ms")
 }

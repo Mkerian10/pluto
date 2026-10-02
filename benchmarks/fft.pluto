@@ -1,19 +1,19 @@
-fn fft(re: [float], im: [float], n: int) {
+fn fft(mut re: [float], mut im: [float], n: int) {
     let pi = 3.141592653589793
 
     // Bit-reversal permutation
-    let j = 0
-    let i = 0
+    let mut j = 0
+    let mut i = 0
     while i < n {
         if i < j {
-            let tmp = re[i]
+            let mut tmp = re[i]
             re[i] = re[j]
             re[j] = tmp
             tmp = im[i]
             im[i] = im[j]
             im[j] = tmp
         }
-        let m = n / 2
+        let mut m = n / 2
         while m >= 1 {
             if j < m {
                 break
@@ -26,18 +26,18 @@ fn fft(re: [float], im: [float], n: int) {
     }
 
     // Cooley-Tukey butterfly
-    let mmax = 1
+    let mut mmax = 1
     while mmax < n {
         let step = mmax * 2
         let theta = -pi / (mmax as float)
         let wpr = cos(theta)
         let wpi = sin(theta)
-        let wr = 1.0
-        let wi = 0.0
+        let mut wr = 1.0
+        let mut wi = 0.0
 
-        let m = 0
+        let mut m = 0
         while m < mmax {
-            let k = m
+            let mut k = m
             while k < n {
                 let t_re = wr * re[k + mmax] - wi * im[k + mmax]
                 let t_im = wr * im[k + mmax] + wi * re[k + mmax]
@@ -62,16 +62,16 @@ fn main() {
     let start = time_ns()
 
     // Initialize arrays with test signal
-    let re = [0.0]
-    let im = [0.0]
-    let i = 1
+    let mut re = [0.0]
+    let mut im = [0.0]
+    let mut i = 1
     while i < n {
         re.push(0.0)
         im.push(0.0)
         i = i + 1
     }
 
-    let iter = 0
+    let mut iter = 0
     while iter < iters {
         // Reset: simple impulse signal
         i = 0
@@ -87,7 +87,7 @@ fn main() {
     }
 
     // Verify: sum magnitudes
-    let mag_sum = 0.0
+    let mut mag_sum = 0.0
     i = 0
     while i < n {
         mag_sum = mag_sum + re[i] * re[i] + im[i] * im[i]
@@ -96,6 +96,6 @@ fn main() {
 
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("magnitude sum: {mag_sum}")
-    print("elapsed: {ms} ms")
+    print(f"magnitude sum: {mag_sum}")
+    print(f"elapsed: {ms} ms")
 }

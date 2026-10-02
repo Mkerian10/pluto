@@ -1,7 +1,7 @@
 // Category 1: Type Representation Tests (80 tests)
 // Validates that all PlutoType variants correctly map to Cranelift types
 
-use super::common::{compile_and_run, compile_and_run_stdout};
+use super::common::{compile_and_run, compile_and_run_output, compile_and_run_stdout};
 
 // ============================================================================
 // Primitives (20 tests)
@@ -57,12 +57,11 @@ fn test_int_max() {
 
 #[test]
 fn test_int_min_representation() {
-    // i64::MIN = -9223372036854775808
-    // We can't write this directly (lexer parses - separately), so test via arithmetic
+    // i64::MIN = -9223372036854775808. The parser folds the sign into the
+    // literal (overflow now traps, so the old max_val + 1 wrap is a defect).
     let src = r#"
         fn main() {
-            let max_val = 9223372036854775807
-            let min_val = max_val + 1  // Wraps to i64::MIN
+            let min_val = -9223372036854775808
             print(min_val)
         }
     "#;

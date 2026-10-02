@@ -17,6 +17,16 @@ use super::runtime::RuntimeRegistry;
 /// Size of a pointer in bytes. All heap-allocated objects use pointer-sized slots.
 pub const POINTER_SIZE: i32 = 8;
 
+// Defect kind codes passed to runtime/builtins.c __pluto_defect_binop.
+// Keep the two lists in sync.
+const DEFECT_ADD_OVERFLOW: i64 = 0;
+const DEFECT_SUB_OVERFLOW: i64 = 1;
+const DEFECT_MUL_OVERFLOW: i64 = 2;
+const DEFECT_NEG_OVERFLOW: i64 = 3;
+const DEFECT_DIV_OVERFLOW: i64 = 4;
+const DEFECT_DIV_ZERO: i64 = 5;
+const DEFECT_MOD_ZERO: i64 = 6;
+
 /// Precondition contracts for a function.
 pub struct FnContracts {
     pub requires: Vec<(Expr, String)>,  // (expr, description)
@@ -93,6 +103,28 @@ impl<'a> LowerContext<'a> {
     fn call_runtime_void(&mut self, name: &str, args: &[Value]) {
         let func_ref = self.module.declare_func_in_func(self.runtime.get(name), self.builder.func);
         self.builder.ins().call(func_ref, args);
+    }
+
+    /// Branch to a cold block that reports a defect and aborts when `flag`
+    /// is nonzero; otherwise fall through. Used by checked int arithmetic:
+    /// overflow and division by zero are defects (process-fatal bugs), never
+    /// typed errors, and never enter error inference — conditions raise,
+    /// defects trap (issue #416). The kind codes are the DEFECT_* constants
+    /// below, matching the switch in runtime/builtins.c __pluto_defect_binop.
+    fn emit_defect_check(&mut self, flag: Value, kind: i64, a: Value, b: Value) {
+        let defect_bb = self.builder.create_block();
+        let ok_bb = self.builder.create_block();
+        self.builder.ins().brif(flag, defect_bb, &[], ok_bb, &[]);
+
+        self.builder.switch_to_block(defect_bb);
+        self.builder.seal_block(defect_bb);
+        self.builder.set_cold_block(defect_bb);
+        let kind_val = self.builder.ins().iconst(types::I64, kind);
+        self.call_runtime_void("__pluto_defect_binop", &[kind_val, a, b]);
+        self.builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+
+        self.builder.switch_to_block(ok_bb);
+        self.builder.seal_block(ok_bb);
     }
 
     /// Materialize a string slice to an owned string at escape boundaries.
@@ -3205,6 +3237,13 @@ impl<'a> LowerContext<'a> {
                 let operand_type = infer_type_for_expr(&operand.node, self.env, &self.var_types);
                 match op {
                     UnaryOp::Neg if operand_type == PlutoType::Float => Ok(self.builder.ins().fneg(val)),
+                    UnaryOp::Neg if operand_type == PlutoType::Int => {
+                        // -i64::MIN overflows: defect (issue #416).
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let (res, of) = self.builder.ins().ssub_overflow(zero, val);
+                        self.emit_defect_check(of, DEFECT_NEG_OVERFLOW, val, zero);
+                        Ok(res)
+                    }
                     UnaryOp::Neg => Ok(self.builder.ins().ineg(val)),
                     UnaryOp::Not => {
                         let one = self.builder.ins().iconst(types::I8, 1);
@@ -3525,6 +3564,7 @@ impl<'a> LowerContext<'a> {
         let is_float = lhs_type == PlutoType::Float;
         let is_string = lhs_type == PlutoType::String;
         let is_byte = lhs_type == PlutoType::Byte;
+        let is_int = lhs_type == PlutoType::Int;
         // Classes are DATA: == compares structure (recursively, through
         // arrays/maps/sets/enums/nullables). Objects are ENTITIES: ==
         // compares identity, so they stay on the pointer-icmp path — as do
@@ -3541,13 +3581,56 @@ impl<'a> LowerContext<'a> {
         let result = match op {
             BinOp::Add if is_string => self.call_runtime("__pluto_string_concat", &[l, r]),
             BinOp::Add if is_float => self.builder.ins().fadd(l, r),
+            // Checked int arithmetic: signed i64 overflow is a defect and
+            // traps (issue #416). The prover models ints mathematically, so
+            // wrapping codegen would falsify every discharged invariant —
+            // deliberate modular arithmetic must use the wrapping_* builtins.
+            BinOp::Add if is_int => {
+                let (res, of) = self.builder.ins().sadd_overflow(l, r);
+                self.emit_defect_check(of, DEFECT_ADD_OVERFLOW, l, r);
+                res
+            }
             BinOp::Add => self.builder.ins().iadd(l, r),
             BinOp::Sub if is_float => self.builder.ins().fsub(l, r),
+            BinOp::Sub if is_int => {
+                let (res, of) = self.builder.ins().ssub_overflow(l, r);
+                self.emit_defect_check(of, DEFECT_SUB_OVERFLOW, l, r);
+                res
+            }
             BinOp::Sub => self.builder.ins().isub(l, r),
             BinOp::Mul if is_float => self.builder.ins().fmul(l, r),
+            BinOp::Mul if is_int => {
+                let (res, of) = self.builder.ins().smul_overflow(l, r);
+                self.emit_defect_check(of, DEFECT_MUL_OVERFLOW, l, r);
+                res
+            }
             BinOp::Mul => self.builder.ins().imul(l, r),
             BinOp::Div if is_float => self.builder.ins().fdiv(l, r),
+            BinOp::Div if is_int => {
+                // Division defects get explicit checks so they report through
+                // the uniform defect path instead of Cranelift's raw signal
+                // trap (SIGILL/SIGFPE with no message).
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let div_zero = self.builder.ins().icmp(IntCC::Equal, r, zero);
+                self.emit_defect_check(div_zero, DEFECT_DIV_ZERO, l, r);
+                let min = self.builder.ins().iconst(types::I64, i64::MIN);
+                let neg_one = self.builder.ins().iconst(types::I64, -1);
+                let l_min = self.builder.ins().icmp(IntCC::Equal, l, min);
+                let r_neg_one = self.builder.ins().icmp(IntCC::Equal, r, neg_one);
+                let overflow = self.builder.ins().band(l_min, r_neg_one);
+                self.emit_defect_check(overflow, DEFECT_DIV_OVERFLOW, l, r);
+                self.builder.ins().sdiv(l, r)
+            }
             BinOp::Div => self.builder.ins().sdiv(l, r),
+            BinOp::Mod if is_int => {
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let mod_zero = self.builder.ins().icmp(IntCC::Equal, r, zero);
+                self.emit_defect_check(mod_zero, DEFECT_MOD_ZERO, l, r);
+                // MIN % -1 is 0 in Cranelift srem semantics on both ISAs once
+                // the zero divisor is excluded — mathematically correct, no
+                // defect check needed.
+                self.builder.ins().srem(l, r)
+            }
             BinOp::Mod => self.builder.ins().srem(l, r),
             BinOp::Eq if is_string => {
                 let i32_result = self.call_runtime("__pluto_string_eq", &[l, r]);
@@ -3607,6 +3690,20 @@ impl<'a> LowerContext<'a> {
         }
         if name.node == "print" {
             return self.lower_print(args);
+        }
+        // Wrapping arithmetic builtins: the visible escape hatch for
+        // deliberately-modular code (hashes, PRNGs). Raw two's-complement
+        // ops, no overflow check — and no facts: the facts engine treats
+        // call results as unconstrained, so no interval ever derives from
+        // these (issue #416).
+        if matches!(name.node.as_str(), "wrapping_add" | "wrapping_sub" | "wrapping_mul") {
+            let a = self.lower_expr(&args[0].node)?;
+            let b = self.lower_expr(&args[1].node)?;
+            return Ok(match name.node.as_str() {
+                "wrapping_add" => self.builder.ins().iadd(a, b),
+                "wrapping_sub" => self.builder.ins().isub(a, b),
+                _ => self.builder.ins().imul(a, b),
+            });
         }
         // Table-driven zero-arg builtins
         const ZERO_ARG_BUILTINS: &[(&str, &str)] = &[
@@ -6594,6 +6691,9 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 return PlutoType::Float;
             }
             if name.node == "gc_heap_size" {
+                return PlutoType::Int;
+            }
+            if matches!(name.node.as_str(), "wrapping_add" | "wrapping_sub" | "wrapping_mul") {
                 return PlutoType::Int;
             }
             if name.node == "bytes_new" {

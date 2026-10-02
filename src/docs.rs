@@ -129,6 +129,14 @@ fn operators_doc() -> String {
 ### Arithmetic
 `+`, `-`, `*`, `/`, `%` (modulo)
 
+Signed 64-bit overflow on `+`, `-`, `*`, unary `-`, and `int.min / -1` is a
+**defect**: the program prints `pluto: defect: integer overflow in ...` and
+aborts. Division and modulo by zero are defects too. Defects are not typed
+errors and cannot be caught. Deliberate modular (mod 2^64) arithmetic must
+be visible: use the builtins `wrapping_add(a, b)`, `wrapping_sub(a, b)`,
+`wrapping_mul(a, b)` (int, int) -> int, which wrap two's-complement and
+never trap.
+
 ### Comparison
 `==`, `!=`, `<`, `>`, `<=`, `>=`
 
@@ -804,7 +812,7 @@ Import: `import std.math`
 | `to_radians` | `(degrees: float) float` | Degrees to radians |
 | `to_degrees` | `(radians: float) float` | Radians to degrees |
 
-Note: `sqrt`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `log` are compiler builtins (no import needed)."#
+Note: `sqrt`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `log` are compiler builtins (no import needed), as are `wrapping_add`, `wrapping_sub`, `wrapping_mul` — two's-complement wrapping int arithmetic for deliberately-modular code (hashes, PRNGs); plain `+`/`-`/`*` trap on overflow (defect)."#
         .to_string()
 }
 

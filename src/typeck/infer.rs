@@ -1185,6 +1185,28 @@ fn infer_call(
                     )),
                 }
             }
+            "wrapping_add" | "wrapping_sub" | "wrapping_mul" => {
+                // Two's-complement wrapping arithmetic — the explicit escape
+                // hatch from trapping int overflow (issue #416). Results get
+                // no interval facts: they fall outside the facts engine's
+                // affine fragment like any other call.
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 2 arguments, got {}", name.node, args.len()),
+                        span,
+                    ));
+                }
+                for arg in args.iter() {
+                    let t = infer_expr(&arg.node, arg.span, env, None)?;
+                    if t != PlutoType::Int {
+                        return Err(CompileError::type_err(
+                            format!("{}() expects int arguments, found {t}", name.node),
+                            arg.span,
+                        ));
+                    }
+                }
+                Ok(PlutoType::Int)
+            }
             "pow" => {
                 if args.len() != 2 {
                     return Err(CompileError::type_err(

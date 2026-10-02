@@ -117,6 +117,22 @@
 //! same conservatism, but with leaf paths resolved into a caller-chosen
 //! affine vocabulary (ghost variables over a method body, field
 //! substitutions at construction sites).
+//!
+//! # Integer semantics: defects trap, so the mathematical model is sound
+//!
+//! This engine models `int` as mathematical integers: `x + 1 > x` is Proven,
+//! never "unless it wraps". That is justified because runtime arithmetic
+//! does not wrap: signed i64 overflow on `+`, `-`, `*`, unary negation, and
+//! `i64::MIN / -1` — like division/modulo by zero — is a *defect* that
+//! aborts the process (issue #416; conditions raise, defects trap). Every
+//! normally-completing execution therefore agrees with the mathematical
+//! model, and every fact proven here holds at every point an execution
+//! actually reaches — partial correctness, in the same sense that a fact
+//! after an `if` guard holds only on paths that pass the guard. The
+//! explicit escape hatch, the `wrapping_add`/`wrapping_sub`/`wrapping_mul`
+//! builtins, stays sound automatically: like any other call, a wrapping_*
+//! result is outside the affine fragment (`to_affine_with` matches calls to
+//! `None`), so no interval fact is ever derived from one.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 

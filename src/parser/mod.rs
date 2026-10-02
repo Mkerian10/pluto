@@ -3935,6 +3935,16 @@ impl<'a> Parser<'a> {
                 // 21 is above all infix operators (max is Mul/Div/Mod at 19-20).
                 let operand = self.parse_expr(21)?;
                 let end = operand.span.end;
+                // Fold `-9223372036854775808`: the lexer accepts i64::MAX + 1
+                // (wrapping to i64::MIN) solely so this literal can be
+                // written. Runtime negation of the wrapped value would be an
+                // overflow defect now that negation is checked (and the facts
+                // engine would model the unfolded form as +2^63), so fold the
+                // sign into the literal here. Only the MIN case folds — other
+                // negative literals keep their UnaryOp shape.
+                if matches!(operand.node, Expr::IntLit(n) if n == i64::MIN) {
+                    return Ok(Spanned::new(Expr::IntLit(i64::MIN), Span::new(start, end)));
+                }
                 Ok(Spanned::new(
                     Expr::UnaryOp { op: UnaryOp::Neg, operand: Box::new(operand) },
                     Span::new(start, end),
@@ -5828,6 +5838,23 @@ mod tests {
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
                 assert!(matches!(value.node, Expr::UnaryOp { op: UnaryOp::Neg, .. }));
+            }
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_min_literal_folds_sign() {
+        // -9223372036854775808 folds to IntLit(i64::MIN) instead of a
+        // UnaryOp over the lexer-wrapped literal: runtime negation of the
+        // wrapped value would be an overflow defect.
+        let prog = parse("fn main() {
+    let x = -9223372036854775808
+}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => {
+                assert!(matches!(value.node, Expr::IntLit(i64::MIN)), "got {:?}", value.node);
             }
             _ => panic!("expected let statement"),
         }

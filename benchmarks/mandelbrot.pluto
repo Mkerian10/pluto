@@ -3,18 +3,18 @@ fn main() {
     let max_iter = 50
     let start = time_ns()
 
-    let total_iters = 0
+    let mut total_iters = 0
 
-    let y = 0
+    let mut y = 0
     while y < n {
         let ci = 2.0 * (y as float) / (n as float) - 1.0
-        let x = 0
+        let mut x = 0
         while x < n {
             let cr = 2.0 * (x as float) / (n as float) - 1.5
 
-            let zr = 0.0
-            let zi = 0.0
-            let iter = 0
+            let mut zr = 0.0
+            let mut zi = 0.0
+            let mut iter = 0
 
             while iter < max_iter {
                 let zr2 = zr * zr
@@ -35,6 +35,6 @@ fn main() {
 
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("total iterations: {total_iters}")
-    print("elapsed: {ms} ms")
+    print(f"total iterations: {total_iters}")
+    print(f"elapsed: {ms} ms")
 }

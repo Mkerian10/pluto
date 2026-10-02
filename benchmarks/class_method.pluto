@@ -17,6 +17,6 @@ fn main() {
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
     let val = c.get()
-    print("value = {val}")
-    print("elapsed: {ms} ms")
+    print(f"value = {val}")
+    print(f"elapsed: {ms} ms")
 }

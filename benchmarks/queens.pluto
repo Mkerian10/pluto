@@ -1,6 +1,6 @@
 fn queens_solve(n: int) int {
     let cols = [false]
-    let i = 1
+    let mut i = 1
     while i < n {
         cols.push(false)
         i = i + 1
@@ -20,12 +20,12 @@ fn queens_solve(n: int) int {
     return place_queen(0, n, cols, diag1, diag2)
 }
 
-fn place_queen(row: int, n: int, cols: [bool], diag1: [bool], diag2: [bool]) int {
+fn place_queen(row: int, n: int, mut cols: [bool], mut diag1: [bool], mut diag2: [bool]) int {
     if row == n {
         return 1
     }
-    let count = 0
-    let col = 0
+    let mut count = 0
+    let mut col = 0
     while col < n {
         let d1 = row + col
         let d2 = row - col + n - 1
@@ -56,6 +56,6 @@ fn main() {
     let solutions = queens_solve(n)
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("{n}-queens solutions: {solutions}")
-    print("elapsed: {ms} ms")
+    print(f"{n}-queens solutions: {solutions}")
+    print(f"elapsed: {ms} ms")
 }

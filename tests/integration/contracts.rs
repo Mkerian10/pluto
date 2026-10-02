@@ -1,6 +1,7 @@
 mod common;
 use common::{
     compile_and_run_output, compile_and_run_stdout, compile_should_fail, compile_should_fail_with,
+    compile_test_and_run_with_stdlib,
 };
 
 // ── Parsing success: class invariants compile and run ────────────────────────
@@ -2814,4 +2815,105 @@ fn main() {
     assert_ne!(code, 0);
     assert!(stderr.contains("requires violation"), "stderr: {stderr}");
     assert!(stderr.contains("frame.len() >= 4"), "stderr: {stderr}");
+}
+
+// ── Issue #416 honest-behavior pins: overflow traps keep proofs honest ───────
+//
+// These are the attack shapes from the soundness report: the prover models
+// ints mathematically, and before overflow trapping each shape made a
+// discharged proof observably false at runtime. Now the overflow is a defect
+// and the process aborts BEFORE the proven predicate can be falsified.
+
+// Repro 1: strict invariant discharge. `self.x = self.x + 1` discharges
+// against invariant self.x >= 0 mathematically; the overflowing bump now
+// traps instead of writing i64::MIN into a field proven non-negative.
+#[test]
+fn invariant_bump_overflow_traps_instead_of_falsifying() {
+    let (_stdout, stderr, code) = compile_and_run_output(
+        r#"
+class Counter {
+    x: int
+
+    invariant self.x >= 0
+
+    fn bump(mut self) {
+        self.x = self.x + 1
+    }
+}
+
+fn main() {
+    let mut c = Counter { x: 9223372036854775807 }
+    c.bump()
+    print(f"x = {c.x}")
+}
+"#,
+    );
+    assert_ne!(code, 0, "overflowing bump must trap, not falsify the invariant");
+    assert!(
+        stderr.contains("pluto: defect: integer overflow in '+': 9223372036854775807 + 1"),
+        "stderr: {stderr}"
+    );
+}
+
+// Repro 2: verify.monotonic (two-state stdlib property). The epoch can no
+// longer decrease by wrapping — the advance past i64::MAX traps.
+#[test]
+fn monotonic_epoch_overflow_traps_instead_of_decreasing() {
+    let (stdout, stderr, code) = compile_test_and_run_with_stdlib(
+        r#"
+import std.verify
+
+class Epoch satisfies verify.monotonic(self.e) {
+    e: int
+
+    fn advance(mut self) {
+        self.e = self.e + 1
+    }
+}
+
+test "epoch cannot wrap" {
+    let mut a = Epoch { e: 9223372036854775807 }
+    a.advance()
+    expect(a.e).to_equal(0)
+}
+"#,
+    );
+    assert_ne!(code, 0, "overflowing advance must trap; stdout: {stdout}");
+    assert!(
+        stderr.contains("pluto: defect: integer overflow in '+': 9223372036854775807 + 1"),
+        "stderr: {stderr}"
+    );
+}
+
+// Repro 3: requires discharge routed the call to the unchecked twin because
+// the caller proved `big + 1 > 0` mathematically. The overflowing argument
+// expression now traps before the call, so f never runs with a false
+// precondition.
+#[test]
+fn requires_nochk_twin_overflow_traps_before_entry() {
+    let (stdout, stderr, code) = compile_and_run_output(
+        r#"
+fn f(x: int)
+    requires x > 0
+{
+    print(f"inside f, x = {x}")
+}
+
+fn main() {
+    let big = 9223372036854775807
+    if big > 0 {
+        f(big + 1)
+    }
+}
+"#,
+    );
+    assert_ne!(code, 0);
+    assert!(
+        !stdout.contains("inside f"),
+        "f must not run with a false precondition; stdout: {stdout}"
+    );
+    assert!(
+        stderr.contains("pluto: defect: integer overflow in '+': 9223372036854775807 + 1"),
+        "stderr: {stderr}"
+    );
 }
