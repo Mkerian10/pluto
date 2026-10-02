@@ -813,46 +813,70 @@ fn stdlib_fs() -> String {
 
 Import: `import std.fs`
 
-## Error
-`FileError { message: string }` — raised by all fallible fs operations.
+## Errors
+- `FileError { path: string, code: int, message: string }` — general definite OS failure (raw errno captured at the syscall site)
+- `NotFound { path: string }` — ENOENT, the branch-worthy case
+- `CloseError { code: int, message: string }` — close() failed; the fd is released regardless
+- `SyncError { path: string, code: int, message: string }` — one-shot durability failure (sync_dir, replace_all)
+- `Degraded { file: File<Write, Poisoned>, code: int, message: string }` — a write/sync on an open handle failed; the payload is the handle in its post-failure state
 
-## File Class
+## The Typestated Handle
+`File<M, S>` — M is the mode (`Read` | `Write`, fixed at open), S the state (`Open` | `Poisoned` | `Closed`). `Open` and `Poisoned` are must-release states: an open handle cannot be dropped, captured by a closure/spawn, or stored in a field — it must be closed (or discarded), moved onward, or returned. Methods exist only in the right mode and state; use-after-close, double-close, and wrong-mode I/O are compile errors.
+
 ```
-class File {
-    fn read(self, size: int) string     // Read up to `size` bytes
-    fn write(mut self, data: string)    // Write string data
-    fn seek(mut self, offset: int, whence: int)  // Seek to position
-    fn close(mut self)                  // Close the file handle
-    fn flush(mut self)                  // Flush write buffer
+class File<M, S> {
+    fn read(self, max_bytes: int) string   // where M == Read, S == Open; "" = EOF; raises FileError
+    fn write(self, data: string)           // where M == Write, S == Open; loops to completion; raises Degraded
+    fn sync(self)                          // where M == Write, S == Open; full durability (fsync / F_FULLFSYNC); raises Degraded
+    fn sync_data(self)                     // where M == Write, S == Open; fdatasync (F_FULLFSYNC on Darwin); raises Degraded
+    fn seek(self, to: Seek) int            // where S == Open; raises FileError
+    fn close(self) File<M, Closed>         // where S == Open; consuming transition; raises CloseError
+    fn discard(self) File<M, Closed>       // where S == Poisoned; the only exit from Poisoned; never raises
 }
 ```
 
-## Seek Constants
-- `SEEK_SET()` → 0 (from beginning)
-- `SEEK_CUR()` → 1 (from current position)
-- `SEEK_END()` → 2 (from end)
+A failed write or sync destroys the durability warrant for the fd (the kernel reports a writeback error once — never retry a failed sync). The `Degraded` payload must be caught with a typed handler and discharged via `discard()`; recovery is reopen-and-rewrite from data the program still owns.
+
+## Seek
+```
+enum Seek {
+    Start { offset: int }      // from beginning
+    Current { delta: int }     // from current position
+    End { delta: int }         // from end
+}
+```
+
+## Metadata
+`Metadata { size: int, modified: int, is_dir: bool, is_file: bool, mode: int }` with invariant `size >= 0` (`modified` is unix seconds, `mode` is permission bits).
 
 ## Functions
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `open_read` | `(path: string) File` | Open file for reading (fallible) |
-| `open_write` | `(path: string) File` | Open/create file for writing (fallible) |
-| `open_append` | `(path: string) File` | Open/create file for appending (fallible) |
-| `read_all` | `(path: string) string` | Read entire file to string (fallible) |
-| `write_all` | `(path: string, content: string)` | Write string to file, overwriting (fallible) |
-| `append_all` | `(path: string, content: string)` | Append string to file (fallible) |
+| `open_read` | `(path: string) File<Read, Open>` | Open for reading (raises NotFound \| FileError) |
+| `open_write` | `(path: string) File<Write, Open>` | Open/create, truncating (fallible) |
+| `open_append` | `(path: string) File<Write, Open>` | Open/create for appending (fallible) |
+| `read_all` | `(path: string) string` | Read entire file (raises NotFound \| FileError) |
+| `write_all` | `(path: string, content: string)` | Write, overwriting; close errors surfaced (fallible) |
+| `append_all` | `(path: string, content: string)` | Append; close errors surfaced (fallible) |
+| `replace_all` | `(path: string, content: string)` | Atomic durable replace: temp + sync + rename + dir fsync. FileError ⇒ old file intact; SyncError ⇒ rename landed, durability unwarranted |
+| `sync_dir` | `(path: string)` | fsync a directory (crash-safe rename/create/remove); raises SyncError |
+| `stat` | `(path: string) Metadata` | File metadata (raises NotFound \| FileError) |
 | `exists` | `(path: string) bool` | Check if path exists |
-| `file_size` | `(path: string) int` | Get file size in bytes (fallible) |
+| `file_size` | `(path: string) int` | File size in bytes (raises NotFound \| FileError) |
 | `is_dir` | `(path: string) bool` | Check if path is a directory |
 | `is_file` | `(path: string) bool` | Check if path is a file |
 | `remove` | `(path: string)` | Delete a file (fallible) |
 | `mkdir` | `(path: string)` | Create directory (fallible) |
+| `create_dir_all` | `(path: string)` | mkdir -p: create all missing components (fallible) |
 | `rmdir` | `(path: string)` | Remove empty directory (fallible) |
+| `remove_dir_all` | `(path: string)` | Recursive delete; refuses "/" and "" (fallible) |
 | `rename` | `(old: string, new_path: string)` | Rename/move file (fallible) |
-| `copy` | `(src: string, dst: string)` | Copy file (fallible) |
+| `copy` | `(src: string, dst: string)` | Copy file; close errors surfaced (fallible) |
 | `list_dir` | `(path: string) [string]` | List directory contents (fallible) |
-| `temp_dir` | `() string` | Get system temp directory path |"#
+| `temp_dir` | `() string` | Create a fresh temp directory |
+
+Durability note: `sync`/`sync_data`/`replace_all` are syscall-faithful, not crash-tested — `sync()` means full durability on every platform (F_FULLFSYNC on Darwin; ENOTSUP raises rather than silently degrading)."#
         .to_string()
 }
 

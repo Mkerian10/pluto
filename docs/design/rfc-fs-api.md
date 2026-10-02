@@ -1,6 +1,40 @@
 # RFC: std.fs as Evidence — a Verified Filesystem API
 
-**Status:** Draft — awaiting owner review
+**Status:** Implemented (branch `fs-api-impl`, 2026-10-01) — owner accepted all
+inline recommendations as the decisions (D1 Option A, D2 strong-sync + raise on
+ENOTSUP with `sync_os()` deferred, D3 failed writes poison, D4 `SharedFile`
+deferred, D5 `replace_all` in v1, D6 `Seek` enum, D7 noted only, D8 keep
+`mkdir`/`rmdir` and add the `_all` forms). Deviations from the text as
+proposed, all minor:
+
+- **Two compiler fixes were needed after all** (the RFC predicted none; both
+  were bugs in shipped machinery that typestates-across-a-module-boundary had
+  simply never exercised): module flattening did not prefix state names inside
+  `where S == Open` method clauses or `must_release` class clauses
+  (`src/modules.rs`), and the diagnostic demangler broke module-qualified
+  instance names at the dots (`fs.File$$fs.Write$fs.Open` rendered as
+  `fs.File<fs>.Write$fs.Open`; `src/diagnostics/mod.rs`).
+- **`FileError.path` is `""` for descriptor-based methods** (`read`, `seek`):
+  the class carries only `fd`, as specified, so handle-level failures cannot
+  name the path. One-shot and constructor failures always carry it.
+- **Directory sync uses plain `fsync`**, not F_FULLFSYNC, on the dir fd
+  (`sync_dir` and `replace_all` step 4) — the SQLite convention; D2's
+  F_FULLFSYNC policy governs *file* syncs (`sync`/`sync_data` and
+  `replace_all`'s temp-file sync).
+- **One-shot close errors surface as `FileError`**, not `CloseError`: the
+  packaged C helpers fold the close result into the single syscall-site errno
+  they return. `CloseError` is the handle-level `close()` contract.
+- **A `replace_all` temp-file sync failure reports as `FileError`** (old file
+  intact, temp cleaned up) per the error contract's own definition — the
+  SyncError arm is reserved for the post-rename directory-fsync failure.
+- **Enum construction is dotted** (`fs.Seek.Start { offset: 0 }`), matching the
+  language's actual variant syntax rather than the RFC's `Seek::Start` sketch.
+- The #368 slots (`read_at`/`write_at`/`read_bytes`/`write_bytes`,
+  `*_all_bytes`) are reserved as documented signatures in `fs.pt`, not
+  compiled code — blocked on bytes extern support exactly as phase 4 states.
+- Phase 3's metadata/directory fill (`stat`/`Metadata`, `create_dir_all`,
+  `remove_dir_all`) landed with the phase 2 commit; `durable_config` and the
+  README landed separately. Cosmetic.
 **Author:** Design discussion
 **Date:** 2026-10-01
 **Related:** [rfc-typestates.md](rfc-typestates.md), [rfc-properties.md](rfc-properties.md), [contracts.md](contracts.md), [epistemics.md](epistemics.md), [rfc-objects.md](rfc-objects.md) ("Typestate and entities: resolved"), issues #367 (durability), #368 (bytes I/O + `read_at`/`write_at`)
