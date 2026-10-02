@@ -38,7 +38,7 @@ pub(crate) fn infer_closure(
 
     // Untyped params (`(x) => ...`) resolve from the expected fn type
     let expected_params = match expected {
-        Some(PlutoType::Fn(ps, _, _)) => Some(ps.clone()),
+        Some(PlutoType::Fn(ps, _, _, _)) => Some(ps.clone()),
         _ => None,
     };
 
@@ -134,7 +134,7 @@ pub(crate) fn infer_closure(
     env.facts = fact_snapshot;
     env.invariant_scope = invariant_scope;
 
-    Ok(PlutoType::Fn(param_types, Box::new(final_ret), false))
+    Ok(PlutoType::Fn(param_types, Box::new(final_ret), false, Vec::new()))
 }
 
 /// Infer the return type of a closure body by looking for return statements.

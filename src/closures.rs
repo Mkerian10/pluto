@@ -265,6 +265,7 @@ impl VisitMut for ClosureLifter<'_> {
                     name: Spanned::dummy(fn_name.clone()),
                     type_params: vec![],
                     type_param_bounds: std::collections::HashMap::new(),
+                    provides: vec![],
                     params: all_params,
                     return_type: if ret_type == PlutoType::Void {
                         None
@@ -391,10 +392,10 @@ fn resolve_type_for_lift(ty: &TypeExpr) -> PlutoType {
         // Infer params are materialized from closure_param_types before
         // lifting; a leftover means typeck never saw this closure.
         TypeExpr::Infer => PlutoType::Void,
-        TypeExpr::Fn { params, return_type, fallible } => {
+        TypeExpr::Fn { params, return_type, fallible, provides } => {
             let pts: Vec<PlutoType> = params.iter().map(|p| resolve_type_for_lift(&p.node)).collect();
             let ret = resolve_type_for_lift(&return_type.node);
-            PlutoType::Fn(pts, Box::new(ret), *fallible)
+            PlutoType::Fn(pts, Box::new(ret), *fallible, provides.clone())
         }
         TypeExpr::Generic { name, type_args } => {
             if name == "Map" && type_args.len() == 2 {
@@ -560,12 +561,13 @@ mod tests {
     fn resolve_type_fn_no_params() {
         let ty = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![],
             return_type: Box::new(spanned(TypeExpr::Named("void".to_string()))),
         };
         assert_eq!(
             resolve_type_for_lift(&ty),
-            PlutoType::Fn(vec![], Box::new(PlutoType::Void), false)
+            PlutoType::Fn(vec![], Box::new(PlutoType::Void), false, vec![])
         );
     }
 
@@ -573,6 +575,7 @@ mod tests {
     fn resolve_type_fn_with_params() {
         let ty = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![
                 Box::new(spanned(TypeExpr::Named("int".to_string()))),
                 Box::new(spanned(TypeExpr::Named("string".to_string()))),
@@ -583,8 +586,10 @@ mod tests {
             resolve_type_for_lift(&ty),
             PlutoType::Fn(
                 vec![PlutoType::Int, PlutoType::String],
-                Box::new(PlutoType::Bool)
-            , false)
+                Box::new(PlutoType::Bool),
+                false,
+                vec![]
+            )
         );
     }
 

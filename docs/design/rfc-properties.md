@@ -1,6 +1,6 @@
 # RFC: Properties — Named, Checkable Claims
 
-**Status:** Draft — direction accepted (design discussion, 2026-10-01): full property system ("option A"), staged. **Phases 1–4 implemented** (`ensures` with `old()`, two-state invariants, `guarded_by` dominance — slice 1 complete; the `property` form, `satisfies`, two-sided blame, `std.verify` — phase 4); see Phasing for deviations
+**Status:** Draft — direction accepted (design discussion, 2026-10-01): full property system ("option A"), staged. **Phases 1–5 implemented** (`ensures` with `old()`, two-state invariants, `guarded_by` dominance — slice 1 complete; the `property` form, `satisfies`, two-sided blame, `std.verify` — phase 4; `provides`, fn-type requirements, extern `assume`, the assumption surface — phase 5, with the idempotent discharge gap held open as phase 5.5); see Phasing for deviations
 **Author:** Design discussion
 **Date:** 2026-10-01
 **Related:** [rfc-verification.md](rfc-verification.md) (the kernel this extends), [epistemics.md](epistemics.md) (the genericity principle this implements), [contracts.md](contracts.md), [rfc-objects.md](rfc-objects.md), [rfc-distributed-safety.md](rfc-distributed-safety.md)
@@ -207,18 +207,24 @@ property-to-property abstraction in slice 2; every atom in the decidable
 fragment; the quantifier vocabulary is **fixed** (over write sites of a field,
 over exits of a method — never arbitrary syntax queries).
 
-*(As implemented, phase 4: kinds shipped are `field<T>`, bare `field` — a
-field of any type, usable only as a guarded_by target — `type`, and
-`const int`. `expr` / predicate parameters did not fall out naturally and are
-deferred to phase 4.5: they need a binder/substitution design of their own,
-and nothing in `monotonic`/`fenced` requires them. Bodies are strictly
-parametric: a direct `self.x` reference is rejected — fields are named
-through `field` parameters; invariant atoms may use `field<int>` and
-`const int` parameters plus `old(...)`; guard predicates may additionally use
-one-level int fields of the binder. Satisfies arguments are positional — the
-named-argument form `idempotent(key = order_id)` arrives with the phase-5
-`provides` surface. A field carries at most one guard clause, so a second
-`fenced`-style instantiation on an already-guarded field is rejected.)*
+*(As implemented, phases 4–5: kinds shipped are `field<T>`, bare `field` — a
+field of any type, usable only as a guarded_by target — `type`,
+`const int`, and (phase 5) `expr` — an expression over the providing
+function's parameters, one-level paths allowed, bound with the named form
+`key = req.id` at `provides`/`assume` sites only; `expr` parameters cannot
+appear inside atoms and are rejected by type-level `satisfies`. Atom kinds
+are `invariant`, `guarded_by`, and (phase 5) `ensures` — a method-level
+two-state postcondition over `field<int>`/`const int` parameters; a body
+may not mix type-level (invariant/guarded_by) and method-level (ensures)
+atoms, and an EMPTY body is legal as a *declared-only* property (see
+Discharge). Bodies are strictly parametric: a direct `self.x` reference is
+rejected — fields are named through `field` parameters; invariant atoms may
+use `field<int>` and `const int` parameters plus `old(...)`; guard
+predicates may additionally use one-level int fields of the binder.
+Satisfies arguments are positional; provides/assume arguments are
+positional except `expr` parameters, which take the named form. A field
+carries at most one guard clause, so a second `fenced`-style instantiation
+on an already-guarded field is rejected.)*
 
 ### Use
 
@@ -260,6 +266,24 @@ Every claim has exactly one warrant, per epistemics.md:
   compiler proves the guard's placement, the runtime evaluates its truth.
 - **Assumed** — declared at an extern boundary, never silently promoted.
 
+*(As implemented, phase 5 — slice-1 discharge paths for fn-level claims:*
+
+- *PROVEN: a class/object method providing an `ensures`-bodied property —
+  the atoms substitute into ordinary `ensures` contracts (with provenance
+  for two-sided blame) and the existing symbolic prover discharges them.*
+- *ASSUMED: `extern fn ... assume <property>(<args>)` — legal only for
+  declared-only properties (an atom-carrying property has a real in-unit
+  obligation shape an invisible body cannot discharge); recorded with
+  owner, instantiation, and source line.*
+- *No other path exists, and in particular `idempotent`'s real proof shape
+  — dedup-check dominance over the effect — is NOT in slice 1 (phase 5.5
+  below): `std.verify.idempotent(key: expr)` ships DECLARED-ONLY, so an
+  in-unit `provides idempotent(...)` is a compile error whose diagnostic
+  explains the discharge gap and points at extern `assume`. Never silently
+  promoted; also never vacuously satisfied — `satisfies` of a
+  declared-only property is equally rejected. CHECKED is not yet a
+  fn-level mode.)*
+
 ### Evolution and honesty
 
 - Property **bodies hash into interface hashes**: changing a body changes every
@@ -298,6 +322,13 @@ Every claim has exactly one warrant, per epistemics.md:
 3. **Retry combinator**: `with_retry` requires `idempotent` of its fn argument;
    a providing function flows in, a non-providing one is rejected at the
    boundary; an `assume`-discharged extern shows up in the analyze report.
+   ✅ **Passes** (phase 5): examples/retry — `with_retry(f: fn(string) int!
+   provides verify.idempotent, req)` retries only from an AMBIGUOUS
+   `NetworkError` (`definite == false`); the extern-assumed provider flows
+   in and runs, a plain function (or closure) is a compile-time boundary
+   rejection, and `pluto analyze` prints
+   `assume verify.idempotent(key = s) — extern fn __pluto_string_len
+   (line N)` (tests/integration/properties.rs, analyze.rs).
 
 (Conservation-of-money — the ledger's cross-entity sum — remains explicitly
 out of scope: it quantifies across entities, a future quantifier. Open
@@ -425,7 +456,43 @@ question 4.)
    `verify`), not the import path.
 5. **Requirements and assumptions** — properties on fn types, `requires`
    matching, `assume` at extern boundaries, the analyze assumption-surface
-   report; retry-combinator acceptance test.
+   report; retry-combinator acceptance test. ✅ **Implemented** (branch
+   `properties-phase5`): `provides <prop>(<args>)` on fns/methods and
+   `assume <prop>(<args>)` on extern fns (comma-separable; args positional
+   except `expr` parameters, which take the named form `key = req.id` over
+   the provider's parameters, one-level paths allowed); `expr` property
+   parameters (deferred from phase 4) shipped for exactly this use;
+   fn *types* carry requirements — `fn(TransferReq) Receipt! provides
+   idempotent` extends the type surface alongside the fallibility `!`, and
+   matching is by resolved property name with subset subsumption (a value
+   providing more satisfies a type requiring fewer; requirements carry no
+   arguments — instantiation lives on the providing declaration). A bare
+   fn reference's type carries its declaration's provides (so the
+   eta-expanded wrapper preserves them); closures provide nothing; trait
+   methods cannot declare `provides` (dynamic provision rejected with a
+   diagnostic). Discharge is honest: PROVEN only for class/object methods
+   providing `ensures`-bodied properties (a new `ensures` atom kind,
+   substituted into ordinary ensures contracts and discharged by the
+   existing prover with two-sided blame); ASSUMED only at extern
+   boundaries and only for declared-only (empty-body) properties; every
+   other fn-level claim is a compile error (kind error for type-level
+   bodies, discharge-gap for declared-only in-unit). Every assumed claim
+   lands in `DerivedInfo.assumptions` (owner, property, instantiation,
+   line — SCHEMA_VERSION 15) and `pluto analyze` prints the assumption
+   surface. *Deviations:* `requires`-side syntax is the fn-type `provides`
+   form only (no standalone `requires <property>` clause yet — nothing in
+   slice 1 needs one); provides on methods of generic classes rejected
+   (mirroring satisfies); app/stage methods cannot provide.
+
+5.5. **The idempotent discharge gap** — *open.* `idempotent`'s real proof
+   shape (a dedup check whose dominance over the effect is proven, with
+   the dedup data live at runtime — the CHECKED mode) is not yet
+   expressible in the kernel. Until it is, `std.verify.idempotent` stays
+   declared-only: in-unit `provides idempotent(...)` fails with the
+   discharge-gap diagnostic pointing at extern `assume`, which is the one
+   honest claim. Closing the gap means shipping effect-site dominance for
+   fn bodies plus the checked-residual story — at which point an in-unit
+   provider becomes possible and the property's body stops being empty.
 
 Each phase is independently shippable, and nothing in phases 1–3 is discarded
 by 4–5 — the atoms are the body language of the property form.

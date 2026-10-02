@@ -612,6 +612,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                                 is_pub: false,
                                 is_override: false,
                                 is_generator: false,
+        provides: Vec::new(),
                             };
 
                             let mangled = mangle_method(class_name, &trait_method.name.node);

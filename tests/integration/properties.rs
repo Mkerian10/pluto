@@ -190,10 +190,13 @@ fn non_int_field_param_in_invariant_atom_rejected() {
 }
 
 #[test]
-fn empty_property_body_rejected() {
+fn declared_only_property_cannot_be_satisfied() {
+    // Phase 5: an empty body is a DECLARED-ONLY property — legal to
+    // declare (no in-unit proof shape exists yet), but never vacuously
+    // satisfiable: 'satisfies' of it is an instantiation-site error.
     compile_should_fail_with(
-        "property empty(f: field<int>) {\n}\n\nfn main() {}\n",
-        "empty body",
+        "property opaque(f: field<int>) {\n}\n\nclass C satisfies opaque(self.n) {\n    n: int\n}\n\nfn main() {}\n",
+        "no checkable atoms",
     );
 }
 
@@ -488,5 +491,371 @@ fn blob_violating_variant_fails_with_two_sided_blame() {
             "required by property 'monotonic' (defined at line 2)",
             "instantiated with f = self.epoch",
         ],
+    );
+}
+
+// ============================================================
+// Phase 5: provides / assume / fn-type requirements
+// ============================================================
+
+#[test]
+fn provides_and_assume_parse_and_pretty_round_trip() {
+    let src = "property idempotent(key: expr) {\n}\n\nextern fn ext_put(k: string) int assume idempotent(key = k)\n\nproperty increments(f: field<int>, by: const int) {\n    ensures f == old(f) + by\n}\n\nobject Counter {\n    n: int\n\n    fn bump(mut self) provides increments(self.n, 1) {\n        self.n = self.n + 1\n    }\n}\n\nfn main() {}\n";
+    let program = pluto::parse_source(src).expect("parses");
+    let ext = &program.extern_fns[0].node;
+    assert_eq!(ext.assumes.len(), 1);
+    assert_eq!(ext.assumes[0].node.name.node, "idempotent");
+    assert_eq!(ext.assumes[0].node.line, 4);
+    let arg = &ext.assumes[0].node.args[0];
+    assert_eq!(arg.name.as_ref().unwrap().node, "key");
+    let counter = program.classes.iter().find(|c| c.node.name.node == "Counter").unwrap();
+    let bump = &counter.node.methods[0].node;
+    assert_eq!(bump.provides.len(), 1);
+    assert_eq!(bump.provides[0].node.name.node, "increments");
+    assert_eq!(bump.provides[0].node.args.len(), 2);
+
+    let printed = pluto::pretty::pretty_print(&program, false);
+    assert!(
+        printed.contains("extern fn ext_put(k: string) int assume idempotent(key = k)"),
+        "printed:\n{printed}"
+    );
+    assert!(
+        printed.contains("fn bump(mut self) provides increments(self.n, 1)"),
+        "printed:\n{printed}"
+    );
+    // The printed form parses back to the same shapes.
+    let reparsed = pluto::parse_source(&printed).expect("round-trips");
+    assert_eq!(reparsed.extern_fns[0].node.assumes.len(), 1);
+    let counter = reparsed.classes.iter().find(|c| c.node.name.node == "Counter").unwrap();
+    assert_eq!(counter.node.methods[0].node.provides.len(), 1);
+}
+
+#[test]
+fn fn_type_provides_parses_and_pretty_round_trips() {
+    let src = "property idempotent(key: expr) {\n}\n\nfn go(f: fn(string) int! provides idempotent, s: string) int {\n    return f(s) catch e { 0 }\n}\n\nfn main() {}\n";
+    let program = pluto::parse_source(src).expect("parses");
+    let go = program.functions.iter().find(|f| f.node.name.node == "go").unwrap();
+    match &go.node.params[0].ty.node {
+        pluto::parser::ast::TypeExpr::Fn { fallible, provides, .. } => {
+            assert!(*fallible);
+            assert_eq!(provides, &vec!["idempotent".to_string()]);
+        }
+        other => panic!("expected fn type, got {other:?}"),
+    }
+    let printed = pluto::pretty::pretty_print(&program, false);
+    assert!(
+        printed.contains("f: fn(string) int! provides idempotent"),
+        "printed:\n{printed}"
+    );
+    pluto::parse_source(&printed).expect("round-trips");
+}
+
+#[test]
+fn fn_type_provides_with_args_rejected_at_parse() {
+    compile_should_fail_with(
+        "property idempotent(key: expr) {\n}\n\nfn go(f: fn(string) int! provides idempotent(key = s)) int {\n    return 0\n}\n\nfn main() {}\n",
+        "matched by name",
+    );
+}
+
+#[test]
+fn trait_method_provides_rejected() {
+    compile_should_fail_with(
+        "property idempotent(key: expr) {\n}\n\ntrait Store {\n    fn put(self, k: string) int provides idempotent(key = k)\n}\n\nfn main() {}\n",
+        "trait methods cannot declare 'provides'",
+    );
+}
+
+// ── Discharge modes, honestly ───────────────────────────────
+
+#[test]
+fn in_unit_provides_of_declared_only_property_rejected() {
+    // THE discharge-gap diagnostic: idempotent has no in-unit proof shape
+    // (phase 5.5); the error must explain the gap and point at extern
+    // assume — never silently promote.
+    compile_should_fail_with_all(
+        "property idempotent(key: expr) {\n}\n\nfn mine(s: string) int provides idempotent(key = s) {\n    return 1\n}\n\nfn main() {}\n",
+        &[
+            "cannot discharge 'provides idempotent' in-unit",
+            "no checkable atoms",
+            "phase 5.5",
+            "never silently promoted",
+            "assume idempotent(...)",
+            "assumption surface",
+        ],
+    );
+}
+
+#[test]
+fn provides_of_type_level_property_rejected() {
+    compile_should_fail_with_all(
+        "property monotonic(f: field<int>) {\n    invariant f >= old(f)\n}\n\nobject C {\n    n: int\n\n    fn bump(mut self) provides monotonic(self.n) {\n        self.n = self.n + 1\n    }\n}\n\nfn main() {}\n",
+        &["property 'monotonic' is type-level", "'satisfies', not to a function via 'provides'"],
+    );
+}
+
+#[test]
+fn free_fn_provides_of_ensures_property_rejected() {
+    compile_should_fail_with_all(
+        "property increments(f: field<int>, by: const int) {\n    ensures f == old(f) + by\n}\n\nclass D {\n    n: int\n}\n\nfn standalone(d: D) int provides increments(d.n, 1) {\n    return 1\n}\n\nfn main() {}\n",
+        &["has no carrying type"],
+    );
+}
+
+#[test]
+fn satisfies_of_ensures_property_rejected() {
+    compile_should_fail_with_all(
+        "property increments(f: field<int>, by: const int) {\n    ensures f == old(f) + by\n}\n\nclass C satisfies increments(self.n, 1) {\n    n: int\n}\n\nfn main() {}\n",
+        &["method-level 'ensures' atoms", "not", "satisfied by a type"],
+    );
+}
+
+#[test]
+fn mixed_level_property_rejected_at_declaration() {
+    compile_should_fail_with(
+        "property both(f: field<int>) {\n    invariant f >= 0\n    ensures f == old(f)\n}\n\nfn main() {}\n",
+        "mixes type-level atoms",
+    );
+}
+
+#[test]
+fn expr_param_inside_atom_rejected() {
+    compile_should_fail_with(
+        "property bad(k: expr) {\n    ensures k == old(k)\n}\n\nfn main() {}\n",
+        "kind 'expr' and cannot appear",
+    );
+}
+
+#[test]
+fn satisfies_of_expr_param_property_rejected() {
+    compile_should_fail_with(
+        "property keyed(f: field<int>, key: expr) {\n    invariant f >= 0\n}\n\nclass C satisfies keyed(self.n, self.n) {\n    n: int\n}\n\nfn main() {}\n",
+        "'satisfies' cannot supply it",
+    );
+}
+
+// ── The proven path: ensures-bodied properties on methods ───
+
+#[test]
+fn ensures_property_proven_on_method() {
+    let out = compile_and_run_stdout(
+        "property increments(f: field<int>, by: const int) {\n    ensures f == old(f) + by\n}\n\nobject Counter {\n    n: int\n\n    fn bump(mut self) provides increments(self.n, 1) {\n        self.n = self.n + 1\n    }\n}\n\nfn main() {\n    let mut c = Counter { n: 0 }\n    c.bump()\n    c.bump()\n    print(c.n)\n}\n",
+    );
+    assert_eq!(out, "2\n");
+}
+
+#[test]
+fn ensures_property_violation_blames_both_sides() {
+    compile_should_fail_with_all(
+        "property increments(f: field<int>, by: const int) {\n    ensures f == old(f) + by\n}\n\nobject Counter {\n    n: int\n\n    fn bump(mut self) provides increments(self.n, 2) {\n        self.n = self.n + 1\n    }\n}\n\nfn main() {\n    let mut c = Counter { n: 0 }\n    c.bump()\n}\n",
+        &[
+            "ensures clause 'self.n == old(self.n) + 2' of method 'bump' of class 'Counter' is violated",
+            "required by property 'increments' (defined at line 2)",
+            "instantiated with f = self.n, by = 2",
+        ],
+    );
+}
+
+// ── Argument validation diagnostics ─────────────────────────
+
+#[test]
+fn provides_arity_mismatch_rejected() {
+    compile_should_fail_with(
+        "property increments(f: field<int>, by: const int) {\n    ensures f == old(f) + by\n}\n\nobject C {\n    n: int\n\n    fn bump(mut self) provides increments(self.n) {\n        self.n = self.n + 1\n    }\n}\n\nfn main() {}\n",
+        "expects 2 arguments (f: field<int>, by: const int), found 1",
+    );
+}
+
+#[test]
+fn expr_param_requires_named_form() {
+    compile_should_fail_with(
+        "property idempotent(key: expr) {\n}\n\nextern fn ext_put(k: string) int assume idempotent(k)\n\nfn main() {}\n",
+        "takes the named form",
+    );
+}
+
+#[test]
+fn named_form_on_positional_param_rejected() {
+    compile_should_fail_with(
+        "property increments(f: field<int>, by: const int) {\n    ensures f == old(f) + by\n}\n\nobject C {\n    n: int\n\n    fn bump(mut self) provides increments(f = self.n, by = 1) {\n        self.n = self.n + 1\n    }\n}\n\nfn main() {}\n",
+        "is positional: the named form",
+    );
+}
+
+#[test]
+fn expr_arg_must_range_over_parameters() {
+    compile_should_fail_with(
+        "property idempotent(key: expr) {\n}\n\nextern fn ext_put(k: string) int assume idempotent(key = other)\n\nfn main() {}\n",
+        "'other' is not a parameter",
+    );
+}
+
+#[test]
+fn unknown_property_in_provides_rejected() {
+    compile_should_fail_with(
+        "fn mine(s: string) int provides ghost(key = s) {\n    return 1\n}\n\nfn main() {}\n",
+        "unknown property 'ghost'",
+    );
+}
+
+#[test]
+fn unknown_property_in_fn_type_rejected() {
+    compile_should_fail_with(
+        "fn go(f: fn(string) int! provides ghost) int {\n    return 0\n}\n\nfn main() {}\n",
+        "unknown property 'ghost' in fn-type requirement",
+    );
+}
+
+#[test]
+fn extern_assume_of_field_param_property_rejected() {
+    compile_should_fail_with(
+        "property monotonic(f: field<int>) {\n    invariant f >= old(f)\n}\n\nextern fn ext_tick() int assume monotonic(self.n)\n\nfn main() {}\n",
+        "is type-level",
+    );
+}
+
+// ── Requires-matching at fn-type boundaries ─────────────────
+
+#[test]
+fn extern_assumed_provider_flows_into_requiring_type() {
+    // The epistemics payoff: an ASSUMED provider satisfies the fn-type
+    // requirement; the call compiles and runs.
+    let out = compile_and_run_stdout(
+        "property idempotent(key: expr) {\n}\n\nextern fn __pluto_string_len(s: string) int assume idempotent(key = s)\n\nfn apply_idem(f: fn(string) int! provides idempotent, s: string) int {\n    return f(s) catch e { 0 - 1 }\n}\n\nfn main() {\n    print(apply_idem(__pluto_string_len, \"hello\"))\n}\n",
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn non_providing_function_rejected_at_boundary() {
+    compile_should_fail_with(
+        "property idempotent(key: expr) {\n}\n\nfn plain(s: string) int {\n    return 7\n}\n\nfn apply_idem(f: fn(string) int! provides idempotent, s: string) int {\n    return f(s) catch e { 0 - 1 }\n}\n\nfn main() {\n    print(apply_idem(plain, \"hello\"))\n}\n",
+        "expected fn(string) int! provides idempotent, found fn(string) int",
+    );
+}
+
+#[test]
+fn closure_rejected_at_provides_boundary() {
+    // Closures provide nothing — a closure literal cannot satisfy a
+    // provides-requiring fn type.
+    compile_should_fail_with(
+        "property idempotent(key: expr) {\n}\n\nfn apply_idem(f: fn(string) int! provides idempotent, s: string) int {\n    return f(s) catch e { 0 - 1 }\n}\n\nfn main() {\n    print(apply_idem((s: string) => 3, \"x\"))\n}\n",
+        "provides idempotent, found fn(string) int",
+    );
+}
+
+#[test]
+fn provides_survives_variable_binding() {
+    // A fn-ref wrapper (eta-expansion through closure lifting) carries the
+    // provides through: bind the extern to an annotated variable, then
+    // pass the variable.
+    let out = compile_and_run_stdout(
+        "property idempotent(key: expr) {\n}\n\nextern fn __pluto_string_len(s: string) int assume idempotent(key = s)\n\nfn apply_idem(f: fn(string) int! provides idempotent, s: string) int {\n    return f(s) catch e { 0 - 1 }\n}\n\nfn main() {\n    let g: fn(string) int! provides idempotent = __pluto_string_len\n    print(apply_idem(g, \"worldly\"))\n}\n",
+    );
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn unannotated_binding_without_provides_rejected() {
+    // Subsumption direction: a plain fn-typed binding erases the provides,
+    // so passing it onward is a boundary rejection — the claim never
+    // launders through an unannotated type.
+    compile_should_fail_with(
+        "property idempotent(key: expr) {\n}\n\nextern fn __pluto_string_len(s: string) int assume idempotent(key = s)\n\nfn apply_idem(f: fn(string) int! provides idempotent, s: string) int {\n    return f(s) catch e { 0 - 1 }\n}\n\nfn main() {\n    let g: fn(string) int = __pluto_string_len\n    print(apply_idem(g, \"worldly\"))\n}\n",
+        "provides idempotent, found fn(string) int",
+    );
+}
+
+// ── The assumption surface ──────────────────────────────────
+
+#[test]
+fn assumed_claims_land_in_derived_info() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = dir.path().join("main.pt");
+    std::fs::write(
+        &entry,
+        "property idempotent(key: expr) {\n}\n\nextern fn ext_put(k: string, v: string) int assume idempotent(key = k)\n\nfn main() {}\n",
+    )
+    .unwrap();
+    let (_program, _source, derived) =
+        pluto::analyze_file(&entry, None).expect("analyze succeeds");
+    assert_eq!(derived.assumptions.len(), 1);
+    let claim = &derived.assumptions[0];
+    assert_eq!(claim.owner, "extern fn ext_put");
+    assert_eq!(claim.property, "idempotent");
+    assert_eq!(claim.instantiation, "key = k");
+    assert_eq!(claim.line, 4);
+    assert_eq!(
+        claim.to_string(),
+        "assume idempotent(key = k) — extern fn ext_put (line 4)"
+    );
+}
+
+// ── Cross-module provides/assume ────────────────────────────
+
+#[test]
+fn cross_module_assume_and_requirement() {
+    let out = run_project(&[
+        (
+            "main.pt",
+            "import verify\n\nextern fn __pluto_string_len(s: string) int assume verify.idempotent(key = s)\n\nfn apply_idem(f: fn(string) int! provides verify.idempotent, s: string) int {\n    return f(s) catch e { 0 - 1 }\n}\n\nfn main() {\n    print(apply_idem(__pluto_string_len, \"abc\"))\n}\n",
+        ),
+        (
+            "verify/verify.pt",
+            "pub property idempotent(key: expr) {\n}\n",
+        ),
+    ]);
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn private_property_not_assumable_across_modules() {
+    compile_project_should_fail_with_all(
+        &[
+            (
+                "main.pt",
+                "import verify\n\nextern fn ext_put(k: string) int assume verify.idempotent(key = k)\n\nfn main() {}\n",
+            ),
+            (
+                "verify/verify.pt",
+                "property idempotent(key: expr) {\n}\n",
+            ),
+        ],
+        &["'idempotent' is private to module 'verify'"],
+    );
+}
+
+// ── Retry acceptance test (rfc-properties.md acceptance 3) ──
+
+#[test]
+fn retry_example_compiles_and_runs() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let entry = manifest_dir.join("examples/retry/main.pt");
+    let stdlib = manifest_dir.join("stdlib");
+    let out_dir = tempfile::tempdir().unwrap();
+    let bin_path = out_dir.path().join("retry_bin");
+    pluto::compile_file_with_stdlib(&entry, &bin_path, Some(&stdlib))
+        .unwrap_or_else(|e| panic!("retry example failed to compile: {e}"));
+    let run_output = Command::new(&bin_path).output().unwrap();
+    assert!(run_output.status.success());
+    let stdout = String::from_utf8_lossy(&run_output.stdout);
+    assert!(stdout.contains("stored (receipt 5)"), "stdout:\n{stdout}");
+}
+
+#[test]
+fn retry_example_rejects_non_provider() {
+    // The boundary half of acceptance test 3, against std.verify itself.
+    compile_project_should_fail_with_all(
+        &[
+            (
+                "main.pt",
+                "import verify\n\nfn plain(s: string) int {\n    return 7\n}\n\nfn with_retry(f: fn(string) int! provides verify.idempotent, req: string) int {\n    return f(req) catch e { 0 - 1 }\n}\n\nfn main() {\n    print(with_retry(plain, \"x\"))\n}\n",
+            ),
+            (
+                "verify/verify.pt",
+                "pub property idempotent(key: expr) {\n}\n",
+            ),
+        ],
+        &["expected fn(string) int! provides verify.idempotent, found fn(string) int"],
     );
 }

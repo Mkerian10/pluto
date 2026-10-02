@@ -74,6 +74,7 @@ fn generate_type_name_impl(type_name: &str) -> Result<Spanned<Function>, Compile
         is_pub: false,
         is_override: false,
         is_generator: false,
+        provides: Vec::new(),
     };
 
     Ok(Spanned {
@@ -195,6 +196,7 @@ fn generate_kind_impl_for_class(class_name: &str, env: &TypeEnv) -> Result<Spann
         is_pub: false,
         is_override: false,
         is_generator: false,
+        provides: Vec::new(),
     };
 
     Ok(Spanned {
@@ -344,6 +346,7 @@ fn generate_kind_impl_for_enum(enum_name: &str, env: &TypeEnv) -> Result<Spanned
         is_pub: false,
         is_override: false,
         is_generator: false,
+        provides: Vec::new(),
     };
 
     Ok(Spanned {

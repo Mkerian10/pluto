@@ -1,0 +1,69 @@
+// Ambiguous-failure retry, licensed by a property — the acceptance test of
+// docs/design/rfc-properties.md phase 5 (epistemics.md: "retry an effect ⇒
+// know it did not apply, or make the retry itself produce knowledge").
+//
+// Every failure of an effectful boundary call is one of two kinds
+// (NetworkError.definite): DEFINITE — the effect is known not to have
+// applied, react freely — or AMBIGUOUS — the request left the process and
+// no response returned; the effect may or may not have applied. Retrying
+// from ambiguity is only sound when re-applying is harmless: idempotency.
+//
+// The language hardcodes none of this. `idempotent` is a property declared
+// in std.verify; the retry combinator REQUIRES it of its function-typed
+// argument (`fn(string) int! provides verify.idempotent` — the same type
+// surface that carries the fallibility contract `!`); the provider CLAIMS
+// it. Today the only legitimate claim is at a trust boundary: std.verify's
+// `idempotent` is declared-only (its proof shape — a dedup check dominating
+// the effect — is not yet expressible in the kernel, rfc-properties.md
+// phase 5.5), so an in-unit `provides idempotent(...)` is a compile error
+// pointing here, and the extern `assume` below is the one honest discharge.
+// `pluto analyze` lists every such assumption: the program's complete
+// assumption surface, with a named owner per claim.
+import std.verify
+
+// ── The trust boundary ─────────────────────────────────────────────────
+// Stand-in for an external service's idempotent PUT (bound to a runtime
+// builtin so the example runs self-contained; think "S3 put, keyed on the
+// request"). The compiler cannot see the implementation, so the claim's
+// warrant is ASSUMED — explicit, attributed to this declaration, and
+// reported by `pluto analyze`, never silently promoted to proven.
+extern fn __pluto_string_len(s: string) int assume verify.idempotent(key = s)
+
+error RetryExhausted {
+    message: string
+}
+
+// ── The combinator ─────────────────────────────────────────────────────
+// Only functions whose declarations provide `verify.idempotent` flow in:
+// passing a plain `fn(string) int` is a compile-time boundary rejection
+// ("expected fn(string) int! provides verify.idempotent, found ..."), and
+// closures provide nothing. The property is what LICENSES the blind retry
+// in the ambiguous branch — delete the requirement and the retry below is
+// exactly the classic double-apply bug.
+fn with_retry(f: fn(string) int! provides verify.idempotent, req: string) int {
+    return f(req) catch e: NetworkError {
+        if e.definite {
+            // Definite failure: the effect is KNOWN not to have applied.
+            // The world is in a known state — report it upward unchanged.
+            raise NetworkError { message: e.message, definite: true }
+        }
+        // Ambiguous failure: the effect may already have applied. No local
+        // information can say — but f is idempotent keyed on this request,
+        // so re-applying is harmless and the retry's outcome IS knowledge.
+        f(req) catch e2 {
+            raise RetryExhausted { message: "retry after ambiguous failure also failed" }
+            0 // unreachable (raise above)
+        }
+    } catch other {
+        raise RetryExhausted { message: "non-network failure" }
+        0 // unreachable (raise above)
+    }
+}
+
+fn main() {
+    let n = with_retry(__pluto_string_len, "pluto") catch e {
+        print("request failed definitively")
+        0 - 1
+    }
+    print(f"stored (receipt {n})")
+}

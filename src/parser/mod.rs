@@ -226,9 +226,16 @@ impl<'a> Parser<'a> {
     /// proof-form postcondition, docs/design/rfc-properties.md; `ensures`
     /// stays a legal identifier everywhere else).
     fn peek_is_ensures(&self) -> bool {
+        self.peek_is_contextual("ensures")
+    }
+
+    /// True when the next significant token is the given identifier — a
+    /// contextual keyword, recognized in its position only (the word stays
+    /// a legal identifier everywhere else).
+    fn peek_is_contextual(&self, word: &str) -> bool {
         match self.peek() {
             Some(t) if matches!(t.node, Token::Ident) => {
-                &self.source[t.span.start..t.span.end] == "ensures"
+                &self.source[t.span.start..t.span.end] == word
             }
             _ => false,
         }
@@ -758,6 +765,7 @@ impl<'a> Parser<'a> {
             is_pub: false,
             is_override: false,
             is_generator: false,
+            provides: Vec::new(),
         }, Span::new(start, end));
 
         Ok((info, func))
@@ -880,6 +888,7 @@ impl<'a> Parser<'a> {
         let return_type = if !self.at_statement_boundary()
             && self.peek().is_some()
             && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace)
+            && !self.peek_is_contextual("assume")
         {
             let ty = self.parse_type()?;
             end = ty.span.end;
@@ -888,8 +897,19 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // `assume <property>(<args>)` — trust-boundary property claims
+        // (docs/design/rfc-properties.md phase 5). Recorded as ASSUMED
+        // discharges and reported on the assumption surface.
+        let assumes = if self.peek_is_contextual("assume") {
+            let clauses = self.parse_provides_clauses()?;
+            end = clauses.last().map(|c| c.span.end).unwrap_or(end);
+            clauses
+        } else {
+            Vec::new()
+        };
+
         self.consume_statement_end()?;
-        Ok(Spanned::new(ExternFnDecl { name, params, return_type, is_pub }, Span::new(start, end)))
+        Ok(Spanned::new(ExternFnDecl { name, params, return_type, is_pub, assumes }, Span::new(start, end)))
     }
 
     fn parse_bracket_deps(&mut self) -> Result<Vec<Field>, CompileError> {
@@ -1301,7 +1321,9 @@ impl<'a> Parser<'a> {
         // Check for return type - use peek_raw() to detect newline boundary
         let return_type = if let Some(next_raw) = self.peek_raw()
             && (matches!(next_raw.node, Token::Newline | Token::RBrace | Token::Requires | Token::Where)
-                || self.peek_is_ensures())
+                || self.peek_is_ensures()
+                || (matches!(next_raw.node, Token::Ident)
+                    && &self.source[next_raw.span.start..next_raw.span.end] == "provides"))
         {
             // Newline, closing brace, or contract keyword - no return type
             None
@@ -1314,6 +1336,20 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+
+        // Dynamic sources are out of scope for property matching
+        // (docs/design/rfc-properties.md phase 5): a trait method's
+        // implementations vary per class, so there is no single declaration
+        // whose discharge the claim could name.
+        if self.peek_is_contextual("provides") {
+            let tok = self.peek().expect("checked by peek_is_contextual");
+            return Err(CompileError::syntax(
+                "trait methods cannot declare 'provides': property claims attach to \
+                 concrete declarations (a class/object method, or an extern fn via \
+                 'assume'); trait-dispatched provision is not yet supported",
+                tok.span,
+            ));
+        }
 
         // Parse optional requires contracts
         let contracts = self.parse_contracts()?;
@@ -1519,6 +1555,72 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    /// A comma-separated list of provides/assume clauses. The introducing
+    /// contextual keyword (`provides` on fns, `assume` on externs) is
+    /// consumed here; the caller checked it is next. Statement termination
+    /// is left to the caller (contracts and the body brace both skip
+    /// newlines themselves).
+    fn parse_provides_clauses(&mut self) -> Result<Vec<Spanned<ProvidesClause>>, CompileError> {
+        self.skip_newlines();
+        self.advance().expect("caller checked the keyword is next");
+        let mut clauses = Vec::new();
+        clauses.push(self.parse_provides_clause()?);
+        while self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Comma) {
+            self.advance(); // consume ','
+            clauses.push(self.parse_provides_clause()?);
+        }
+        Ok(clauses)
+    }
+
+    /// One `name(args)` instantiation inside a `provides` / `assume` clause
+    /// (docs/design/rfc-properties.md phase 5). The name may be
+    /// module-qualified (`verify.idempotent`); arguments are positional
+    /// expressions, except `expr`-kind parameters which take the named form
+    /// `key = req.id` — validated against the property's parameter kinds in
+    /// src/properties.rs.
+    fn parse_provides_clause(&mut self) -> Result<Spanned<ProvidesClause>, CompileError> {
+        let first = self.expect_ident()?;
+        let mut name = first.node;
+        let name_start = first.span.start;
+        let mut name_end = first.span.end;
+        while self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Dot) {
+            self.advance(); // consume '.'
+            let seg = self.expect_ident()?;
+            name.push('.');
+            name.push_str(&seg.node);
+            name_end = seg.span.end;
+        }
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let args = self.parse_comma_list(&Token::RParen, true, |p| p.parse_provides_arg())?;
+        let close = self.expect(&Token::RParen)?;
+        let span = Span::new(name_start, close.span.end);
+        Ok(Spanned::new(
+            ProvidesClause {
+                name: Spanned::new(name, Span::new(name_start, name_end)),
+                args,
+                line: self.line_of(name_start),
+            },
+            span,
+        ))
+    }
+
+    /// One provides/assume meta-argument: `key = req.id` (named — the form
+    /// `expr` parameters require) or a bare positional expression.
+    fn parse_provides_arg(&mut self) -> Result<ProvidesArg, CompileError> {
+        if self.peek().is_some_and(|t| matches!(t.node, Token::Ident))
+            && self.peek_nth(1).is_some_and(|t| matches!(t.node, Token::Eq))
+        {
+            let name = self.expect_ident()?;
+            self.expect(&Token::Eq)?;
+            let value = self.parse_expr(0)?;
+            Ok(ProvidesArg { name: Some(name), value })
+        } else {
+            let value = self.parse_expr(0)?;
+            Ok(ProvidesArg { name: None, value })
+        }
+    }
+
     /// `property name(p: field<int>, g: type, k: const int) { <atoms> }` —
     /// the property declaration form (docs/design/rfc-properties.md slice
     /// 2). The `property` keyword is contextual and already consumed-checked
@@ -1550,15 +1652,33 @@ impl<'a> Parser<'a> {
                     atom_span,
                 ));
                 self.consume_statement_end()?;
+            } else if matches!(tok.node, Token::Ident)
+                && &self.source[tok.span.start..tok.span.end] == "ensures"
+            {
+                // `ensures <expr>` — a method-level two-state postcondition
+                // atom (docs/design/rfc-properties.md phase 5): the proven
+                // discharge shape for fn-level `provides`.
+                let ens_tok = self.advance().expect("token should exist after peek");
+                let atom_start = ens_tok.span.start;
+                let expr = self.parse_expr(0)?;
+                let atom_span = Span::new(atom_start, expr.span.end);
+                atoms.push(Spanned::new(
+                    PropertyAtom {
+                        kind: PropertyAtomKind::Ensures { expr },
+                        line: self.line_of(atom_start),
+                    },
+                    atom_span,
+                ));
+                self.consume_statement_end()?;
             } else if matches!(tok.node, Token::Ident) {
                 // `<field-param> guarded_by (b: Type) <predicate>`
                 let target = self.expect_ident()?;
                 let atom_start = target.span.start;
                 self.expect(&Token::GuardedBy).map_err(|_| {
                     CompileError::syntax(
-                        "expected 'invariant <expr>' or '<field-param> guarded_by (b: Type) \
-                         <predicate>' in property body: a property is a conjunction of the \
-                         shipped proof atoms",
+                        "expected 'invariant <expr>', 'ensures <expr>', or '<field-param> \
+                         guarded_by (b: Type) <predicate>' in property body: a property is \
+                         a conjunction of the shipped proof atoms",
                         target.span,
                     )
                 })?;
@@ -1583,8 +1703,8 @@ impl<'a> Parser<'a> {
             } else {
                 return Err(CompileError::syntax(
                     format!(
-                        "expected 'invariant <expr>' or '<field-param> guarded_by (b: Type) \
-                         <predicate>' in property body, found {}",
+                        "expected 'invariant <expr>', 'ensures <expr>', or '<field-param> \
+                         guarded_by (b: Type) <predicate>' in property body, found {}",
                         tok.node
                     ),
                     tok.span,
@@ -1622,6 +1742,7 @@ impl<'a> Parser<'a> {
                 Spanned::new(PropertyParamKind::Field { ty }, Span::new(kind_word.span.start, end))
             }
             "type" => Spanned::new(PropertyParamKind::Type, kind_word.span),
+            "expr" => Spanned::new(PropertyParamKind::Expr, kind_word.span),
             "const" => {
                 let base = self.expect_ident()?;
                 if base.node != "int" {
@@ -1640,7 +1761,7 @@ impl<'a> Parser<'a> {
                 return Err(CompileError::syntax(
                     format!(
                         "unknown property parameter kind '{other}': expected 'field<T>', \
-                         'field', 'type', or 'const int'"
+                         'field', 'type', 'const int', or 'expr'"
                     ),
                     kind_word.span,
                 ));
@@ -1710,6 +1831,7 @@ impl<'a> Parser<'a> {
         let return_type = if self.peek().is_some()
             && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires | Token::Where)
             && !self.peek_is_ensures()
+            && !self.peek_is_contextual("provides")
         {
             Some(self.parse_type()?)
         } else {
@@ -1724,13 +1846,19 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        let provides = if self.peek_is_contextual("provides") {
+            self.parse_provides_clauses()?
+        } else {
+            Vec::new()
+        };
+
         let contracts = self.parse_contracts()?;
 
         let body = self.parse_block()?;
         let end = body.span.end;
 
         Ok(Spanned::new(
-            Function { id: Uuid::new_v4(), name, type_params, type_param_bounds, params, return_type, contracts, body, is_pub: false, is_override: false, is_generator: false },
+            Function { id: Uuid::new_v4(), name, type_params, type_param_bounds, params, return_type, contracts, body, is_pub: false, is_override: false, is_generator: false, provides },
             Span::new(start, end),
         ))
     }
@@ -1910,10 +2038,17 @@ impl<'a> Parser<'a> {
         let return_type = if self.peek().is_some()
             && !matches!(self.peek().expect("token should exist after is_some check").node, Token::LBrace | Token::Requires | Token::Where)
             && !self.peek_is_ensures()
+            && !self.peek_is_contextual("provides")
         {
             Some(self.parse_type()?)
         } else {
             None
+        };
+
+        let provides = if self.peek_is_contextual("provides") {
+            self.parse_provides_clauses()?
+        } else {
+            Vec::new()
         };
 
         let contracts = self.parse_contracts()?;
@@ -1925,7 +2060,7 @@ impl<'a> Parser<'a> {
             Function {
                 id: Uuid::new_v4(), name, type_params, type_param_bounds, params,
                 is_generator: return_type.as_ref().is_some_and(|rt| matches!(rt.node, TypeExpr::Stream(_))),
-                return_type, contracts, body, is_pub: false, is_override: false,
+                return_type, contracts, body, is_pub: false, is_override: false, provides,
             },
             Span::new(start, end),
         ))
@@ -1975,7 +2110,43 @@ impl<'a> Parser<'a> {
                 end = bang.span.end;
                 fallible = true;
             }
-            Ok(Spanned::new(TypeExpr::Fn { params, return_type, fallible }, Span::new(start, end)))
+            // Optional property requirements: fn(TransferReq) Receipt!
+            // provides idempotent (docs/design/rfc-properties.md phase 5).
+            // Same-line only (raw peek), like the fallibility marker; names
+            // may be module-qualified. Requirements are matched by name —
+            // instantiation arguments live on the providing declaration.
+            let mut provides: Vec<String> = Vec::new();
+            while self.peek_raw().is_some_and(|t| matches!(t.node, Token::Ident))
+                && &self.source[self.peek_raw().unwrap().span.start..self.peek_raw().unwrap().span.end]
+                    == "provides"
+            {
+                self.advance(); // consume 'provides'
+                let first = self.expect_ident()?;
+                let mut pname = first.node;
+                end = first.span.end;
+                while self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Dot) {
+                    self.advance(); // consume '.'
+                    let seg = self.expect_ident()?;
+                    pname.push('.');
+                    pname.push_str(&seg.node);
+                    end = seg.span.end;
+                }
+                if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::LParen) {
+                    return Err(CompileError::syntax(
+                        format!(
+                            "property requirements on fn types are matched by name: write \
+                             'provides {pname}' without arguments — instantiation arguments \
+                             (e.g. 'key = req.id') appear on the providing declaration, \
+                             never on the type"
+                        ),
+                        self.peek_raw().unwrap().span,
+                    ));
+                }
+                provides.push(pname);
+            }
+            provides.sort();
+            provides.dedup();
+            Ok(Spanned::new(TypeExpr::Fn { params, return_type, fallible, provides }, Span::new(start, end)))
         } else {
             let ident = self.expect_ident()?;
             // Check for qualified type: module.Type
@@ -4917,7 +5088,7 @@ mod tests {
         let prog = parse("fn apply(f: fn(int, int) int, x: int) int {\n    return f(x, x)\n}");
         let f = &prog.functions[0].node;
         match &f.params[0].ty.node {
-            TypeExpr::Fn { params, return_type, fallible: _ } => {
+            TypeExpr::Fn { params, return_type, fallible: _, provides: _ } => {
                 assert_eq!(params.len(), 2);
                 assert!(matches!(&params[0].node, TypeExpr::Named(n) if n == "int"));
                 assert!(matches!(&params[1].node, TypeExpr::Named(n) if n == "int"));
@@ -4932,7 +5103,7 @@ mod tests {
         let prog = parse("fn apply(f: fn(int)) {\n}");
         let f = &prog.functions[0].node;
         match &f.params[0].ty.node {
-            TypeExpr::Fn { params, return_type, fallible: _ } => {
+            TypeExpr::Fn { params, return_type, fallible: _, provides: _ } => {
                 assert_eq!(params.len(), 1);
                 assert!(matches!(&return_type.node, TypeExpr::Named(n) if n == "void"));
             }

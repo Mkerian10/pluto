@@ -415,3 +415,57 @@ fn main() {
     // Verify derived data includes all functions
     assert_eq!(derived.fn_signatures.len(), 3, "should have signatures for all 3 functions");
 }
+
+#[test]
+fn test_analyze_prints_assumption_surface() {
+    // `pluto analyze` reports the assumption surface (rfc-properties.md
+    // phase 5 / epistemics.md): every claim discharged by ASSUMPTION, with
+    // owner, property, instantiation, and line. Pinned output shape.
+
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("assume.pt");
+    std::fs::write(
+        &pt_file,
+        "property idempotent(key: expr) {\n}\n\nextern fn ext_put(k: string, v: string) int assume idempotent(key = k)\n\nfn main() {}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("assumption surface: 1 assumed claim"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("assume idempotent(key = k) — extern fn ext_put (line 4)"),
+        "stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_analyze_prints_empty_assumption_surface() {
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("clean.pt");
+    std::fs::write(&pt_file, "fn main() {\n    print(1)\n}\n").unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("assumption surface: empty (no assumed claims)"),
+        "stdout:\n{stdout}"
+    );
+}

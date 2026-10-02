@@ -34,8 +34,10 @@ fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> 
         return env.class_implements_trait(cn, tn);
     }
     // Fn types: structural compatibility (same param count, each param compatible, return compatible)
-    if let (PlutoType::Fn(a_params, a_ret, a_fallible), PlutoType::Fn(e_params, e_ret, e_fallible)) =
-        (actual, expected)
+    if let (
+        PlutoType::Fn(a_params, a_ret, a_fallible, a_provides),
+        PlutoType::Fn(e_params, e_ret, e_fallible, e_provides),
+    ) = (actual, expected)
     {
         if a_params.len() != e_params.len() {
             return false;
@@ -43,6 +45,13 @@ fn types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEnv) -> 
         // Subsumption: an infallible value satisfies a fallible contract, but
         // a fallible-typed value never satisfies an infallible contract.
         if *a_fallible && !e_fallible {
+            return false;
+        }
+        // Property requirements (rfc-properties.md phase 5): subsumption in
+        // the same direction — a value providing MORE properties satisfies a
+        // contract requiring fewer, but a required property the value's
+        // declaration does not provide is a boundary rejection.
+        if !e_provides.iter().all(|p| a_provides.contains(p)) {
             return false;
         }
         for (ap, ep) in a_params.iter().zip(e_params.iter()) {
@@ -234,6 +243,47 @@ fn register_provided_properties(program: &Program, env: &mut TypeEnv) {
             })
             .collect();
         env.class_properties.insert(class.node.name.node.clone(), provided);
+    }
+
+    // Fn-level claims (rfc-properties.md phase 5). Validation and in-unit
+    // discharge decisions already ran in src/properties.rs; what is
+    // recorded here is the exported fact per function: PROVEN provides on
+    // class/object methods, ASSUMED claims on extern declarations. A bare
+    // reference's fn type carries these names, which is what fn-type
+    // requires-matching consumes.
+    let record = |env: &mut TypeEnv,
+                      key: String,
+                      clauses: &[crate::span::Spanned<crate::parser::ast::ProvidesClause>],
+                      mode: env::DischargeMode| {
+        if clauses.is_empty() {
+            return;
+        }
+        let props: Vec<env::FnProvidedProperty> = clauses
+            .iter()
+            .map(|c| env::FnProvidedProperty {
+                name: c.node.name.node.clone(),
+                args: crate::properties::render_provides_args(&c.node),
+                mode,
+                line: c.node.line,
+            })
+            .collect();
+        env.fn_properties.insert(key, props);
+    };
+    for func in &program.functions {
+        record(env, func.node.name.node.clone(), &func.node.provides, env::DischargeMode::Proven);
+    }
+    for class in &program.classes {
+        for method in &class.node.methods {
+            record(
+                env,
+                env::mangle_method(&class.node.name.node, &method.node.name.node),
+                &method.node.provides,
+                env::DischargeMode::Proven,
+            );
+        }
+    }
+    for ext in &program.extern_fns {
+        record(env, ext.node.name.node.clone(), &ext.node.assumes, env::DischargeMode::Assumed);
     }
 }
 

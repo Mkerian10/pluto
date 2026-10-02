@@ -84,6 +84,12 @@ pub fn instantiate_properties(program: &mut Program) -> Result<(), CompileError>
             instantiate_clause(&mut class.node, clause, prop)?;
         }
     }
+
+    // Phase 5 (rfc-properties.md): fn-level `provides`, extern `assume`,
+    // and fn-type property requirements.
+    process_fn_provides(program, &table)?;
+    process_extern_assumes(program, &table)?;
+    validate_fn_type_provides(program, &table)?;
     Ok(())
 }
 
@@ -99,7 +105,30 @@ fn param_kind_name(kind: &PropertyParamKind) -> String {
         PropertyParamKind::Field { ty: None } => "field".to_string(),
         PropertyParamKind::Type => "type".to_string(),
         PropertyParamKind::ConstInt => "const int".to_string(),
+        PropertyParamKind::Expr => "expr".to_string(),
     }
+}
+
+/// The short (unqualified) property name for diagnostics.
+fn short_name(name: &str) -> &str {
+    name.rsplit_once('.').map(|(_, s)| s).unwrap_or(name)
+}
+
+/// Does this property's body contain type-level atoms (invariant /
+/// guarded_by — instantiated on a class/object via `satisfies`)?
+fn has_type_level_atoms(prop: &PropertyDecl) -> bool {
+    prop.atoms.iter().any(|a| {
+        matches!(
+            a.node.kind,
+            PropertyAtomKind::Invariant { .. } | PropertyAtomKind::Guarded { .. }
+        )
+    })
+}
+
+/// Does this property's body contain method-level atoms (ensures —
+/// instantiated on a class/object method via `provides`)?
+fn has_method_level_atoms(prop: &PropertyDecl) -> bool {
+    prop.atoms.iter().any(|a| matches!(a.node.kind, PropertyAtomKind::Ensures { .. }))
 }
 
 fn is_int_field_kind(kind: &PropertyParamKind) -> bool {
@@ -122,11 +151,19 @@ fn validate_property_decl(prop: &PropertyDecl) -> Result<(), CompileError> {
             ));
         }
     }
-    if prop.atoms.is_empty() {
+    // An empty body is a DECLARED-ONLY property (rfc-properties.md phase
+    // 5): its proof shape is not yet expressible in the kernel, so it has
+    // no in-unit discharge path — it can only be assumed at an extern
+    // boundary. Both `satisfies` and in-unit `provides` of it are rejected
+    // at the instantiation site (never silently promoted, and never
+    // vacuously satisfied).
+    if has_type_level_atoms(prop) && has_method_level_atoms(prop) {
         return Err(CompileError::type_err(
             format!(
-                "property '{}' has an empty body: a property is a conjunction of at least \
-                 one proof atom (an 'invariant' clause or a 'guarded_by' clause)",
+                "property '{}' mixes type-level atoms (invariant / guarded_by) with \
+                 method-level atoms (ensures): a property is instantiated either on a \
+                 type ('satisfies') or on a method ('provides') — split it into two \
+                 properties",
                 prop.name.node
             ),
             prop.name.span,
@@ -138,6 +175,12 @@ fn validate_property_decl(prop: &PropertyDecl) -> Result<(), CompileError> {
     for atom in &prop.atoms {
         match &atom.node.kind {
             PropertyAtomKind::Invariant { expr } => {
+                validate_atom_expr(expr, prop, &params, None)?;
+            }
+            PropertyAtomKind::Ensures { expr } => {
+                // Same integer fragment as invariant atoms: field<int> and
+                // const int parameters, plus old(...) of those. `expr`
+                // parameters stay out of atoms in slice 1.
                 validate_atom_expr(expr, prop, &params, None)?;
             }
             PropertyAtomKind::Guarded { target, clause } => {
@@ -233,6 +276,16 @@ fn validate_atom_expr(
             {
                 Ok(())
             }
+            Some(p) if p.kind.node == PropertyParamKind::Expr => Err(CompileError::type_err(
+                format!(
+                    "parameter '{}' of property '{}' has kind 'expr' and cannot appear \
+                     inside the property's atoms: expr parameters are instantiation \
+                     metadata, bound at fn-level 'provides' / extern 'assume' sites \
+                     (rfc-properties.md phase 5)",
+                    name, prop.name.node
+                ),
+                expr.span,
+            )),
             Some(p) => Err(CompileError::type_err(
                 format!(
                     "parameter '{}' of property '{}' has kind '{}' and cannot appear in \
@@ -370,6 +423,47 @@ fn instantiate_clause(
     prop: &PropertyDecl,
 ) -> Result<(), CompileError> {
     let cname = &clause.node.name.node;
+    if prop.atoms.is_empty() {
+        return Err(CompileError::type_err(
+            format!(
+                "property '{}' has no checkable atoms (a declared-only property): there \
+                 is no in-unit discharge for it, so 'satisfies' cannot instantiate it — \
+                 declared-only properties are claimed only at extern boundaries, with \
+                 'assume {}(...)' on an extern fn (recorded on the assumption surface)",
+                short_name(cname),
+                short_name(cname)
+            ),
+            clause.span,
+        ));
+    }
+    if has_method_level_atoms(prop) {
+        return Err(CompileError::type_err(
+            format!(
+                "property '{}' contains method-level 'ensures' atoms: it is provided by \
+                 a class/object method ('fn m(mut self, ...) provides {}(...)'), not \
+                 satisfied by a type",
+                short_name(cname),
+                short_name(cname)
+            ),
+            clause.span,
+        ));
+    }
+    if let Some(p) = prop
+        .params
+        .iter()
+        .find(|p| p.kind.node == PropertyParamKind::Expr)
+    {
+        return Err(CompileError::type_err(
+            format!(
+                "property '{}' has an 'expr' parameter ('{}'): expr parameters range \
+                 over a function's parameters, so the property attaches at fn-level \
+                 'provides' / extern 'assume' sites — 'satisfies' cannot supply it",
+                short_name(cname),
+                p.name.node
+            ),
+            clause.span,
+        ));
+    }
     if clause.node.args.len() != prop.params.len() {
         let sig = prop
             .params
@@ -444,6 +538,9 @@ fn instantiate_clause(
                     },
                     clause.span,
                 ));
+            }
+            PropertyAtomKind::Ensures { .. } => {
+                unreachable!("ensures-atom properties are rejected for 'satisfies' above")
             }
             PropertyAtomKind::Guarded { target, clause: guard } => {
                 let field_name = match prop
@@ -578,6 +675,15 @@ fn resolve_arg(
                 arg.span,
             )),
         },
+        PropertyParamKind::Expr => Err(CompileError::type_err(
+            format!(
+                "parameter '{}: expr' of property '{prop_name}' cannot be supplied by a \
+                 'satisfies' clause (expr parameters bind at fn-level provides/assume \
+                 sites)",
+                param.name.node
+            ),
+            arg.span,
+        )),
     }
 }
 
@@ -643,15 +749,19 @@ fn format_type_expr(te: &TypeExpr) -> String {
         ),
         TypeExpr::Nullable(inner) => format!("{}?", format_type_expr(&inner.node)),
         TypeExpr::Stream(inner) => format!("stream {}", format_type_expr(&inner.node)),
-        TypeExpr::Fn { params, return_type, fallible } => format!(
-            "fn({}) {}{}",
+        TypeExpr::Fn { params, return_type, fallible, provides } => format!(
+            "fn({}) {}{}{}",
             params
                 .iter()
                 .map(|t| format_type_expr(&t.node))
                 .collect::<Vec<_>>()
                 .join(", "),
             format_type_expr(&return_type.node),
-            if *fallible { "!" } else { "" }
+            if *fallible { "!" } else { "" },
+            provides
+                .iter()
+                .map(|p| format!(" provides {p}"))
+                .collect::<String>()
         ),
         TypeExpr::Infer => "_".to_string(),
     }
@@ -680,6 +790,564 @@ fn substitute_expr(expr: &mut Spanned<Expr>, subst: &HashMap<String, Expr>, span
     }
     let mut s = Subst { subst, span };
     s.visit_expr_mut(expr);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 5: fn-level provides, extern assume, fn-type requirements
+// (docs/design/rfc-properties.md phase 5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Render the instantiation bindings of a provides/assume clause
+/// (`key = req.id` / `f = self.count, by = 1`) for provenance, the
+/// fn-properties registry, and the assumption surface.
+pub(crate) fn render_provides_args(clause: &ProvidesClause) -> String {
+    clause
+        .args
+        .iter()
+        .map(|a| match &a.name {
+            Some(n) => format!("{} = {}", n.node, render_satisfies_arg(&a.value.node)),
+            None => render_satisfies_arg(&a.value.node),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn lookup_property<'a>(
+    table: &HashMap<String, usize>,
+    properties: &'a [Spanned<PropertyDecl>],
+    name: &Spanned<String>,
+) -> Result<&'a PropertyDecl, CompileError> {
+    match table.get(&name.node) {
+        Some(&idx) => Ok(&properties[idx].node),
+        None => Err(CompileError::type_err(
+            format!(
+                "unknown property '{}': no such property declaration is in scope \
+                 (properties are declared with 'property name(params) {{ ... }}' \
+                 and imported like any other declaration)",
+                name.node
+            ),
+            name.span,
+        )),
+    }
+}
+
+/// What a provides/assume clause is attached to, for argument resolution
+/// and diagnostics.
+struct ProvidesTarget<'a> {
+    /// The receiver class when the provider is a class/object method
+    /// (field-kind arguments resolve against it).
+    class: Option<&'a ClassDecl>,
+    /// The provider's parameter names, excluding `self` (expr-kind
+    /// arguments range over these).
+    params: Vec<String>,
+    /// `function 'f'` / `method 'C.m'` / `extern fn 'f'` for diagnostics.
+    desc: String,
+}
+
+/// Validate one provides/assume clause's arguments against the property's
+/// parameter kinds and return the substitution for ensures-atom injection
+/// (field params → `self.<field>`, const params → literals; expr params
+/// bind no atom terms in slice 1).
+fn validate_provides_args(
+    clause: &Spanned<ProvidesClause>,
+    prop: &PropertyDecl,
+    target: &ProvidesTarget,
+) -> Result<HashMap<String, Expr>, CompileError> {
+    let cname = &clause.node.name.node;
+    if clause.node.args.len() != prop.params.len() {
+        let sig = prop
+            .params
+            .iter()
+            .map(|p| format!("{}: {}", p.name.node, param_kind_name(&p.kind.node)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(CompileError::type_err(
+            format!(
+                "property '{}' expects {} argument{} ({sig}), found {}",
+                short_name(cname),
+                prop.params.len(),
+                if prop.params.len() == 1 { "" } else { "s" },
+                clause.node.args.len()
+            ),
+            clause.span,
+        ));
+    }
+
+    let mut subst: HashMap<String, Expr> = HashMap::new();
+    for (param, arg) in prop.params.iter().zip(&clause.node.args) {
+        let is_expr_param = param.kind.node == PropertyParamKind::Expr;
+        match (&arg.name, is_expr_param) {
+            (None, true) => {
+                return Err(CompileError::type_err(
+                    format!(
+                        "parameter '{}: expr' of property '{}' takes the named form: \
+                         write '{} = <expr over the function's parameters>'",
+                        param.name.node,
+                        short_name(cname),
+                        param.name.node
+                    ),
+                    arg.value.span,
+                ));
+            }
+            (Some(n), true) if n.node != param.name.node => {
+                return Err(CompileError::type_err(
+                    format!(
+                        "named argument '{}' does not match parameter '{}' of property \
+                         '{}' at this position (arguments are matched positionally; the \
+                         name documents the expr parameter being bound)",
+                        n.node,
+                        param.name.node,
+                        short_name(cname)
+                    ),
+                    n.span,
+                ));
+            }
+            (Some(n), false) => {
+                return Err(CompileError::type_err(
+                    format!(
+                        "parameter '{}: {}' of property '{}' is positional: the named \
+                         form ('{} = ...') is reserved for 'expr' parameters",
+                        param.name.node,
+                        param_kind_name(&param.kind.node),
+                        short_name(cname),
+                        n.node
+                    ),
+                    n.span,
+                ));
+            }
+            _ => {}
+        }
+
+        match &param.kind.node {
+            PropertyParamKind::Expr => {
+                validate_expr_arg(&arg.value, cname, param, target)?;
+            }
+            PropertyParamKind::Field { .. } => {
+                let Some(class) = target.class else {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "parameter '{}: {}' of property '{}' names a field of the \
+                             carrying type, but {} has no carrying type — field-parameter \
+                             properties attach to class/object methods",
+                            param.name.node,
+                            param_kind_name(&param.kind.node),
+                            short_name(cname),
+                            target.desc
+                        ),
+                        arg.value.span,
+                    ));
+                };
+                match resolve_arg(class, cname, param, &arg.value)? {
+                    ArgValue::Field(f) => {
+                        subst.insert(
+                            param.name.node.clone(),
+                            Expr::FieldAccess {
+                                object: Box::new(Spanned::new(
+                                    Expr::Ident("self".to_string()),
+                                    clause.span,
+                                )),
+                                field: Spanned::new(f, clause.span),
+                            },
+                        );
+                    }
+                    _ => unreachable!("field params resolve to fields"),
+                }
+            }
+            PropertyParamKind::Type => {
+                // Validated for shape; type params are only meaningful to
+                // guard atoms, which cannot appear in provides-capable
+                // bodies — resolve for the error message alone.
+                resolve_arg_shape_type(cname, param, &arg.value)?;
+            }
+            PropertyParamKind::ConstInt => match const_int_of_expr(&arg.value.node) {
+                Some(n) => {
+                    subst.insert(param.name.node.clone(), Expr::IntLit(n));
+                }
+                None => {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "argument for parameter '{}: const int' of property '{}' \
+                             must be an integer literal",
+                            param.name.node,
+                            short_name(cname)
+                        ),
+                        arg.value.span,
+                    ));
+                }
+            },
+        }
+    }
+    Ok(subst)
+}
+
+fn resolve_arg_shape_type(
+    prop_name: &str,
+    param: &PropertyParam,
+    arg: &Spanned<Expr>,
+) -> Result<(), CompileError> {
+    match type_name_of_expr(&arg.node) {
+        Some(_) => Ok(()),
+        None => Err(CompileError::type_err(
+            format!(
+                "argument for parameter '{}: type' of property '{}' must be a type name",
+                param.name.node,
+                short_name(prop_name)
+            ),
+            arg.span,
+        )),
+    }
+}
+
+/// An expr-kind argument is an expression over the provider's parameters:
+/// a bare parameter name or a one-level path rooted at one (`req.id`).
+fn validate_expr_arg(
+    value: &Spanned<Expr>,
+    prop_name: &str,
+    param: &PropertyParam,
+    target: &ProvidesTarget,
+) -> Result<(), CompileError> {
+    let root_ok = |root: &str| target.params.iter().any(|p| p == root);
+    let err = |detail: String| {
+        CompileError::type_err(
+            format!(
+                "argument for parameter '{}: expr' of property '{}' must be an \
+                 expression over {}'s parameters — a parameter name or a one-level \
+                 path rooted at one (e.g. 'req.id'): {detail}",
+                param.name.node,
+                short_name(prop_name),
+                target.desc
+            ),
+            value.span,
+        )
+    };
+    match &value.node {
+        Expr::Ident(name) if root_ok(name) => Ok(()),
+        Expr::Ident(name) => Err(err(format!("'{name}' is not a parameter"))),
+        Expr::FieldAccess { object, field: _ } => match &object.node {
+            Expr::Ident(root) if root_ok(root) => Ok(()),
+            Expr::Ident(root) => Err(err(format!("path root '{root}' is not a parameter"))),
+            _ => Err(err("paths deeper than one level are not supported".to_string())),
+        },
+        Expr::QualifiedAccess { segments } => match segments.first() {
+            Some(root) if segments.len() == 2 && root_ok(&root.node) => Ok(()),
+            Some(root) if segments.len() == 2 => {
+                Err(err(format!("path root '{}' is not a parameter", root.node)))
+            }
+            _ => Err(err("paths deeper than one level are not supported".to_string())),
+        },
+        _ => Err(err("unsupported expression shape".to_string())),
+    }
+}
+
+/// How a provides-capable property classifies for a given provider.
+enum ProvidesShape {
+    /// All atoms are ensures-shaped: provable on a class/object method.
+    EnsuresOnly,
+    /// No atoms: declared-only — no in-unit discharge path exists.
+    DeclaredOnly,
+    /// Contains invariant/guarded_by atoms: a type-level property.
+    TypeLevel,
+}
+
+fn provides_shape(prop: &PropertyDecl) -> ProvidesShape {
+    if has_type_level_atoms(prop) {
+        ProvidesShape::TypeLevel
+    } else if prop.atoms.is_empty() {
+        ProvidesShape::DeclaredOnly
+    } else {
+        ProvidesShape::EnsuresOnly
+    }
+}
+
+fn type_level_provides_err(cname: &str, span: Span) -> CompileError {
+    CompileError::type_err(
+        format!(
+            "property '{}' is type-level: its atoms (invariant / guarded_by) attach to \
+             a class or object via 'satisfies', not to a function via 'provides'",
+            short_name(cname)
+        ),
+        span,
+    )
+}
+
+fn discharge_gap_err(cname: &str, desc: &str, span: Span) -> CompileError {
+    CompileError::type_err(
+        format!(
+            "cannot discharge 'provides {short}' in-unit: property '{short}' declares \
+             no checkable atoms — its proof shape is not yet expressible in the \
+             verification kernel (rfc-properties.md phase 5.5), and a claim is never \
+             silently promoted (epistemics.md). If {desc} fronts an external system \
+             that guarantees the property, declare the claim at the trust boundary \
+             instead — 'extern fn ... assume {short}(...)' — which discharges it as \
+             ASSUMED and reports it on the assumption surface ('pluto analyze')",
+            short = short_name(cname),
+        ),
+        span,
+    )
+}
+
+fn ensures_needs_receiver_err(cname: &str, desc: &str, span: Span) -> CompileError {
+    CompileError::type_err(
+        format!(
+            "property '{}' contains method-level 'ensures' atoms, which relate a \
+             receiver's exit state to its entry state: only a class/object method can \
+             provide it, and {desc} has no receiver",
+            short_name(cname)
+        ),
+        span,
+    )
+}
+
+/// Process every fn-level `provides` clause: validate it, then discharge it
+/// or fail. Slice-1 discharge paths: PROVEN for class/object methods
+/// providing ensures-bodied properties (desugared into ordinary ensures
+/// contracts, discharged by src/typeck/discharge.rs); nothing else — a
+/// declared-only property has no in-unit path (extern `assume` is the
+/// boundary mode), and type-level properties are a kind error here.
+fn process_fn_provides(
+    program: &mut Program,
+    table: &HashMap<String, usize>,
+) -> Result<(), CompileError> {
+    let Program { properties, functions, classes, app, stages, .. } = program;
+
+    for func in functions.iter() {
+        for clause in &func.node.provides {
+            let prop = lookup_property(table, properties, &clause.node.name)?;
+            let desc = format!("function '{}'", func.node.name.node);
+            let target = ProvidesTarget {
+                class: None,
+                params: func.node.params.iter().map(|p| p.name.node.clone()).collect(),
+                desc: desc.clone(),
+            };
+            validate_provides_args(clause, prop, &target)?;
+            return Err(match provides_shape(prop) {
+                ProvidesShape::TypeLevel => {
+                    type_level_provides_err(&clause.node.name.node, clause.span)
+                }
+                ProvidesShape::DeclaredOnly => {
+                    discharge_gap_err(&clause.node.name.node, &desc, clause.span)
+                }
+                ProvidesShape::EnsuresOnly => {
+                    ensures_needs_receiver_err(&clause.node.name.node, &desc, clause.span)
+                }
+            });
+        }
+    }
+
+    for methods in app
+        .iter_mut()
+        .map(|a| &mut a.node.methods)
+        .chain(stages.iter_mut().map(|s| &mut s.node.methods))
+    {
+        for method in methods.iter() {
+            if let Some(clause) = method.node.provides.first() {
+                return Err(CompileError::type_err(
+                    "'provides' on app/stage methods is not supported: property claims \
+                     attach to class/object methods (proven) or extern fns (assumed)"
+                        .to_string(),
+                    clause.span,
+                ));
+            }
+        }
+    }
+
+    for class in classes.iter_mut() {
+        let has_provides = class
+            .node
+            .methods
+            .iter()
+            .any(|m| !m.node.provides.is_empty());
+        if !has_provides {
+            continue;
+        }
+        if !class.node.type_params.is_empty() {
+            let clause = class
+                .node
+                .methods
+                .iter()
+                .flat_map(|m| m.node.provides.first())
+                .next()
+                .expect("has_provides checked");
+            return Err(CompileError::type_err(
+                format!(
+                    "'provides' on methods of generic classes is not yet supported: \
+                     property instantiations are compile-time proof obligations, and \
+                     generic bodies are checked against opaque type parameters. Provide \
+                     the property on a concrete class wrapping '{}' instead",
+                    class.node.name.node
+                ),
+                clause.span,
+            ));
+        }
+        let class_name = class.node.name.node.clone();
+        // Field args resolve against the receiver class; split the borrow
+        // by taking the method list out while resolving against the class.
+        let mut methods = std::mem::take(&mut class.node.methods);
+        let mut result = Ok(());
+        'outer: for method in methods.iter_mut() {
+            let clauses = method.node.provides.clone();
+            for clause in &clauses {
+                let prop = match lookup_property(table, properties, &clause.node.name) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        result = Err(e);
+                        break 'outer;
+                    }
+                };
+                let desc = format!("method '{}.{}'", class_name, method.node.name.node);
+                let target = ProvidesTarget {
+                    class: Some(&class.node),
+                    params: method
+                        .node
+                        .params
+                        .iter()
+                        .filter(|p| p.name.node != "self")
+                        .map(|p| p.name.node.clone())
+                        .collect(),
+                    desc: desc.clone(),
+                };
+                let subst = match validate_provides_args(clause, prop, &target) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        result = Err(e);
+                        break 'outer;
+                    }
+                };
+                match provides_shape(prop) {
+                    ProvidesShape::TypeLevel => {
+                        result = Err(type_level_provides_err(&clause.node.name.node, clause.span));
+                        break 'outer;
+                    }
+                    ProvidesShape::DeclaredOnly => {
+                        result = Err(discharge_gap_err(&clause.node.name.node, &desc, clause.span));
+                        break 'outer;
+                    }
+                    ProvidesShape::EnsuresOnly => {
+                        // PROVEN path: substitute the atoms into ordinary
+                        // ensures contracts; the standard discharge
+                        // machinery (register_ensures + the symbolic
+                        // prover) checks them with provenance blame.
+                        let bindings = prop
+                            .params
+                            .iter()
+                            .zip(&clause.node.args)
+                            .map(|(p, a)| {
+                                format!(
+                                    "{} = {}",
+                                    p.name.node,
+                                    render_satisfies_arg(&a.value.node)
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        for atom in &prop.atoms {
+                            let PropertyAtomKind::Ensures { expr } = &atom.node.kind else {
+                                unreachable!("EnsuresOnly shape")
+                            };
+                            let mut expr = expr.clone();
+                            substitute_expr(&mut expr, &subst, clause.span);
+                            method.node.contracts.push(Spanned::new(
+                                ContractClause {
+                                    kind: ContractKind::Ensures,
+                                    expr,
+                                    provenance: Some(PropertyProvenance {
+                                        property: clause.node.name.node.clone(),
+                                        line: atom.node.line,
+                                        bindings: bindings.clone(),
+                                    }),
+                                },
+                                clause.span,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        class.node.methods = methods;
+        result?;
+    }
+    Ok(())
+}
+
+/// Validate every extern `assume` clause: the ASSUMED discharge mode
+/// (epistemics.md) — explicit, attributed, reported, never promoted. Only
+/// declared-only properties are assumable: atom-carrying properties have a
+/// real in-unit obligation shape that an invisible body cannot discharge.
+fn process_extern_assumes(
+    program: &Program,
+    table: &HashMap<String, usize>,
+) -> Result<(), CompileError> {
+    for ext in &program.extern_fns {
+        for clause in &ext.node.assumes {
+            let prop = lookup_property(table, &program.properties, &clause.node.name)?;
+            let desc = format!("extern fn '{}'", ext.node.name.node);
+            match provides_shape(prop) {
+                ProvidesShape::TypeLevel => {
+                    return Err(type_level_provides_err(&clause.node.name.node, clause.span));
+                }
+                ProvidesShape::EnsuresOnly => {
+                    return Err(ensures_needs_receiver_err(
+                        &clause.node.name.node,
+                        &desc,
+                        clause.span,
+                    ));
+                }
+                ProvidesShape::DeclaredOnly => {}
+            }
+            let target = ProvidesTarget {
+                class: None,
+                params: ext.node.params.iter().map(|p| p.name.node.clone()).collect(),
+                desc,
+            };
+            validate_provides_args(clause, prop, &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Every `provides <name>` requirement on a fn TYPE must name a property
+/// declaration in scope (matching is by resolved name).
+fn validate_fn_type_provides(
+    program: &Program,
+    table: &HashMap<String, usize>,
+) -> Result<(), CompileError> {
+    use crate::visit::{walk_type_expr, Visitor};
+    struct Check<'a> {
+        table: &'a HashMap<String, usize>,
+        err: Option<CompileError>,
+    }
+    impl Visitor for Check<'_> {
+        fn visit_type_expr(&mut self, te: &Spanned<TypeExpr>) {
+            if self.err.is_some() {
+                return;
+            }
+            if let TypeExpr::Fn { provides, .. } = &te.node {
+                for name in provides {
+                    if !self.table.contains_key(name) {
+                        self.err = Some(CompileError::type_err(
+                            format!(
+                                "unknown property '{name}' in fn-type requirement \
+                                 'provides {name}': no such property declaration is in \
+                                 scope (properties are declared with 'property \
+                                 name(params) {{ ... }}' and imported like any other \
+                                 declaration)"
+                            ),
+                            te.span,
+                        ));
+                        return;
+                    }
+                }
+            }
+            walk_type_expr(self, te);
+        }
+    }
+    let mut check = Check { table, err: None };
+    check.visit_program(program);
+    match check.err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

@@ -411,7 +411,7 @@ pub fn analyze_file_with_warnings_impl(entry_file: &Path, stdlib_root: Option<&P
 pub fn analyze_and_update(
     file_path: &Path,
     stdlib_root: Option<&Path>,
-) -> Result<(), CompileError> {
+) -> Result<derived::DerivedInfo, CompileError> {
     // Canonicalize path
     let file_path = file_path.canonicalize().map_err(|e| {
         CompileError::codegen(format!("could not resolve path '{}': {e}", file_path.display()))
@@ -463,7 +463,7 @@ pub fn analyze_and_update(
         CompileError::codegen(format!("failed to write {}: {e}", output_path.display()))
     })?;
 
-    Ok(())
+    Ok(derived)
 }
 
 /// Filter tests based on cache - keeps only tests with changed dependencies.
@@ -1097,11 +1097,12 @@ fn typeexpr_sig(te: &parser::ast::TypeExpr) -> String {
             type_args.iter().map(|a| typeexpr_sig(&a.node)).collect::<Vec<_>>().join(",")
         ),
         TypeExpr::Stream(i) => format!("stream<{}>", typeexpr_sig(&i.node)),
-        TypeExpr::Fn { params, return_type, fallible } => format!(
-            "fn({})->{}{}",
+        TypeExpr::Fn { params, return_type, fallible, provides } => format!(
+            "fn({})->{}{}{}",
             params.iter().map(|p| typeexpr_sig(&p.node)).collect::<Vec<_>>().join(","),
             typeexpr_sig(&return_type.node),
-            if *fallible { "!" } else { "" }
+            if *fallible { "!" } else { "" },
+            provides.iter().map(|p| format!(" provides {p}")).collect::<std::string::String>()
         ),
         TypeExpr::Infer => "_".to_string(),
     }

@@ -144,6 +144,10 @@ pub struct EnsuresSpec {
     /// Parameter names in declaration order, excluding `self` — the
     /// substitution vocabulary for caller-side assumption.
     pub params: Vec<String>,
+    /// Set when the clause was injected by a fn-level property
+    /// instantiation (`provides increments(...)` — rfc-properties.md
+    /// phase 5): two-sided blame on discharge failures.
+    pub provenance: Option<crate::parser::ast::PropertyProvenance>,
 }
 
 /// Rewrite `old(e)` to `e` for type-checking purposes: `old(e)` has the type
@@ -618,6 +622,7 @@ pub(crate) fn register_ensures(program: &Program, env: &mut TypeEnv) -> Result<(
                         desc,
                         span: cl.node.expr.span,
                         params: params.clone(),
+                        provenance: None,
                     });
                 }
                 env.generic_class_ensures
@@ -690,6 +695,7 @@ pub(crate) fn register_ensures(program: &Program, env: &mut TypeEnv) -> Result<(
                     desc,
                     span: cl.node.expr.span,
                     params: params.clone(),
+                    provenance: cl.node.provenance.clone(),
                 });
             }
             env.fn_ensures
@@ -1352,11 +1358,12 @@ fn prove_ensures(
                 return Err(CompileError::type_err(
                     format!(
                         "ensures clause '{}' of method '{}' of class '{}' is violated at \
-                         {site}: {}",
+                         {site}: {}{}",
                         spec.desc,
                         scope.method_name,
                         scope.class_name,
                         ensures_state(scope, &fields),
+                        crate::parser::ast::provenance_blame(&spec.provenance),
                     ),
                     span,
                 ));
@@ -1369,11 +1376,12 @@ fn prove_ensures(
                          (returns and fall-through; raise paths are exempt). Establish the \
                          relation before this exit with a guard, a 'requires' clause, or an \
                          'assert' — and note that a call can invalidate two-state \
-                         knowledge (the callee may reach the receiver through an alias)",
+                         knowledge (the callee may reach the receiver through an alias){}",
                         spec.desc,
                         scope.method_name,
                         scope.class_name,
                         ensures_state(scope, &fields),
+                        crate::parser::ast::provenance_blame(&spec.provenance),
                     ),
                     span,
                 ));

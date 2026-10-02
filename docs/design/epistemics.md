@@ -160,6 +160,9 @@ system has a named owner.
 **The assumption surface.** `pluto analyze` reports every claim discharged by
 assumption rather than proof or check — the complete list of things the system
 rests on that nobody proved. A deployment's honesty, as an artifact.
+*Shipped* (rfc-properties.md phase 5): extern `assume` claims are recorded in
+DerivedInfo and `pluto analyze` prints each with its owner, property,
+instantiation, and source line.
 
 Applied retroactively to earlier proposals:
 

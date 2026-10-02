@@ -259,6 +259,7 @@ impl PrettyPrinter {
             self.write(" ");
             self.emit_type_expr(&ret.node);
         }
+        self.emit_provides_clauses("assume", &ext.assumes);
     }
 
     // ── Error ────────────────────────────────────────────────────────
@@ -550,6 +551,7 @@ impl PrettyPrinter {
                 PropertyParamKind::Field { ty: None } => self.write("field"),
                 PropertyParamKind::Type => self.write("type"),
                 PropertyParamKind::ConstInt => self.write("const int"),
+                PropertyParamKind::Expr => self.write("expr"),
             }
         }
         self.write(") {");
@@ -560,6 +562,10 @@ impl PrettyPrinter {
             match &atom.node.kind {
                 PropertyAtomKind::Invariant { expr } => {
                     self.write("invariant ");
+                    self.emit_expr(&expr.node, 0);
+                }
+                PropertyAtomKind::Ensures { expr } => {
+                    self.write("ensures ");
                     self.emit_expr(&expr.node, 0);
                 }
                 PropertyAtomKind::Guarded { target, clause } => {
@@ -605,13 +611,52 @@ impl PrettyPrinter {
             self.write(" ");
             self.emit_type_expr(&ret.node);
         }
+        self.emit_provides_clauses("provides", &func.provides);
         self.emit_contracts(&func.contracts);
+    }
+
+    /// ` provides p(a, k = e)` on fns / ` assume p(...)` on externs —
+    /// printed inline after the return type.
+    fn emit_provides_clauses(
+        &mut self,
+        keyword: &str,
+        clauses: &[crate::span::Spanned<ProvidesClause>],
+    ) {
+        if clauses.is_empty() {
+            return;
+        }
+        self.write(" ");
+        self.write(keyword);
+        self.write(" ");
+        for (i, clause) in clauses.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            self.write(&clause.node.name.node);
+            self.write("(");
+            for (j, arg) in clause.node.args.iter().enumerate() {
+                if j > 0 {
+                    self.write(", ");
+                }
+                if let Some(name) = &arg.name {
+                    self.write(&name.node);
+                    self.write(" = ");
+                }
+                self.emit_expr(&arg.value.node, 0);
+            }
+            self.write(")");
+        }
     }
 
     // ── Contracts ────────────────────────────────────────────────────
 
     fn emit_contracts(&mut self, contracts: &[crate::span::Spanned<ContractClause>]) {
         for contract in contracts {
+            // Property-injected clauses are derived (they re-materialize
+            // from the provides clause) — not printed.
+            if contract.node.provenance.is_some() {
+                continue;
+            }
             self.newline();
             self.write_indent();
             match contract.node.kind {
@@ -827,6 +872,7 @@ impl PrettyPrinter {
                 params,
                 return_type,
                 fallible,
+                provides,
             } => {
                 self.write("fn(");
                 for (i, p) in params.iter().enumerate() {
@@ -843,6 +889,10 @@ impl PrettyPrinter {
                 }
                 if *fallible {
                     self.write("!");
+                }
+                for p in provides {
+                    self.write(" provides ");
+                    self.write(p);
                 }
             }
             TypeExpr::Generic { name, type_args } => {

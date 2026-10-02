@@ -302,6 +302,7 @@ pub fn walk_property<V: Visitor>(v: &mut V, property: &Spanned<PropertyDecl>) {
     for atom in &property.node.atoms {
         match &atom.node.kind {
             PropertyAtomKind::Invariant { expr } => v.visit_expr(expr),
+            PropertyAtomKind::Ensures { expr } => v.visit_expr(expr),
             PropertyAtomKind::Guarded { target: _, clause } => {
                 v.visit_type_expr(&clause.binder_ty);
                 v.visit_expr(&clause.predicate);
@@ -324,6 +325,13 @@ pub fn walk_extern_fn<V: Visitor>(v: &mut V, extern_fn: &Spanned<ExternFnDecl>) 
     if let Some(rt) = &extern_fn.node.return_type {
         v.visit_type_expr(rt);
     }
+
+    // Visit assume-clause arguments (meta-level exprs over the params)
+    for clause in &extern_fn.node.assumes {
+        for arg in &clause.node.args {
+            v.visit_expr(&arg.value);
+        }
+    }
 }
 
 pub fn walk_function<V: Visitor>(v: &mut V, func: &Spanned<Function>) {
@@ -343,6 +351,13 @@ pub fn walk_function<V: Visitor>(v: &mut V, func: &Spanned<Function>) {
     // Visit contracts
     for contract in &func.node.contracts {
         v.visit_expr(&contract.node.expr);
+    }
+
+    // Visit provides-clause arguments
+    for clause in &func.node.provides {
+        for arg in &clause.node.args {
+            v.visit_expr(&arg.value);
+        }
     }
 }
 
@@ -769,6 +784,7 @@ pub fn walk_type_expr<V: Visitor>(v: &mut V, te: &Spanned<TypeExpr>) {
             params,
             return_type,
             fallible: _,
+            provides: _,
         } => {
             for p in params {
                 v.visit_type_expr(p);
@@ -908,6 +924,7 @@ pub fn walk_property_mut<V: VisitMut>(v: &mut V, property: &mut Spanned<Property
     for atom in &mut property.node.atoms {
         match &mut atom.node.kind {
             PropertyAtomKind::Invariant { expr } => v.visit_expr_mut(expr),
+            PropertyAtomKind::Ensures { expr } => v.visit_expr_mut(expr),
             PropertyAtomKind::Guarded { target: _, clause } => {
                 v.visit_type_expr_mut(&mut clause.binder_ty);
                 v.visit_expr_mut(&mut clause.predicate);
@@ -927,6 +944,11 @@ pub fn walk_extern_fn_mut<V: VisitMut>(v: &mut V, extern_fn: &mut Spanned<Extern
     if let Some(rt) = &mut extern_fn.node.return_type {
         v.visit_type_expr_mut(rt);
     }
+    for clause in &mut extern_fn.node.assumes {
+        for arg in &mut clause.node.args {
+            v.visit_expr_mut(&mut arg.value);
+        }
+    }
 }
 
 pub fn walk_function_mut<V: VisitMut>(v: &mut V, func: &mut Spanned<Function>) {
@@ -939,6 +961,11 @@ pub fn walk_function_mut<V: VisitMut>(v: &mut V, func: &mut Spanned<Function>) {
     v.visit_block_mut(&mut func.node.body);
     for contract in &mut func.node.contracts {
         v.visit_expr_mut(&mut contract.node.expr);
+    }
+    for clause in &mut func.node.provides {
+        for arg in &mut clause.node.args {
+            v.visit_expr_mut(&mut arg.value);
+        }
     }
 }
 
@@ -1324,6 +1351,7 @@ pub fn walk_type_expr_mut<V: VisitMut>(v: &mut V, te: &mut Spanned<TypeExpr>) {
             params,
             return_type,
             fallible: _,
+            provides: _,
         } => {
             for p in params {
                 v.visit_type_expr_mut(p);
@@ -1853,6 +1881,7 @@ mod tests {
     fn test_walk_type_expr_visits_fn_params_and_return() {
         let fn_te = dummy(TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![
                 Box::new(dummy(TypeExpr::Named("int".to_string()))),
                 Box::new(dummy(TypeExpr::Named("float".to_string()))),

@@ -539,9 +539,23 @@ fn main() {
         Commands::Analyze { file } => {
             // Analyze the file and update with fresh derived data
             match pluto::analyze_and_update(&file, stdlib.as_deref()) {
-                Ok(()) => {
+                Ok(derived) => {
                     let output_path = file.with_extension("pluto");
                     eprintln!("analyzed {} \u{2192} {}", file.display(), output_path.display());
+                    // The assumption surface (epistemics.md): everything
+                    // the program rests on that nobody proved.
+                    if derived.assumptions.is_empty() {
+                        println!("assumption surface: empty (no assumed claims)");
+                    } else {
+                        println!(
+                            "assumption surface: {} assumed claim{}",
+                            derived.assumptions.len(),
+                            if derived.assumptions.len() == 1 { "" } else { "s" }
+                        );
+                        for claim in &derived.assumptions {
+                            println!("  {claim}");
+                        }
+                    }
                 }
                 Err(e) => {
                     eprintln!("error: {e}");

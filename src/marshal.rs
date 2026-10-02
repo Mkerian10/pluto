@@ -565,7 +565,7 @@ fn type_expr_mentions_params(ty: &TypeExpr, params: &HashSet<&str>) -> bool {
                     .iter()
                     .any(|a| type_expr_mentions_params(&a.node, params))
         }
-        TypeExpr::Fn { params: ps, return_type, fallible: _ } => {
+        TypeExpr::Fn { params: ps, return_type, fallible: _, provides: _ } => {
             ps.iter().any(|p| type_expr_mentions_params(&p.node, params))
                 || type_expr_mentions_params(&return_type.node, params)
         }
@@ -930,6 +930,7 @@ fn generate_marshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>, C
         is_pub: false,
         is_override: false,
         is_generator: false,
+        provides: Vec::new(),
     };
 
     Ok(Spanned {
@@ -1046,6 +1047,7 @@ fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>,
         is_pub: false,
         is_override: false,
         is_generator: false,
+        provides: Vec::new(),
     };
 
     Ok(Spanned {
@@ -1174,6 +1176,7 @@ fn generate_marshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<Spa
         is_pub: false,
         is_override: false,
         is_generator: false,
+        provides: Vec::new(),
     };
 
     Ok(Spanned { node: function, span: mk_span() })
@@ -1373,6 +1376,7 @@ fn generate_unmarshal_enum(enum_decl: &crate::parser::ast::EnumDecl) -> Result<S
         is_pub: false,
         is_override: false,
         is_generator: false,
+        provides: Vec::new(),
     };
 
     Ok(Spanned { node: function, span: mk_span() })
@@ -1541,6 +1545,7 @@ fn mk_function(name: String, param: (&str, TypeExpr), ret: Option<TypeExpr>, bod
             is_pub: false,
             is_override: false,
             is_generator: false,
+        provides: Vec::new(),
         },
         span: mk_span(),
     }
@@ -2733,6 +2738,7 @@ mod tests {
         // Fn types should return "unknown"
         let ty = TypeExpr::Fn {
             fallible: false,
+            provides: vec![],
             params: vec![],
             return_type: Box::new(Spanned {
                 node: TypeExpr::Named("void".to_string()),

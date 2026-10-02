@@ -1387,7 +1387,7 @@ impl CompilerService for InProcessServer {
     // ===== Analysis =====
 
     fn analyze_and_update(&self, path: &Path, opts: &LoadOptions) -> Result<(), ServiceError> {
-        crate::analyze_and_update(path, opts.stdlib.as_deref())
+        crate::analyze_and_update(path, opts.stdlib.as_deref()).map(|_| ())
             .map_err(|e| ServiceError::CompilationFailed(e.to_string()))
     }
 

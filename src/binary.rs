@@ -29,7 +29,11 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// v14: the property form (docs/design/rfc-properties.md slice 2):
 /// Program.properties, ClassDecl.satisfies, and provenance fields on
 /// ContractClause / GuardClause.
-const SCHEMA_VERSION: u32 = 14;
+/// v15: provides / assume / the assumption surface (rfc-properties.md
+/// phase 5): Function.provides, ExternFnDecl.assumes, TypeExpr::Fn.provides,
+/// PropertyParamKind::Expr, PropertyAtomKind::Ensures,
+/// DerivedInfo.assumptions.
+const SCHEMA_VERSION: u32 = 15;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;

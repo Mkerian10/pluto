@@ -151,6 +151,7 @@ fn create_simple_program() -> Program {
         is_pub: false,
         is_override: false,
         is_generator: false,
+        provides: vec![],
     };
 
     Program {
@@ -195,6 +196,7 @@ fn create_nested_program() -> Program {
         is_pub: false,
         is_override: false,
         is_generator: false,
+        provides: vec![],
     };
 
     Program {
@@ -246,6 +248,7 @@ fn create_program_with_types() -> Program {
         is_pub: false,
         is_override: false,
         is_generator: false,
+        provides: vec![],
     };
 
     Program {

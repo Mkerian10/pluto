@@ -185,7 +185,16 @@ pub(crate) fn infer_expr(
             // unambiguous. The site is recorded so the eta-expansion pass in
             // closures.rs can rewrite it into a wrapper closure.
             if let Some(sig) = env.functions.get(name) {
-                let fn_ty = PlutoType::Fn(sig.params.clone(), Box::new(sig.return_type.clone()), false);
+                // A bare reference carries its declaration's provided
+                // properties (rfc-properties.md phase 5): proven provides
+                // on the declaration, or assumed claims on an extern.
+                let provides = env.fn_property_names(name);
+                let fn_ty = PlutoType::Fn(
+                    sig.params.clone(),
+                    Box::new(sig.return_type.clone()),
+                    false,
+                    provides,
+                );
                 env.fn_ref_sites.insert((span.start, span.end), name.clone());
                 return Ok(fn_ty);
             }
@@ -503,7 +512,7 @@ pub(crate) fn infer_expr(
             // Infer the closure type to get the return type.
             let closure_type = infer_expr(&call.node, call.span, env, None)?;
             let inner_type = match &closure_type {
-                PlutoType::Fn(_, ret, _) => *ret.clone(),
+                PlutoType::Fn(_, ret, _, _) => *ret.clone(),
                 _ => {
                     return Err(CompileError::type_err(
                         "spawn requires a function call".to_string(),
@@ -947,7 +956,7 @@ pub(crate) fn record_fn_value_boundary(
     expected: &PlutoType,
     env: &mut TypeEnv,
 ) {
-    let PlutoType::Fn(_, _, target_fallible) = expected else { return };
+    let PlutoType::Fn(_, _, target_fallible, _) = expected else { return };
     if *target_fallible {
         // The receiver declared it accepts fallible values — this escape is
         // its responsibility, not the passer's; absorption skips it.
@@ -1240,7 +1249,7 @@ fn infer_call(
     }
 
     // Check if calling a closure variable
-    if let Some(PlutoType::Fn(param_types, ret_type, value_fallible)) = env.lookup(&name.node).cloned() {
+    if let Some(PlutoType::Fn(param_types, ret_type, value_fallible, _)) = env.lookup(&name.node).cloned() {
         // A call through the variable is a read of it
         if let Some((_, depth)) = env.lookup_with_depth(&name.node) {
             env.variable_reads.insert((name.node.clone(), depth));
