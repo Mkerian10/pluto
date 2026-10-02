@@ -1264,3 +1264,99 @@ fn imported_module_using_multifile_stdlib_compiles() {
     ]);
     assert_eq!(out, "42\n");
 }
+
+// ============================================================
+// Cross-module typestate state names (issue #413)
+// ============================================================
+
+/// A library may define its typestate markers in a shared module: `where`
+/// and `must_release` clauses accept module-qualified state names.
+#[test]
+fn typestate_states_from_another_module() {
+    let out = run_project(&[
+        (
+            "marks.pt",
+            r#"
+pub class Free { tag: int }
+pub class Held { tag: int }
+"#,
+        ),
+        (
+            "locks.pt",
+            r#"
+import marks
+
+pub class Lock<S> {
+    id: int
+
+    fn acquire(self) Lock<marks.Held> where S == marks.Free {
+        return Lock<marks.Held> { id: self.id }
+    }
+}
+
+pub fn mint(id: int) Lock<marks.Free> { return Lock<marks.Free> { id: id } }
+"#,
+        ),
+        (
+            "main.pluto",
+            r#"
+import locks
+
+fn main() {
+    let u = locks.mint(13)
+    print("ok")
+}
+"#,
+        ),
+    ]);
+    assert_eq!(out.trim(), "ok");
+}
+
+/// Cross-module must_release is enforced, not just parsed: leaking a value
+/// whose state marker lives in another module is still a compile error.
+#[test]
+fn typestate_cross_module_must_release_enforced() {
+    compile_project_should_fail(&[
+        (
+            "marks.pt",
+            r#"
+pub class Free { tag: int }
+pub class Held { tag: int }
+"#,
+        ),
+        (
+            "locks.pt",
+            r#"
+import marks
+
+pub class Lock<S> {
+    id: int
+
+    must_release S == marks.Held
+
+    fn acquire(self) Lock<marks.Held> where S == marks.Free {
+        return Lock<marks.Held> { id: self.id }
+    }
+
+    fn release(self) Lock<marks.Free> where S == marks.Held {
+        return Lock<marks.Free> { id: self.id }
+    }
+}
+
+pub fn mint(id: int) Lock<marks.Free> { return Lock<marks.Free> { id: id } }
+"#,
+        ),
+        (
+            "main.pluto",
+            r#"
+import locks
+
+fn main() {
+    let u = locks.mint(13)
+    let l = u.acquire()
+    print("leaked cross-module")
+}
+"#,
+        ),
+    ]);
+}
