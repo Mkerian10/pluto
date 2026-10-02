@@ -571,6 +571,13 @@ fn add_prefixed_items(
                 prefix_type_expr(&mut guard.binder_ty.node, module_name, module_prog);
             }
         }
+        // `must_release Held` / `must_release S == Held` clauses (riding in
+        // `invariants`) name module-internal state marker types.
+        for inv in &mut prefixed_class.node.invariants {
+            if inv.node.kind == ContractKind::MustRelease {
+                prefix_state_clause_expr(&mut inv.node.expr.node, module_name, module_prog);
+            }
+        }
         for method in &mut prefixed_class.node.methods {
             prefix_function_types(&mut method.node, module_name, module_prog);
         }
@@ -1237,8 +1244,36 @@ fn prefix_function_types(func: &mut Function, module_name: &str, module_prog: &P
     }
     // Provides clauses referencing module-internal properties / types
     prefix_provides_clauses(&mut func.provides, module_name, module_prog);
+    // Typestate `where S == Open` clauses: the state name references a
+    // module-internal marker class/enum and must be prefixed along with it
+    // (the LHS is a type parameter, never a module item).
+    for contract in &mut func.contracts {
+        if contract.node.kind == ContractKind::StateWhere {
+            prefix_state_clause_expr(&mut contract.node.expr.node, module_name, module_prog);
+        }
+    }
     // Also rewrite expressions inside the body that reference internal types
     rewrite_block_for_module(&mut func.body.node, module_name, module_prog);
+}
+
+/// Prefix the state name in a typestate clause: `S == Open` (rewrite the
+/// RHS ident) or a bare `Open` (`must_release Open`; rewrite the ident).
+fn prefix_state_clause_expr(expr: &mut Expr, module_name: &str, module_prog: &Program) {
+    match expr {
+        Expr::BinOp { rhs, .. } => {
+            if let Expr::Ident(name) = &mut rhs.node {
+                if is_module_type(name, module_prog) {
+                    *name = prefix_name(module_name, name);
+                }
+            }
+        }
+        Expr::Ident(name) => {
+            if is_module_type(name, module_prog) {
+                *name = prefix_name(module_name, name);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Prefix provides/assume clauses (rfc-properties.md phase 5) when

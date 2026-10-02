@@ -1,0 +1,100 @@
+import std.fs
+
+// Durable configuration updates with std.fs (docs/design/rfc-fs-api.md,
+// issue #367).
+//
+// fs.replace_all is the packaged atomic durable replace: it writes a
+// temp file in the SAME directory, syncs it to full durability (fsync
+// on Linux, F_FULLFSYNC on Darwin), renames it over the target, then
+// fsyncs the parent directory — because the name→inode mapping is the
+// directory's dirty page, not the file's. Readers see either the old
+// contents or the new contents, never a torn mix, and a crash after
+// success cannot roll the update back.
+//
+// The error contract tells you what survived:
+//   - fs.FileError  ⇒ the old file is intact (failure before the
+//     rename; the temp file was cleaned up)
+//   - fs.SyncError  ⇒ the rename landed but its durability is
+//     unwarranted (the directory fsync failed)
+//
+// The second half shows the handle-level durability protocol: the
+// write-ahead-log shape where a failed sync DEGRADES the handle. The
+// error carries the file as fs.File<fs.Write, fs.Poisoned>; the only
+// method on a poisoned handle is discard(), so retrying a failed sync
+// (fsyncgate: the kernel reports a writeback error once, then marks
+// the pages clean) is a compile error, not a footgun.
+//
+// Run:
+//   cargo run -- run examples/durable_config/main.pt --stdlib stdlib
+
+error ConfigDead {
+    reason: string
+}
+
+// Appends one batch to the log and makes it durable before returning.
+// The obligation travels: in through the parameter, back through the
+// return — and on failure it moves into the Degraded payload, where
+// the handler discards it and reports upstream.
+fn append_durably(w: fs.File<fs.Write, fs.Open>, entry: string) fs.File<fs.Write, fs.Open> {
+    w.write(entry) catch e: fs.Degraded {
+        let p = e.file
+        p.discard()
+        raise ConfigDead { reason: f"write failed (errno {e.code})" }
+    }
+    w.sync_data() catch e: fs.Degraded {
+        let p = e.file
+        p.discard()
+        raise ConfigDead { reason: f"sync failed (errno {e.code}); reopen and rewrite" }
+    }
+    return w
+}
+
+fn main() {
+    let dir = fs.temp_dir()
+    let config = dir + "/app.conf"
+
+    // 1. Atomic durable replace: the one-shot shape most programs need.
+    fs.write_all(config, "retries = 3\n")!
+    print(f"before: {fs.read_all(config)!}")
+
+    fs.replace_all(config, "retries = 5\ntimeout_ms = 200\n") catch e: fs.SyncError {
+        // The new config IS in place, but its durability is unwarranted:
+        // a crash could still lose it. Treat as failed and alert.
+        print(f"replace landed without durability warrant: {e.message}")
+        fs.remove_dir_all(dir)!
+        return
+    } catch e: fs.FileError {
+        // The old config is intact; the temp file was cleaned up.
+        print(f"replace failed, old config intact: {e.message}")
+        fs.remove_dir_all(dir)!
+        return
+    } catch e: fs.NotFound {
+        print(f"missing: {e.path}")
+        fs.remove_dir_all(dir)!
+        return
+    }
+    print(f"after:  {fs.read_all(config)!}")
+
+    // 2. The WAL shape: a long-lived handle held in a local, synced per
+    //    batch, with honest degradation on failure.
+    let mut wal = fs.open_append(dir + "/changes.log")!
+    wal = append_durably(wal, "set retries 5\n") catch e: ConfigDead {
+        print(f"wal dead: {e.reason}")
+        fs.remove_dir_all(dir)!
+        return
+    }
+    wal = append_durably(wal, "set timeout_ms 200\n") catch e: ConfigDead {
+        print(f"wal dead: {e.reason}")
+        fs.remove_dir_all(dir)!
+        return
+    }
+    wal.close()!
+    let entries = fs.read_all(dir + "/changes.log")!
+    print(f"log:\n{entries}")
+
+    // Forgetting wal.close() above would not be a bug to find in review:
+    // it would be a compile error naming the obligation.
+
+    fs.remove_dir_all(dir)!
+    print("done")
+}

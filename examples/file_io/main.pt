@@ -45,12 +45,15 @@ fn main() {
     let entries = fs.list_dir(sub)!
     print(f"entries: {entries.len()}")
 
-    // File class with seek
+    // The typestated file handle: open_read mints a File<Read, Open> that
+    // MUST be closed (forgetting f.close() is a compile error), reads exist
+    // only in Read mode while Open, and seek takes a Seek target instead of
+    // whence magic ints.
     let f = fs.open_read(path)!
-    let first5 = f.read(5)
+    let first5 = f.read(5)!
     print(f"first 5: {first5}")
-    f.seek(0, fs.SEEK_SET())!
-    let all = f.read(1024)
+    f.seek(fs.Seek.Start { offset: 0 })!
+    let all = f.read(1024)!
     print(f"seeked back: {all}")
     f.close()!
 

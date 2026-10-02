@@ -100,8 +100,19 @@ fn sanitize_message(msg: &str) -> String {
         }
         token.clear();
     };
-    for c in msg.chars() {
+    let mut chars = msg.chars().peekable();
+    while let Some(c) = chars.next() {
         if c.is_alphanumeric() || c == '_' || c == '$' || c == '%' {
+            token.push(c);
+        } else if c == '.'
+            && !token.is_empty()
+            && chars
+                .peek()
+                .is_some_and(|n| n.is_alphanumeric() || *n == '_' || *n == '%')
+        {
+            // Interior dot of a module-qualified name (`fs.File$$fs.Open`),
+            // not sentence punctuation: keep the token together so the
+            // demangler sees the whole instance name.
             token.push(c);
         } else {
             flush(&mut token, &mut out);
