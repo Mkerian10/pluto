@@ -3030,3 +3030,90 @@ fn distinct_wire_type_names_across_modules_still_compile() {
         ),
     ]);
 }
+
+// ── Entity nested in a value at serve/remote boundaries (#426) ─────────────
+//
+// The rule (entities nested inside values are untransferable — a copy would
+// fork their identity) predates these tests, but its enforcement at the
+// serve/remote boundary surfaced as an ICE on the client ("internal: missing
+// generated function '__wire_encode_...'") and a SILENT drop of the method
+// from the server's dispatch surface. Both are now a typeck rejection at the
+// boundary. The `at` boundary pin is `nested_entity_rejected_at_boundary`
+// above; top-level entity handles keep working
+// (`entity_identity_survives_round_trip`).
+
+/// Server side: serving a class whose method takes a value class that
+/// transitively contains an entity is rejected (previously: silent drop).
+#[test]
+fn serve_rejects_nested_entity_param() {
+    compile_project_should_fail_with(
+        &[(
+            "main.pluto",
+            "object Vault {\n    secret: string\n    fn reveal(self) string {\n        return self.secret\n    }\n}\n\nclass Holder {\n    v: Vault\n    label: string\n}\n\nclass Svc {\n    pad: int\n    fn take(self, h: Holder) int {\n        return 1\n    }\n}\n\nfn main() {\n    let s = Svc { pad: 0 }\n    serve s on 0\n}",
+        )],
+        "cannot serve 'Svc': parameter 1 of method 'take' has type Holder which contains entity 'Vault'",
+    );
+}
+
+/// Server side: a nested-entity RETURN type is rejected the same way.
+#[test]
+fn serve_rejects_nested_entity_return() {
+    compile_project_should_fail_with(
+        &[(
+            "main.pluto",
+            "object Vault {\n    secret: int\n}\n\nclass Holder {\n    v: Vault\n}\n\nclass Svc {\n    pad: int\n    fn get(self) Holder {\n        return Holder { v: Vault { secret: 1 } }\n    }\n}\n\nfn main() {\n    let s = Svc { pad: 0 }\n    serve s on 0\n}",
+        )],
+        "cannot serve 'Svc': method 'get' returns Holder which contains entity 'Vault'",
+    );
+}
+
+/// Client side: a remote call passing a value class that transitively
+/// contains an entity is rejected (previously: ICE in codegen).
+#[test]
+fn remote_call_rejects_nested_entity_arg() {
+    compile_project_should_fail_with(
+        &[
+            (
+                "svc.pt",
+                "pub object Vault {\n    secret: string\n    fn reveal(self) string {\n        return self.secret\n    }\n}\n\npub class Holder {\n    v: Vault\n    label: string\n}\n\npub class Svc {\n    pad: int\n    fn take(self, h: Holder) int {\n        return 0\n    }\n}",
+            ),
+            (
+                "main.pluto",
+                "import svc\n\napp Client[s: remote svc.Svc] {\n    fn main(self) {\n        let v = svc.Vault { secret: \"k\" }\n        let h = svc.Holder { v: v, label: \"l\" }\n        let r = self.s.take(h) catch err {\n            print(\"transport error\")\n            return\n        }\n        print(r)\n    }\n}",
+            ),
+        ],
+        "argument 1 of remote method 'take': type svc.Holder contains entity 'svc.Vault'",
+    );
+}
+
+/// Client side: a nested-entity RETURN type on a remote method is rejected
+/// at the call site.
+#[test]
+fn remote_call_rejects_nested_entity_return() {
+    compile_project_should_fail_with(
+        &[
+            (
+                "svc.pt",
+                "pub object Vault {\n    secret: int\n}\n\npub class Holder {\n    v: Vault\n}\n\npub class Svc {\n    pad: int\n    fn get(self) Holder {\n        return Holder { v: Vault { secret: 1 } }\n    }\n}",
+            ),
+            (
+                "main.pluto",
+                "import svc\n\napp Client[s: remote svc.Svc] {\n    fn main(self) {\n        let h = self.s.get() catch err {\n            print(\"transport error\")\n            return\n        }\n        print(1)\n    }\n}",
+            ),
+        ],
+        "remote method 'get' returns svc.Holder which contains entity 'svc.Vault'",
+    );
+}
+
+/// The `at` domain boundary rejects a nested-entity RETURN type too (the
+/// argument side is pinned in `nested_entity_rejected_at_boundary`).
+#[test]
+fn at_boundary_rejects_nested_entity_return() {
+    compile_project_should_fail_with(
+        &[(
+            "main.pluto",
+            "object Vault {\n    secret: int\n}\n\nclass Wrap {\n    v: Vault\n}\n\nclass Escrow {\n    fn make(self) Wrap {\n        return Wrap { v: Vault { secret: 1 } }\n    }\n}\n\napp A[esc: domain Escrow] {\n    fn main(self) {\n        let w = at self.esc { make() } catch err {\n            return\n        }\n        print(1)\n    }\n}",
+        )],
+        "a value containing an object cannot leave domain 'Escrow'",
+    );
+}

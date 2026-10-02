@@ -787,37 +787,45 @@ pub(crate) fn contains_object_type(
     t: &PlutoType,
     env: &crate::typeck::env::TypeEnv,
 ) -> bool {
+    find_object_type(t, env).is_some()
+}
+
+/// Like `contains_object_type`, but returns the NAME of the first entity
+/// type found, so boundary diagnostics can name the offender.
+pub(crate) fn find_object_type(
+    t: &PlutoType,
+    env: &crate::typeck::env::TypeEnv,
+) -> Option<String> {
     fn walk(
         t: &PlutoType,
         env: &crate::typeck::env::TypeEnv,
         visiting: &mut std::collections::HashSet<String>,
-    ) -> bool {
+    ) -> Option<String> {
         match t {
             PlutoType::Class(n) => {
                 if env.object_types.contains(n) {
-                    return true;
+                    return Some(n.clone());
                 }
                 if !visiting.insert(n.clone()) {
-                    return false; // recursive type — already being examined
+                    return None; // recursive type — already being examined
                 }
-                let hit = env
-                    .classes
-                    .get(n)
-                    .is_some_and(|info| info.fields.iter().any(|(_, ft, _)| walk(ft, env, visiting)));
+                let hit = env.classes.get(n).and_then(|info| {
+                    info.fields.iter().find_map(|(_, ft, _)| walk(ft, env, visiting))
+                });
                 visiting.remove(n);
                 hit
             }
             PlutoType::Enum(n) => {
                 if env.object_types.contains(n) {
-                    return true;
+                    return Some(n.clone());
                 }
                 if !visiting.insert(n.clone()) {
-                    return false;
+                    return None;
                 }
-                let hit = env.enums.get(n).is_some_and(|info| {
-                    info.variants
-                        .iter()
-                        .any(|(_, fields)| fields.iter().any(|(_, ft)| walk(ft, env, visiting)))
+                let hit = env.enums.get(n).and_then(|info| {
+                    info.variants.iter().find_map(|(_, fields)| {
+                        fields.iter().find_map(|(_, ft)| walk(ft, env, visiting))
+                    })
                 });
                 visiting.remove(n);
                 hit
@@ -825,17 +833,35 @@ pub(crate) fn contains_object_type(
             PlutoType::Nullable(inner)
             | PlutoType::Array(inner)
             | PlutoType::Set(inner) => walk(inner, env, visiting),
-            PlutoType::Map(k, v) => walk(k, env, visiting) || walk(v, env, visiting),
+            PlutoType::Map(k, v) => {
+                walk(k, env, visiting).or_else(|| walk(v, env, visiting))
+            }
             // Symbolic generic reference (pre-resolution): a generic OBJECT
             // base name marks every instantiation as an entity; also look
             // through the args.
             PlutoType::GenericInstance(_, name, args) => {
-                env.object_types.contains(name)
-                    || args.iter().any(|a| walk(a, env, visiting))
+                if env.object_types.contains(name) {
+                    return Some(name.clone());
+                }
+                args.iter().find_map(|a| walk(a, env, visiting))
             }
-            _ => false,
+            _ => None,
         }
     }
     let mut visiting = std::collections::HashSet::new();
     walk(t, env, &mut visiting)
+}
+
+/// A value type that smuggles an entity: contains an object anywhere in its
+/// shape but is not ITSELF a top-level entity. Top-level entities cross
+/// boundaries as identity handles; an entity nested inside a value would be
+/// copied, forking its identity — rejected at every boundary (#426).
+pub(crate) fn nested_entity_in_value(
+    t: &PlutoType,
+    env: &crate::typeck::env::TypeEnv,
+) -> Option<String> {
+    if matches!(t, PlutoType::Class(n) if env.object_types.contains(n)) {
+        return None;
+    }
+    find_object_type(t, env)
 }

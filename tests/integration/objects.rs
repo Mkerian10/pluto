@@ -957,3 +957,187 @@ fn object_methods_run_in_test_mode() {
     );
     assert!(out.contains("1 tests passed"), "unexpected output: {out}");
 }
+
+// ── External field writes are rejected (#427) ──────────────────────────────
+//
+// The object construct's concurrency contract is per-instance METHOD
+// serialization: spawn may share an entity precisely because its methods run
+// one at a time. An external `e.field = ...` is a plain store that takes no
+// lock, so it races any concurrently executing method. Before the rejection,
+// this program demonstrated classic lost updates (printing e.g. 110611
+// instead of 200000):
+//
+//     object Counter {
+//         value: int
+//         fn work(mut self) {
+//             let mut i = 0
+//             while i < 100000 {
+//                 self.value = self.value + 1
+//                 i = i + 1
+//             }
+//         }
+//         fn get(self) int { return self.value }
+//     }
+//
+//     fn main() {
+//         let mut c = Counter { value: 0 }
+//         let t = spawn c.work()
+//         let mut i = 0
+//         while i < 100000 {
+//             c.value = c.value + 1      // external write — took no lock
+//             i = i + 1
+//         }
+//         t.get()
+//         print(c.get())
+//     }
+//
+// That shape can no longer be a runtime test: the external write is a type
+// error. The tests below pin the rejection in each syntactic form.
+
+/// Direct external field write on an entity is a compile error.
+#[test]
+fn object_external_field_write_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            value: int
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        fn main() {
+            let mut c = Counter { value: 0 }
+            c.value = 1
+            print(c.get())
+        }
+        "#,
+        "cannot assign to field 'value' of entity 'Counter' from outside its own methods",
+    );
+}
+
+/// Compound assignment desugars to a field write — same rejection.
+#[test]
+fn object_external_compound_assign_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            value: int
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        fn main() {
+            let mut c = Counter { value: 0 }
+            c.value += 1
+            print(c.get())
+        }
+        "#,
+        "cannot assign to field 'value' of entity 'Counter' from outside its own methods",
+    );
+}
+
+/// An alias binding doesn't launder the write: entities have reference
+/// identity, so the alias IS the entity.
+#[test]
+fn object_external_write_through_alias_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            value: int
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        fn main() {
+            let mut c = Counter { value: 0 }
+            let mut alias = c
+            alias.value = 7
+            print(c.get())
+        }
+        "#,
+        "cannot assign to field 'value' of entity 'Counter' from outside its own methods",
+    );
+}
+
+/// A write reached through a field chain (value class holding the entity)
+/// is still an external entity-field write.
+#[test]
+fn object_external_write_through_field_chain_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            value: int
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        class Wrap {
+            c: Counter
+        }
+
+        fn main() {
+            let c = Counter { value: 0 }
+            let mut w = Wrap { c: c }
+            w.c.value = 5
+            print(c.get())
+        }
+        "#,
+        "cannot assign to field 'value' of entity 'Counter' from outside its own methods",
+    );
+}
+
+/// Writes from ANOTHER entity's methods are still external: only the
+/// entity's own `self` may write its fields.
+#[test]
+fn object_write_from_other_entity_method_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            value: int
+        }
+
+        object Poker {
+            fn poke(self, c: Counter) {
+                c.value = 3
+            }
+        }
+
+        fn main() {
+            let c = Counter { value: 0 }
+            let p = Poker {}
+            p.poke(c)
+        }
+        "#,
+        "cannot assign to field 'value' of entity 'Counter' from outside its own methods",
+    );
+}
+
+/// The legal mutation paths keep working: `self` writes inside the entity's
+/// own methods, and external READS of entity fields (reads already route
+/// through the normal field-load path and stay legal).
+#[test]
+fn object_self_writes_and_external_reads_still_work() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Counter {
+            value: int
+
+            fn increment(mut self) {
+                self.value = self.value + 1
+                self.value += 1
+            }
+        }
+
+        fn main() {
+            let mut c = Counter { value: 0 }
+            c.increment()
+            print(c.value)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "2");
+}
