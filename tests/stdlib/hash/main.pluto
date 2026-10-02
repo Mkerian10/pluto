@@ -1,0 +1,212 @@
+import std.hash
+
+// Helpers -------------------------------------------------------------------
+
+fn repeat_byte(b: int, count: int) bytes {
+    let mut out = bytes_new()
+    let mut i = 0
+    while i < count {
+        out.push(b as byte)
+        i = i + 1
+    }
+    return out
+}
+
+// Deterministic 200-byte pattern buffer: byte i = (i*7 + 3) & 0xFF.
+// Reference values cross-checked against Python (hashlib for SHA-256, an
+// independent bit-by-bit CRC-32C implementation, inline FNV-1a).
+fn pattern200() bytes {
+    let mut out = bytes_new()
+    let mut i = 0
+    while i < 200 {
+        out.push(((i * 7 + 3) & 0xFF) as byte)
+        i = i + 1
+    }
+    return out
+}
+
+// Split data at `split`, feed the two halves to an incremental CRC-32C.
+fn crc_split(data: bytes, split: int) int {
+    let mut h = hash.new_crc32c()
+    let mut first = bytes_new()
+    let mut second = bytes_new()
+    let mut i = 0
+    while i < data.len() {
+        if i < split {
+            first.push(data[i])
+        } else {
+            second.push(data[i])
+        }
+        i = i + 1
+    }
+    h.update(first)
+    h.update(second)
+    return h.finish()
+}
+
+// Same split-feeding for SHA-256, returning the hex digest.
+fn sha_split(data: bytes, split: int) string {
+    let mut h = hash.new_sha256()
+    let mut first = bytes_new()
+    let mut second = bytes_new()
+    let mut i = 0
+    while i < data.len() {
+        if i < split {
+            first.push(data[i])
+        } else {
+            second.push(data[i])
+        }
+        i = i + 1
+    }
+    h.update(first)
+    h.update(second)
+    return hash.to_hex(h.finish())
+}
+
+// CRC-32C -------------------------------------------------------------------
+
+test "crc32c empty input is zero" {
+    expect(hash.crc32c(bytes_new())).to_equal(0)
+}
+
+test "crc32c standard vectors" {
+    // "abc" -> 0x364B3FB7, "123456789" -> 0xE3069283 (the classic check value)
+    expect(hash.crc32c("abc".to_bytes())).to_equal(910901175)
+    expect(hash.crc32c("123456789".to_bytes())).to_equal(3808858755)
+    // "The quick brown fox jumps over the lazy dog" -> 0x22620404
+    expect(hash.crc32c("The quick brown fox jumps over the lazy dog".to_bytes())).to_equal(576848900)
+}
+
+test "crc32c RFC 3720 vectors" {
+    // 32 zero bytes -> 0x8A9136AA
+    expect(hash.crc32c(repeat_byte(0, 32))).to_equal(2324772522)
+    // 32 0xFF bytes -> 0x62A8AB43
+    expect(hash.crc32c(repeat_byte(255, 32))).to_equal(1655221059)
+    // bytes 0x00..0x1F ascending -> 0x46DD794E
+    let mut inc = bytes_new()
+    let mut i = 0
+    while i < 32 {
+        inc.push(i as byte)
+        i = i + 1
+    }
+    expect(hash.crc32c(inc)).to_equal(1188919630)
+}
+
+test "crc32c locally cross-checked vectors" {
+    // Python reference (independent bit-by-bit implementation)
+    expect(hash.crc32c(pattern200())).to_equal(184462485)
+    expect(hash.crc32c(repeat_byte(97, 64))).to_equal(934211123)
+    expect(hash.crc32c(repeat_byte(97, 128))).to_equal(948747311)
+}
+
+test "crc32c incremental equals one-shot at every split point" {
+    let data = pattern200()
+    let expected = hash.crc32c(data)
+    let splits = [0, 1, 31, 32, 33, 63, 64, 65, 100, 199, 200]
+    for s in splits {
+        expect(crc_split(data, s)).to_equal(expected)
+    }
+}
+
+test "crc32c finish is a non-destructive snapshot" {
+    let mut h = hash.new_crc32c()
+    h.update("abc".to_bytes())
+    expect(h.finish()).to_equal(910901175)
+    // finish() again gives the same answer, and update() can continue
+    expect(h.finish()).to_equal(910901175)
+    h.update("def".to_bytes())
+    expect(h.finish()).to_equal(hash.crc32c("abcdef".to_bytes()))
+}
+
+// SHA-256 -------------------------------------------------------------------
+
+test "sha256 FIPS vectors" {
+    expect(hash.sha256_hex(bytes_new())).to_equal("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    expect(hash.sha256_hex("abc".to_bytes())).to_equal("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    expect(hash.sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq".to_bytes())).to_equal("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+}
+
+test "sha256 locally cross-checked vectors" {
+    // shasum -a 256 / Python hashlib
+    expect(hash.sha256_hex("The quick brown fox jumps over the lazy dog".to_bytes())).to_equal("d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592")
+    expect(hash.sha256_hex(pattern200())).to_equal("2c7e18c942ef065b526a2d4e5546283749cd3ddfb51d8fc71f42717363685f46")
+}
+
+test "sha256 padding boundary lengths" {
+    // 55/56/63/64/65 'a' bytes straddle the one-vs-two padding block edge
+    expect(hash.sha256_hex(repeat_byte(97, 55))).to_equal("9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318")
+    expect(hash.sha256_hex(repeat_byte(97, 56))).to_equal("b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a")
+    expect(hash.sha256_hex(repeat_byte(97, 63))).to_equal("7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34")
+    expect(hash.sha256_hex(repeat_byte(97, 64))).to_equal("ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb")
+    expect(hash.sha256_hex(repeat_byte(97, 65))).to_equal("635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0")
+}
+
+test "sha256 digest is 32 bytes" {
+    expect(hash.sha256("abc".to_bytes()).len()).to_equal(32)
+    expect(hash.sha256(bytes_new()).len()).to_equal(32)
+}
+
+test "sha256 incremental equals one-shot at every split point" {
+    let data = pattern200()
+    let expected = hash.sha256_hex(data)
+    // split points include mid-first-block, exact block edges, and mid-tail
+    let splits = [0, 1, 31, 32, 33, 55, 56, 63, 64, 65, 100, 128, 199, 200]
+    for s in splits {
+        expect(sha_split(data, s)).to_equal(expected)
+    }
+}
+
+test "sha256 many small updates equal one-shot" {
+    // one byte at a time — exercises the partial-buffer path exclusively
+    let data = pattern200()
+    let mut h = hash.new_sha256()
+    let mut i = 0
+    while i < data.len() {
+        let mut one = bytes_new()
+        one.push(data[i])
+        h.update(one)
+        i = i + 1
+    }
+    expect(hash.to_hex(h.finish())).to_equal(hash.sha256_hex(data))
+}
+
+test "sha256 finish is a non-destructive snapshot" {
+    let mut h = hash.new_sha256()
+    h.update("abc".to_bytes())
+    let first = hash.to_hex(h.finish())
+    expect(first).to_equal("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    // finishing again changes nothing, and the stream can continue
+    expect(hash.to_hex(h.finish())).to_equal(first)
+    h.update("def".to_bytes())
+    expect(hash.to_hex(h.finish())).to_equal(hash.sha256_hex("abcdef".to_bytes()))
+}
+
+// FNV-1a 64 -----------------------------------------------------------------
+
+test "fnv1a64 vectors" {
+    // 0xcbf29ce484222325 (offset basis) as signed i64
+    expect(hash.fnv1a64(bytes_new())).to_equal(-3750763034362895579)
+    // "a" -> 0xaf63dc4c8601ec8c
+    expect(hash.fnv1a64("a".to_bytes())).to_equal(-5808556873153909620)
+    // "abc" -> 0xe71fa2190541574b
+    expect(hash.fnv1a64("abc".to_bytes())).to_equal(-1792535898324117685)
+    // "foobar" -> 0x85944171f73967e8
+    expect(hash.fnv1a64("foobar".to_bytes())).to_equal(-8821353812377114648)
+    // "hello world" -> 0x779a65e7023cd2e7
+    expect(hash.fnv1a64("hello world".to_bytes())).to_equal(8618312879776256743)
+    // Python cross-check over the pattern buffer
+    expect(hash.fnv1a64(pattern200())).to_equal(6817196434570294965)
+}
+
+// to_hex --------------------------------------------------------------------
+
+test "to_hex" {
+    expect(hash.to_hex(bytes_new())).to_equal("")
+    let mut b = bytes_new()
+    b.push(0 as byte)
+    b.push(15 as byte)
+    b.push(16 as byte)
+    b.push(171 as byte)
+    b.push(255 as byte)
+    expect(hash.to_hex(b)).to_equal("000f10abff")
+}
