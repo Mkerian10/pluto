@@ -2155,39 +2155,92 @@ static void set_grow(long *h, long key_type) {
     h[1] = new_cap; h[2] = (long)new_keys; h[3] = (long)new_meta;
 }
 // ── File I/O runtime ──────────────────────────────────────────────────────────
+//
+// Error protocol (issue #367: errno captured at the syscall site):
+// - long-returning fns return >= 0 on success and -errno on failure;
+// - string/array-returning fns record errno in a thread-local
+//   (`__pluto_fs_last_errno`) set to 0 on success, captured immediately
+//   after the failing syscall, before control returns to Pluto code. This
+//   retires the old read-global-errno-after-return pattern, which any
+//   intervening allocation or safepoint could clobber.
+// - every blocking syscall is bracketed with GC safe regions so a slow
+//   disk operation (an fsync can take hundreds of ms) never stalls
+//   stop-the-world. GC-heap access (string/array construction, cstr
+//   conversion which may allocate for slices) stays OUTSIDE the brackets;
+//   buffers passed into syscalls stay reachable from this frame's stack,
+//   which the collector scans conservatively.
 
-void *__pluto_fs_strerror(void) {
-    const char *msg = strerror(errno);
-    long len = (long)strlen(msg);
-    return __pluto_string_new(msg, len);
+static __thread long __pluto_fs_saved_errno = 0;
+
+long __pluto_fs_last_errno(void) {
+    return __pluto_fs_saved_errno;
+}
+
+void *__pluto_fs_errstr(long code) {
+    const char *msg = strerror((int)code);
+    return __pluto_string_new(msg, (long)strlen(msg));
+}
+
+long __pluto_fs_err_noent(void) {
+    return (long)ENOENT;
 }
 
 long __pluto_fs_open_read(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
-    return (long)open(path, O_RDONLY);
+    __pluto_gc_enter_safe_region();
+    long fd = (long)open(path, O_RDONLY);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return fd < 0 ? -err : fd;
 }
 
 long __pluto_fs_open_write(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
-    return (long)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    __pluto_gc_enter_safe_region();
+    long fd = (long)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return fd < 0 ? -err : fd;
 }
 
 long __pluto_fs_open_append(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
-    return (long)open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    __pluto_gc_enter_safe_region();
+    long fd = (long)open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return fd < 0 ? -err : fd;
 }
 
 long __pluto_fs_close(long fd) {
-    return close((int)fd) == 0 ? 0 : -1;
+    __pluto_gc_enter_safe_region();
+    int rc = close((int)fd);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return rc == 0 ? 0 : -err;
 }
 
+// EOF/error disambiguation (issue #367): "" with last_errno == 0 is EOF;
+// "" with last_errno != 0 is a read failure.
 void *__pluto_fs_read(long fd, long max_bytes) {
+    __pluto_fs_saved_errno = 0;
     if (max_bytes <= 0) return __pluto_string_new("", 0);
     if (max_bytes > 104857600) max_bytes = 104857600; // 100MB cap
     char *buf = (char *)malloc((size_t)max_bytes);
-    if (!buf) return __pluto_string_new("", 0);
+    if (!buf) {
+        __pluto_fs_saved_errno = (long)ENOMEM;
+        return __pluto_string_new("", 0);
+    }
+    __pluto_gc_enter_safe_region();
     ssize_t n = read((int)fd, buf, (size_t)max_bytes);
-    if (n <= 0) {
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (n < 0) {
+        free(buf);
+        __pluto_fs_saved_errno = err;
+        return __pluto_string_new("", 0);
+    }
+    if (n == 0) {
         free(buf);
         return __pluto_string_new("", 0);
     }
@@ -2196,44 +2249,334 @@ void *__pluto_fs_read(long fd, long max_bytes) {
     return result;
 }
 
+// Loops to completion (issue #367 short-write fix). Returns the byte count
+// written (== len) on success, -errno on the first failing write.
 long __pluto_fs_write(long fd, void *data_str) {
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
-    ssize_t written = write((int)fd, data, (size_t)len);
-    return (long)written;
+    __pluto_gc_enter_safe_region();
+    size_t total = 0;
+    long err = 0;
+    while (total < (size_t)len) {
+        ssize_t n = write((int)fd, data + total, (size_t)len - total);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            err = (long)errno;
+            break;
+        }
+        if (n == 0) { err = (long)EIO; break; }
+        total += (size_t)n;
+    }
+    __pluto_gc_leave_safe_region();
+    return err != 0 ? -err : (long)total;
 }
 
-long __pluto_fs_seek(long fd, long offset, long whence) {
-    off_t result = lseek((int)fd, (off_t)offset, (int)whence);
-    return (long)result;
+// whence_tag: 0 = Start (SEEK_SET), 1 = Current (SEEK_CUR), 2 = End (SEEK_END).
+long __pluto_fs_seek(long fd, long offset, long whence_tag) {
+    int whence = whence_tag == 0 ? SEEK_SET : (whence_tag == 1 ? SEEK_CUR : SEEK_END);
+    __pluto_gc_enter_safe_region();
+    off_t result = lseek((int)fd, (off_t)offset, whence);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return result < 0 ? -err : (long)result;
+}
+
+// ── Durability primitives (issue #367) ────────────────────────────────────────
+//
+// sync/sync_data mean FULL durability on every platform (owner decision D2):
+// fsync/fdatasync on Linux, fcntl(F_FULLFSYNC) on Darwin — Darwin's fsync
+// explicitly does not flush the drive's volatile cache. ENOTSUP from
+// F_FULLFSYNC (SMB/NFS mounts) is returned as an error, never silently
+// degraded. Directory sync uses plain fsync (the SQLite convention:
+// F_FULLFSYNC is a file-data barrier; a directory's dirty page is the
+// name→inode mapping, for which fsync is the portable primitive).
+//
+// Testing hooks (CI-reachable without real EIO):
+// - PLUTO_FS_SYNC_FAIL_AT=<n>: the nth file-sync call fails with EIO
+//   without issuing the syscall.
+// - __pluto_fs_sync_count(): syncs actually ISSUED (not injected failures),
+//   so a test can assert the syscall really happened.
+
+static __thread long __pluto_fs_syncs_issued = 0;
+static __thread long __pluto_fs_sync_calls = 0;
+static __thread long __pluto_fs_sync_fail_at = -2; // -2 = env not read yet, -1 = disabled
+
+long __pluto_fs_sync_count(void) {
+    return __pluto_fs_syncs_issued;
+}
+
+static int __pluto_fs_sync_inject_fail(void) {
+    if (__pluto_fs_sync_fail_at == -2) {
+        const char *v = getenv("PLUTO_FS_SYNC_FAIL_AT");
+        __pluto_fs_sync_fail_at = v ? atol(v) : -1;
+    }
+    if (__pluto_fs_sync_fail_at < 0) return 0;
+    __pluto_fs_sync_calls++;
+    return __pluto_fs_sync_calls == __pluto_fs_sync_fail_at;
+}
+
+// Full-durability sync of a file descriptor; returns 0 or -errno.
+static long __pluto_fs_do_sync_fd(long fd) {
+    if (__pluto_fs_sync_inject_fail()) return -(long)EIO;
+    __pluto_gc_enter_safe_region();
+#ifdef __APPLE__
+    int rc = fcntl((int)fd, F_FULLFSYNC);
+#else
+    int rc = fsync((int)fd);
+#endif
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    __pluto_fs_syncs_issued++;
+    return rc < 0 ? -err : 0;
+}
+
+long __pluto_fs_sync(long fd) {
+    return __pluto_fs_do_sync_fd(fd);
+}
+
+long __pluto_fs_sync_data(long fd) {
+    if (__pluto_fs_sync_inject_fail()) return -(long)EIO;
+    __pluto_gc_enter_safe_region();
+#ifdef __APPLE__
+    int rc = fcntl((int)fd, F_FULLFSYNC);
+#else
+    int rc = fdatasync((int)fd);
+#endif
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    __pluto_fs_syncs_issued++;
+    return rc < 0 ? -err : 0;
+}
+
+// fsync a directory: required for crash-safe rename/create/remove (the
+// name→inode mapping is the directory's dirty page, not the file's).
+static long __pluto_fs_do_sync_dir(const char *path) {
+    __pluto_gc_enter_safe_region();
+    int fd = open(path, O_RDONLY);
+    long err = (long)errno;
+    if (fd >= 0) {
+        int rc = fsync(fd);
+        err = (long)errno;
+        int crc = close(fd);
+        long cerr = (long)errno;
+        if (rc < 0) {
+            __pluto_gc_leave_safe_region();
+            return -err;
+        }
+        if (crc < 0) {
+            __pluto_gc_leave_safe_region();
+            return -cerr;
+        }
+        __pluto_gc_leave_safe_region();
+        return 0;
+    }
+    __pluto_gc_leave_safe_region();
+    return -err;
+}
+
+long __pluto_fs_sync_dir(void *path_str) {
+    const char *path = __pluto_string_to_cstr(path_str);
+    return __pluto_fs_do_sync_dir(path);
+}
+
+// Atomic durable replace (issue #367): same-dir temp write → full sync of
+// the temp → rename over the target → fsync the parent directory. One
+// packaged C fn so intermediate failures always clean up the temp file.
+//
+// Returns 0 on success, -errno on failure. Failure phase is reported by
+// __pluto_fs_replace_phase(): 0 = failed before the rename landed (the old
+// file is intact, the temp was cleaned up); 1 = the rename landed but the
+// directory sync failed (contents replaced, durability unwarranted).
+static __thread long __pluto_fs_replace_phase_v = 0;
+
+long __pluto_fs_replace_phase(void) {
+    return __pluto_fs_replace_phase_v;
+}
+
+long __pluto_fs_replace_all(void *path_str, void *data_str) {
+    const char *path = __pluto_string_to_cstr(path_str);
+    const char *data;
+    long len;
+    __pluto_string_data(data_str, &data, &len);
+    __pluto_fs_replace_phase_v = 0;
+
+    size_t plen = strlen(path);
+    char *tmp = (char *)malloc(plen + 48);
+    if (!tmp) return -(long)ENOMEM;
+    static __thread unsigned long replace_seq = 0;
+    replace_seq++;
+    snprintf(tmp, plen + 48, "%s.tmp.%ld.%lu", path, (long)getpid(), replace_seq);
+
+    // Parent directory for the final fsync ('.' when the path has no '/').
+    char *dir = (char *)malloc(plen + 2);
+    if (!dir) { free(tmp); return -(long)ENOMEM; }
+    const char *slash = strrchr(path, '/');
+    if (slash && slash != path) {
+        size_t dlen = (size_t)(slash - path);
+        memcpy(dir, path, dlen);
+        dir[dlen] = '\0';
+    } else if (slash == path) {
+        strcpy(dir, "/");
+    } else {
+        strcpy(dir, ".");
+    }
+
+    long err = 0;
+    __pluto_gc_enter_safe_region();
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (fd < 0) {
+        err = -(long)errno;
+        __pluto_gc_leave_safe_region();
+        free(tmp); free(dir);
+        return err;
+    }
+    size_t total = 0;
+    while (total < (size_t)len) {
+        ssize_t n = write(fd, data + total, (size_t)len - total);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            err = -(long)errno;
+            break;
+        }
+        if (n == 0) { err = -(long)EIO; break; }
+        total += (size_t)n;
+    }
+    __pluto_gc_leave_safe_region();
+    if (err != 0) {
+        __pluto_gc_enter_safe_region();
+        close(fd);
+        unlink(tmp);
+        __pluto_gc_leave_safe_region();
+        free(tmp); free(dir);
+        return err;
+    }
+
+    // Full-durability sync of the temp BEFORE the rename — otherwise the
+    // rename can land durably while the contents are still in cache.
+    err = __pluto_fs_do_sync_fd((long)fd);
+    __pluto_gc_enter_safe_region();
+    int crc = close(fd);
+    long cerr = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (err == 0 && crc < 0) err = -cerr;
+    if (err != 0) {
+        __pluto_gc_enter_safe_region();
+        unlink(tmp);
+        __pluto_gc_leave_safe_region();
+        free(tmp); free(dir);
+        return err;
+    }
+
+    __pluto_gc_enter_safe_region();
+    int rrc = rename(tmp, path);
+    long rerr = (long)errno;
+    if (rrc < 0) unlink(tmp);
+    __pluto_gc_leave_safe_region();
+    if (rrc < 0) {
+        free(tmp); free(dir);
+        return -rerr;
+    }
+
+    // The rename has landed; a directory-sync failure from here on is a
+    // durability report about a replace that DID happen.
+    err = __pluto_fs_do_sync_dir(dir);
+    free(tmp); free(dir);
+    if (err != 0) {
+        __pluto_fs_replace_phase_v = 1;
+        return err;
+    }
+    return 0;
 }
 
 void *__pluto_fs_read_all(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
+    __pluto_fs_saved_errno = 0;
+    __pluto_gc_enter_safe_region();
     int fd = open(path, O_RDONLY);
-    if (fd < 0) return __pluto_string_new("", 0);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (fd < 0) {
+        __pluto_fs_saved_errno = err;
+        return __pluto_string_new("", 0);
+    }
     struct stat st;
-    if (fstat(fd, &st) != 0) {
+    __pluto_gc_enter_safe_region();
+    int src = fstat(fd, &st);
+    err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (src != 0) {
+        __pluto_gc_enter_safe_region();
         close(fd);
+        __pluto_gc_leave_safe_region();
+        __pluto_fs_saved_errno = err;
         return __pluto_string_new("", 0);
     }
     size_t size = (size_t)st.st_size;
-    char *buf = (char *)malloc(size);
+    char *buf = (char *)malloc(size > 0 ? size : 1);
     if (!buf) {
+        __pluto_gc_enter_safe_region();
         close(fd);
+        __pluto_gc_leave_safe_region();
+        __pluto_fs_saved_errno = (long)ENOMEM;
         return __pluto_string_new("", 0);
     }
+    __pluto_gc_enter_safe_region();
     size_t total_read = 0;
+    err = 0;
     while (total_read < size) {
         ssize_t n = read(fd, buf + total_read, size - total_read);
-        if (n <= 0) break;
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            err = (long)errno;
+            break;
+        }
+        if (n == 0) break; // truncated under us: return what we got
         total_read += (size_t)n;
     }
-    close(fd);
+    int crc = close(fd);
+    long cerr = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (err == 0 && crc < 0) err = cerr;
+    if (err != 0) {
+        free(buf);
+        __pluto_fs_saved_errno = err;
+        return __pluto_string_new("", 0);
+    }
     void *result = __pluto_string_new(buf, (long)total_read);
     free(buf);
     return result;
+}
+
+// Shared body of write_all/append_all: open with `flags`, write the whole
+// buffer, close — surfacing close() failures (issue #367: on NFS-class
+// filesystems close is where deferred write errors appear; swallowing it
+// reports success for lost data).
+static long __pluto_fs_write_whole(const char *path, const char *data, long len, int flags) {
+    __pluto_gc_enter_safe_region();
+    int fd = open(path, flags, 0644);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (fd < 0) return -err;
+    __pluto_gc_enter_safe_region();
+    size_t total = 0;
+    err = 0;
+    while (total < (size_t)len) {
+        ssize_t n = write(fd, data + total, (size_t)len - total);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            err = (long)errno;
+            break;
+        }
+        if (n == 0) { err = (long)EIO; break; }
+        total += (size_t)n;
+    }
+    int crc = close(fd);
+    long cerr = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (err != 0) return -err;
+    if (crc < 0) return -cerr;
+    return 0;
 }
 
 long __pluto_fs_write_all(void *path_str, void *data_str) {
@@ -2241,16 +2584,7 @@ long __pluto_fs_write_all(void *path_str, void *data_str) {
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -1;
-    size_t total_written = 0;
-    while (total_written < (size_t)len) {
-        ssize_t n = write(fd, data + total_written, (size_t)len - total_written);
-        if (n <= 0) { close(fd); return -1; }
-        total_written += (size_t)n;
-    }
-    close(fd);
-    return 0;
+    return __pluto_fs_write_whole(path, data, len, O_WRONLY | O_CREAT | O_TRUNC);
 }
 
 long __pluto_fs_append_all(void *path_str, void *data_str) {
@@ -2258,116 +2592,301 @@ long __pluto_fs_append_all(void *path_str, void *data_str) {
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
-    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd < 0) return -1;
-    size_t total_written = 0;
-    while (total_written < (size_t)len) {
-        ssize_t n = write(fd, data + total_written, (size_t)len - total_written);
-        if (n <= 0) { close(fd); return -1; }
-        total_written += (size_t)n;
-    }
-    close(fd);
-    return 0;
+    return __pluto_fs_write_whole(path, data, len, O_WRONLY | O_CREAT | O_APPEND);
 }
 
 long __pluto_fs_exists(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
     struct stat st;
-    return stat(path, &st) == 0 ? 1 : 0;
+    __pluto_gc_enter_safe_region();
+    int rc = stat(path, &st);
+    __pluto_gc_leave_safe_region();
+    return rc == 0 ? 1 : 0;
 }
 
 long __pluto_fs_file_size(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
     struct stat st;
-    if (stat(path, &st) != 0) return -1;
+    __pluto_gc_enter_safe_region();
+    int rc = stat(path, &st);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (rc != 0) return -err;
     return (long)st.st_size;
+}
+
+// stat as a flat int array: [size, modified_unix_secs, is_dir, is_file,
+// mode_bits]. Empty array + last_errno on failure.
+void *__pluto_fs_stat(void *path_str) {
+    const char *path = __pluto_string_to_cstr(path_str);
+    __pluto_fs_saved_errno = 0;
+    struct stat st;
+    __pluto_gc_enter_safe_region();
+    int rc = stat(path, &st);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (rc != 0) {
+        __pluto_fs_saved_errno = err;
+        return __pluto_array_new(0);
+    }
+    void *arr = __pluto_array_new(5);
+    __pluto_array_push(arr, (long)st.st_size);
+    __pluto_array_push(arr, (long)st.st_mtime);
+    __pluto_array_push(arr, S_ISDIR(st.st_mode) ? 1 : 0);
+    __pluto_array_push(arr, S_ISREG(st.st_mode) ? 1 : 0);
+    __pluto_array_push(arr, (long)(st.st_mode & 07777));
+    return arr;
 }
 
 long __pluto_fs_is_dir(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
     struct stat st;
-    if (stat(path, &st) != 0) return 0;
+    __pluto_gc_enter_safe_region();
+    int rc = stat(path, &st);
+    __pluto_gc_leave_safe_region();
+    if (rc != 0) return 0;
     return S_ISDIR(st.st_mode) ? 1 : 0;
 }
 
 long __pluto_fs_is_file(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
     struct stat st;
-    if (stat(path, &st) != 0) return 0;
+    __pluto_gc_enter_safe_region();
+    int rc = stat(path, &st);
+    __pluto_gc_leave_safe_region();
+    if (rc != 0) return 0;
     return S_ISREG(st.st_mode) ? 1 : 0;
 }
 
 long __pluto_fs_remove(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
-    return unlink(path) == 0 ? 0 : -1;
+    __pluto_gc_enter_safe_region();
+    int rc = unlink(path);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return rc == 0 ? 0 : -err;
 }
 
 long __pluto_fs_mkdir(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
-    return mkdir(path, 0755) == 0 ? 0 : -1;
+    __pluto_gc_enter_safe_region();
+    int rc = mkdir(path, 0755);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return rc == 0 ? 0 : -err;
+}
+
+// mkdir -p: create every missing component. Existing directories (including
+// the full path) are success; a non-directory in the way is an error.
+long __pluto_fs_create_dir_all(void *path_str) {
+    const char *path = __pluto_string_to_cstr(path_str);
+    size_t plen = strlen(path);
+    if (plen == 0) return -(long)ENOENT;
+    char *buf = (char *)malloc(plen + 1);
+    if (!buf) return -(long)ENOMEM;
+    memcpy(buf, path, plen + 1);
+    long result = 0;
+    __pluto_gc_enter_safe_region();
+    for (size_t i = 1; i <= plen; i++) {
+        if (buf[i] != '/' && buf[i] != '\0') continue;
+        if (buf[i - 1] == '/') continue; // "//" runs and trailing '/'
+        char saved = buf[i];
+        buf[i] = '\0';
+        if (mkdir(buf, 0755) != 0 && errno != EEXIST) {
+            result = -(long)errno;
+            buf[i] = saved;
+            break;
+        }
+        buf[i] = saved;
+    }
+    if (result == 0) {
+        struct stat st;
+        if (stat(path, &st) != 0) result = -(long)errno;
+        else if (!S_ISDIR(st.st_mode)) result = -(long)ENOTDIR;
+    }
+    __pluto_gc_leave_safe_region();
+    free(buf);
+    return result;
 }
 
 long __pluto_fs_rmdir(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
-    return rmdir(path) == 0 ? 0 : -1;
+    __pluto_gc_enter_safe_region();
+    int rc = rmdir(path);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return rc == 0 ? 0 : -err;
+}
+
+// Recursive delete. Assumes it is called inside a safe region. Depth-first:
+// files unlinked, subdirectories recursed then rmdir'd. Symlinks are
+// unlinked, never followed (lstat).
+static long __pluto_fs_remove_tree(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -(long)errno;
+    if (!S_ISDIR(st.st_mode)) {
+        return unlink(path) == 0 ? 0 : -(long)errno;
+    }
+    DIR *d = opendir(path);
+    if (!d) return -(long)errno;
+    size_t plen = strlen(path);
+    struct dirent *entry;
+    long result = 0;
+    while (result == 0 && (entry = readdir(d)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+        size_t nlen = strlen(entry->d_name);
+        char *child = (char *)malloc(plen + 1 + nlen + 1);
+        if (!child) { result = -(long)ENOMEM; break; }
+        memcpy(child, path, plen);
+        child[plen] = '/';
+        memcpy(child + plen + 1, entry->d_name, nlen + 1);
+        result = __pluto_fs_remove_tree(child);
+        free(child);
+    }
+    closedir(d);
+    if (result != 0) return result;
+    return rmdir(path) == 0 ? 0 : -(long)errno;
+}
+
+long __pluto_fs_remove_dir_all(void *path_str) {
+    const char *path = __pluto_string_to_cstr(path_str);
+    // Refusals ("/", "") are enforced in the stdlib too; defense in depth.
+    if (path[0] == '\0' || strcmp(path, "/") == 0) return -(long)EINVAL;
+    __pluto_gc_enter_safe_region();
+    long result = __pluto_fs_remove_tree(path);
+    __pluto_gc_leave_safe_region();
+    return result;
 }
 
 long __pluto_fs_rename(void *from_str, void *to_str) {
     const char *from = __pluto_string_to_cstr(from_str);
     const char *to = __pluto_string_to_cstr(to_str);
-    return rename(from, to) == 0 ? 0 : -1;
+    __pluto_gc_enter_safe_region();
+    int rc = rename(from, to);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return rc == 0 ? 0 : -err;
 }
 
 long __pluto_fs_copy(void *from_str, void *to_str) {
     const char *from = __pluto_string_to_cstr(from_str);
     const char *to = __pluto_string_to_cstr(to_str);
+    __pluto_gc_enter_safe_region();
+    long err = 0;
     int src_fd = open(from, O_RDONLY);
-    if (src_fd < 0) return -1;
+    if (src_fd < 0) {
+        err = -(long)errno;
+        __pluto_gc_leave_safe_region();
+        return err;
+    }
     int dst_fd = open(to, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (dst_fd < 0) { close(src_fd); return -1; }
+    if (dst_fd < 0) {
+        err = -(long)errno;
+        close(src_fd);
+        __pluto_gc_leave_safe_region();
+        return err;
+    }
     char buf[4096];
     ssize_t n;
     while ((n = read(src_fd, buf, sizeof(buf))) > 0) {
         size_t written = 0;
         while (written < (size_t)n) {
             ssize_t w = write(dst_fd, buf + written, (size_t)n - written);
-            if (w <= 0) { close(src_fd); close(dst_fd); return -1; }
+            if (w < 0) {
+                if (errno == EINTR) continue;
+                err = -(long)errno;
+                break;
+            }
+            if (w == 0) { err = -(long)EIO; break; }
             written += (size_t)w;
         }
+        if (err != 0) break;
     }
-    close(src_fd);
-    close(dst_fd);
-    return n < 0 ? -1 : 0;
+    if (err == 0 && n < 0) err = -(long)errno;
+    // Close errors surfaced (issue #367): deferred write errors can appear
+    // at close; the first error wins but both fds are always released.
+    int src_crc = close(src_fd);
+    long src_cerr = (long)errno;
+    int dst_crc = close(dst_fd);
+    long dst_cerr = (long)errno;
+    if (err == 0 && dst_crc < 0) err = -dst_cerr;
+    if (err == 0 && src_crc < 0) err = -src_cerr;
+    __pluto_gc_leave_safe_region();
+    return err;
 }
 
 void *__pluto_fs_list_dir(void *path_str) {
     const char *path = __pluto_string_to_cstr(path_str);
-    void *arr = __pluto_array_new(8);
+    __pluto_fs_saved_errno = 0;
+    // Collect names into a malloc'd buffer inside the safe region, then
+    // leave it before building GC strings.
+    __pluto_gc_enter_safe_region();
     DIR *d = opendir(path);
-    if (!d) return arr;
+    long err = (long)errno;
+    if (!d) {
+        __pluto_gc_leave_safe_region();
+        __pluto_fs_saved_errno = err;
+        return __pluto_array_new(0);
+    }
+    size_t cap = 4096, used = 0, count = 0;
+    char *names = (char *)malloc(cap);
     struct dirent *entry;
-    while ((entry = readdir(d)) != NULL) {
+    while (names && (entry = readdir(d)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
-        long name_len = (long)strlen(entry->d_name);
-        void *name_str = __pluto_string_new(entry->d_name, name_len);
-        __pluto_array_push(arr, (long)name_str);
+        size_t nlen = strlen(entry->d_name) + 1;
+        if (used + nlen > cap) {
+            cap = (used + nlen) * 2;
+            char *grown = (char *)realloc(names, cap);
+            if (!grown) { free(names); names = NULL; break; }
+            names = grown;
+        }
+        memcpy(names + used, entry->d_name, nlen);
+        used += nlen;
+        count++;
     }
     closedir(d);
+    __pluto_gc_leave_safe_region();
+    if (!names) {
+        __pluto_fs_saved_errno = (long)ENOMEM;
+        return __pluto_array_new(0);
+    }
+    void *arr = __pluto_array_new((long)(count > 0 ? count : 1));
+    size_t off = 0;
+    for (size_t i = 0; i < count; i++) {
+        size_t nlen = strlen(names + off);
+        void *name_str = __pluto_string_new(names + off, (long)nlen);
+        __pluto_array_push(arr, (long)name_str);
+        off += nlen + 1;
+    }
+    free(names);
     return arr;
 }
 
-void *__pluto_fs_temp_dir(void) {
-    char tmpl[] = "/tmp/pluto_XXXXXX";
-    char *result = mkdtemp(tmpl);
-    if (!result) return __pluto_string_new("", 0);
-    long len = (long)strlen(result);
-    return __pluto_string_new(result, len);
+// Transitional shims for the pre-typestate stdlib surface; removed when
+// stdlib/fs/fs.pt moves to the negative-errno protocol and the Seek enum.
+void *__pluto_fs_strerror(void) {
+    const char *msg = strerror(errno);
+    return __pluto_string_new(msg, (long)strlen(msg));
 }
+long __pluto_fs_seek_set(void) { return 0; }
+long __pluto_fs_seek_cur(void) { return 1; }
+long __pluto_fs_seek_end(void) { return 2; }
 
-long __pluto_fs_seek_set(void) { return (long)SEEK_SET; }
-long __pluto_fs_seek_cur(void) { return (long)SEEK_CUR; }
-long __pluto_fs_seek_end(void) { return (long)SEEK_END; }
+void *__pluto_fs_temp_dir(void) {
+    __pluto_fs_saved_errno = 0;
+    char tmpl[] = "/tmp/pluto_XXXXXX";
+    __pluto_gc_enter_safe_region();
+    char *result = mkdtemp(tmpl);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (!result) {
+        __pluto_fs_saved_errno = err;
+        return __pluto_string_new("", 0);
+    }
+    return __pluto_string_new(tmpl, (long)strlen(tmpl));
+}
 
 // ── Math builtins ─────────────────────────────────────────────────────────────
 
