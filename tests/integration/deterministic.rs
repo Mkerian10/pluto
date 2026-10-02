@@ -6015,3 +6015,61 @@ tests[scheduler: Exhaustive] {
     assert_eq!(code, 0, "stderr: {stderr}\nstdout: {stdout}");
     assert!(!stderr.contains("deadlock"), "after-select never deadlocks; stderr: {stderr}");
 }
+
+// ── select `after` duration edges (#423) ────────────────────────────────────
+//
+// Test mode and production share one deadline rule (docs/design/channels.md):
+// a non-positive duration is an already-expired deadline and a huge duration
+// is a far-future one — in test mode the duration is erased either way and
+// the after arm is an enabled scheduler choice. Pre-fix, a negative duration
+// collided with the "no after arm" sentinel and was reported as a DEADLOCK
+// here while production blocked forever.
+
+#[test]
+fn sequential_select_negative_after_fires_instead_of_deadlocking() {
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+test "negative after fires" {
+    let (tx, rx) = chan<int>(1)
+    let d = 0 - 5
+    let mut fired = 0
+    select {
+        v = rx.recv() {
+            fired = v
+        }
+        after d {
+            fired = -1
+        }
+    }
+    expect(fired).to_equal(-1)
+    tx.close()
+}
+"#);
+    assert!(!stderr.contains("deadlock"), "negative after must not deadlock; stderr: {stderr}");
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn sequential_select_huge_after_fires_where_deadlock_would_be() {
+    // i64::MAX ms: the duration is erased in test mode — the timeout stays
+    // an enabled choice and fires where deadlock would otherwise be reported.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+test "huge after fires" {
+    let (tx, rx) = chan<int>(1)
+    let mut fired = 0
+    select {
+        v = rx.recv() {
+            fired = v
+        }
+        after 9223372036854775807 {
+            fired = -1
+        }
+    }
+    expect(fired).to_equal(-1)
+    tx.close()
+}
+"#);
+    assert!(!stderr.contains("deadlock"), "huge after must not deadlock; stderr: {stderr}");
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(code, 0);
+}

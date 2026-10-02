@@ -1798,6 +1798,11 @@ long __pluto_chan_recv(long handle) {
 // the deadline (a closed-and-drained channel is a definite state, not a
 // bounded wait). Mechanics: pthread_cond_timedwait with the same safe-region
 // bracketing as chan_cond_wait.
+//
+// Deadline rule (shared with select `after`, docs/design/channels.md): a
+// non-positive duration is an already-expired deadline — one readiness check,
+// then TimedOut. A huge duration cannot overflow here: tv_sec gains at most
+// LONG_MAX/1000 seconds, far inside time_t's range.
 long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
@@ -1937,6 +1942,17 @@ void __pluto_chan_sender_dec(long handle) {
  * that many milliseconds elapse with no arm ready (mutually exclusive with
  * has_default at the language level). Taking the timeout is NOT an error.
  *
+ * Deadline rule (shared with __pluto_chan_recv_timeout, and stated in
+ * docs/design/channels.md): a non-positive duration is an ALREADY-EXPIRED
+ * deadline — arms get one readiness poll, then the after arm fires. Codegen
+ * clamps user durations to >= 0, so -1 here always means "no after arm";
+ * any other negative reaching this layer is clamped to 0 as defense in
+ * depth. A huge duration saturates to a far-future deadline instead of
+ * overflowing the nanosecond multiply (which would make the arm fire
+ * instantly). Deterministic test mode follows the same rule with the
+ * duration erased: the timeout is an enabled scheduler choice, which
+ * includes "fires immediately".
+ *
  * Returns:
  *   >= 0  : index of the case that completed
  *   -1    : default case (only when has_default)
@@ -1988,6 +2004,8 @@ static long select_try_arms(long *handles, long *ops, long *values, int n, int *
 }
 
 long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_ms) {
+    /* -1 = no after arm; any other negative = expired deadline (see rule above) */
+    if (timeout_ms < -1) timeout_ms = 0;
     long *buf = (long *)buffer_ptr;
     long *handles = &buf[0];
     long *ops     = &buf[count];
@@ -2066,6 +2084,8 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
 // ── Production mode: spin-poll select ──
 
 long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_ms) {
+    /* -1 = no after arm; any other negative = expired deadline (see rule above) */
+    if (timeout_ms < -1) timeout_ms = 0;
     long *buf = (long *)buffer_ptr;
     long *handles = &buf[0];
     long *ops     = &buf[count];
@@ -2085,8 +2105,16 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
         int tmp = indices[i]; indices[i] = indices[j]; indices[j] = tmp;
     }
 
-    /* Absolute monotonic-ns deadline for the `after` arm (-1 = none) */
-    long deadline_ns = timeout_ms >= 0 ? __pluto_time_ns() + timeout_ms * 1000000L : -1;
+    /* Absolute monotonic-ns deadline for the `after` arm (-1 = none).
+     * Saturating: a huge duration clamps to a far-future deadline rather
+     * than overflowing the ns multiply and firing instantly. */
+    long deadline_ns = -1;
+    if (timeout_ms >= 0) {
+        long now_ns = __pluto_time_ns();
+        long max_ms = (0x7fffffffffffffffL - now_ns) / 1000000L;
+        deadline_ns = timeout_ms > max_ms ? 0x7fffffffffffffffL
+                                          : now_ns + timeout_ms * 1000000L;
+    }
 
     /* Spin-poll loop */
     long spin_us = 100;  /* start at 100 microseconds */

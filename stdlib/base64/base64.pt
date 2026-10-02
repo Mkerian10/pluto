@@ -1,4 +1,5 @@
 extern fn __pluto_codepoint_to_string(cp: int) string
+extern fn __pluto_bytes_to_string(b: bytes) string
 extern fn __pluto_string_byte_at(s: string, index: int) int
 extern fn __pluto_string_len(s: string) int
 extern fn __pluto_string_substring(s: string, start: int, length: int) string
@@ -145,9 +146,14 @@ fn decode_with_alphabet(s: string, alpha: string) string {
 
 // Encode a bytes buffer to standard base64
 pub fn encode_bytes(b: bytes) string {
+    // Output accumulates in a bytes buffer and converts to a string ONCE at
+    // the end (#428): the `result + codepoint` string loop this replaces was
+    // quadratic in copies and GC churn (each `+` reallocates the whole
+    // accumulator). The alphabet (and '=') is pure ASCII, so the byte-exact
+    // conversion is also character-exact.
     let alpha = alphabet()
     let input_len = b.len()
-    let mut result = ""
+    let out = bytes_new()
     let mut i = 0
 
     while i < input_len {
@@ -172,25 +178,25 @@ pub fn encode_bytes(b: bytes) string {
         let c3 = ((b2 & 0x0F) << 2) | ((b3 >> 6) & 0x03)
         let c4 = b3 & 0x3F
 
-        result = result + __pluto_codepoint_to_string(char_code_at(alpha, c1))
-        result = result + __pluto_codepoint_to_string(char_code_at(alpha, c2))
+        out.push(char_code_at(alpha, c1) as byte)
+        out.push(char_code_at(alpha, c2) as byte)
 
         if has_b2 != 0 {
-            result = result + __pluto_codepoint_to_string(char_code_at(alpha, c3))
+            out.push(char_code_at(alpha, c3) as byte)
         } else {
-            result = result + "="
+            out.push(61 as byte)
         }
 
         if has_b3 != 0 {
-            result = result + __pluto_codepoint_to_string(char_code_at(alpha, c4))
+            out.push(char_code_at(alpha, c4) as byte)
         } else {
-            result = result + "="
+            out.push(61 as byte)
         }
 
         i = i + 3
     }
 
-    return result
+    return __pluto_bytes_to_string(out)
 }
 
 // Decode standard base64 into a bytes buffer (exact for all byte values)

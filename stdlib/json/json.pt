@@ -367,11 +367,21 @@ class Parser {
     fn parse_string(mut self) Json {
         // skip opening "
         self.pos = self.pos + 1
+        // Chunked scan (#428): plain characters are NOT appended one by one
+        // (the per-char `result + char_at(...)` loop was quadratic in copies
+        // and in GC churn — a 13KB base64 blob took >20s to parse). Instead
+        // the scan only advances, and the run of plain characters between
+        // escapes is flushed as ONE substring; concat count is the number of
+        // escapes, not the number of characters.
         let mut result = ""
+        let mut chunk_start = self.pos
         while self.pos < self.src_len {
             let b = strings.byte_at(self.src, self.pos)
             // '"' = 34
             if b == 34 {
+                if self.pos > chunk_start {
+                    result = result + strings.substring(self.src, chunk_start, self.pos - chunk_start)
+                }
                 self.pos = self.pos + 1
                 return string(result)
             }
@@ -381,6 +391,9 @@ class Parser {
             }
             // '\' = 92
             if b == 92 {
+                if self.pos > chunk_start {
+                    result = result + strings.substring(self.src, chunk_start, self.pos - chunk_start)
+                }
                 self.pos = self.pos + 1
                 if self.pos >= self.src_len {
                     raise JsonError { message: "invalid JSON" }
@@ -442,8 +455,9 @@ class Parser {
                         }
                     }
                 }
+                chunk_start = self.pos
             } else {
-                result = result + strings.char_at(self.src, self.pos)
+                // Plain character: just advance — flushed as part of a chunk.
                 self.pos = self.pos + 1
             }
         }
