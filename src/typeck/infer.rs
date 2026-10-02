@@ -3155,6 +3155,43 @@ fn infer_method_call(
         ));
     }
 
+    // A call on a `remote` dep crosses a service boundary: a value type that
+    // transitively contains an entity cannot cross it — copying would fork
+    // the entity's identity (#426). Checked here (and at `serve`) so the
+    // violation is a type error instead of a client-side ICE ('missing
+    // generated function __wire_encode_...') and a server-side silent drop
+    // of the method from dispatch. Top-level entities still cross as handles.
+    if env.remote_types.contains(&class_name) {
+        for (i, param_ty) in expected_args.iter().enumerate() {
+            if let Some(entity) = super::types::nested_entity_in_value(param_ty, env) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "argument {} of remote method '{}': type {param_ty} contains \
+                         entity '{entity}' — entities nested inside values cannot cross \
+                         a service boundary (a copy would fork their identity); pass the \
+                         entity directly (it crosses as a handle) or carry an id field \
+                         instead",
+                        i + 1,
+                        method.node
+                    ),
+                    args[i].span,
+                ));
+            }
+        }
+        if let Some(entity) = super::types::nested_entity_in_value(&sig.return_type, env) {
+            return Err(CompileError::type_err(
+                format!(
+                    "remote method '{}' returns {} which contains entity '{entity}' — \
+                     entities nested inside values cannot cross a service boundary \
+                     (a copy would fork their identity); return the entity directly \
+                     (it crosses as a handle) or carry an id field instead",
+                    method.node, sig.return_type
+                ),
+                method.span,
+            ));
+        }
+    }
+
     for (i, (arg, expected_param)) in args.iter().zip(expected_args).enumerate() {
         let actual = infer_expr(&arg.node, arg.span, env, Some(expected_param))?;
         record_fn_value_boundary(arg, expected_param, env);

@@ -406,6 +406,9 @@ fn main() {
 
 #[test]
 fn field_assign_on_non_class() {
+    // The object expression is typed before the caller-side mutability check
+    // (the entity-write rejection needs the class first), so the non-class
+    // diagnostic wins over the incidental immutability one.
     compile_should_fail_with(
         r#"
         fn main() {
@@ -413,7 +416,7 @@ fn field_assign_on_non_class() {
             x.value = 10
         }
         "#,
-        "cannot assign to field of immutable variable",
+        "field assignment on non-class type int",
     );
 }
 

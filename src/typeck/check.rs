@@ -642,11 +642,56 @@ fn check_stmt(
         }
         Stmt::Serve { service, port } => {
             let svc_ty = infer_expr(&service.node, service.span, env, None)?;
-            if !matches!(svc_ty, PlutoType::Class(_)) {
+            let PlutoType::Class(svc_name) = &svc_ty else {
                 return Err(CompileError::type_err(
                     format!("serve expects a service object (a class instance), found {svc_ty}"),
                     service.span,
                 ));
+            };
+            // Every served method is part of the remote surface: a parameter
+            // or return type that nests an entity inside a value cannot cross
+            // the boundary (a copy would fork the entity's identity, #426).
+            // Reject here instead of silently dropping the method from
+            // dispatch — the silent drop left the service surface quietly
+            // smaller than its declaration. Top-level entities cross as
+            // handles and stay legal.
+            let method_names = env
+                .classes
+                .get(svc_name)
+                .map(|info| info.methods.clone())
+                .unwrap_or_default();
+            for mname in &method_names {
+                let mangled = mangle_method(svc_name, mname);
+                let Some(sig) = env.functions.get(&mangled) else { continue };
+                for (i, param_ty) in sig.params.iter().skip(1).enumerate() {
+                    if let Some(entity) = super::types::nested_entity_in_value(param_ty, env) {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "cannot serve '{svc_name}': parameter {} of method \
+                                 '{mname}' has type {param_ty} which contains entity \
+                                 '{entity}' — entities nested inside values cannot cross \
+                                 a service boundary (a copy would fork their identity); \
+                                 pass the entity directly (it crosses as a handle) or \
+                                 carry an id field instead",
+                                i + 1
+                            ),
+                            service.span,
+                        ));
+                    }
+                }
+                if let Some(entity) = super::types::nested_entity_in_value(&sig.return_type, env) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "cannot serve '{svc_name}': method '{mname}' returns {} \
+                             which contains entity '{entity}' — entities nested inside \
+                             values cannot cross a service boundary (a copy would fork \
+                             their identity); return the entity directly (it crosses as \
+                             a handle) or carry an id field instead",
+                            sig.return_type
+                        ),
+                        service.span,
+                    ));
+                }
             }
             let port_ty = infer_expr(&port.node, port.span, env, None)?;
             if port_ty != PlutoType::Int {
@@ -1206,16 +1251,6 @@ fn check_field_assign(
     value: &Spanned<Expr>,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    // Check caller-side mutability
-    if let Some(root) = root_variable(&object.node) && root != "self" && env.is_immutable(root) {
-        return Err(CompileError::type_err(
-            format!(
-                "cannot assign to field of immutable variable '{}'; declare with 'let mut' to allow mutation",
-                root
-            ),
-            object.span,
-        ));
-    }
     let obj_type = infer_expr(&object.node, object.span, env, None)?;
     let class_name = match &obj_type {
         PlutoType::Class(name) => name.clone(),
@@ -1241,6 +1276,37 @@ fn check_field_assign(
                 field.span,
             )
         })?;
+    // Entity fields may only be written through `self` inside the entity's
+    // own methods. The object construct's concurrency contract is
+    // per-instance METHOD serialization (rfc-objects.md); an external
+    // `e.field = ...` is a plain store that takes no lock, so it races any
+    // concurrently executing method and loses updates (#427). Checked before
+    // caller-side mutability: no amount of `let mut` makes this legal, so
+    // the "declare with 'let mut'" advice would mislead.
+    if env.object_types.contains(&class_name)
+        && !matches!(&object.node, Expr::Ident(name) if name == "self")
+    {
+        return Err(CompileError::type_err(
+            format!(
+                "cannot assign to field '{}' of entity '{class_name}' from outside its \
+                 own methods: entities serialize methods, not field pokes — an external \
+                 field write bypasses the per-instance lock; mutate through a method \
+                 instead (e.g. a `mut self` setter)",
+                field.node
+            ),
+            field.span,
+        ));
+    }
+    // Check caller-side mutability
+    if let Some(root) = root_variable(&object.node) && root != "self" && env.is_immutable(root) {
+        return Err(CompileError::type_err(
+            format!(
+                "cannot assign to field of immutable variable '{}'; declare with 'let mut' to allow mutation",
+                root
+            ),
+            object.span,
+        ));
+    }
     let val_type = infer_expr(&value.node, value.span, env, Some(&field_type))?;
     if !types_compatible(&val_type, &field_type, env) {
         return Err(CompileError::type_err(
