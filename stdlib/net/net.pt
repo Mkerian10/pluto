@@ -37,8 +37,22 @@ pub object TcpConnection {
     // is a construction value, which two-state clauses do not constrain).
     invariant self.fd == old(self.fd)
 
+    // Reads block at most the deadline set by set_read_timeout (if any);
+    // a timed-out read raises TimedOut — a plain local fact ("no bytes
+    // arrived within the deadline"), distinct from connection errors and
+    // never a claim that the peer failed.
     fn read(self, max_bytes: int) string {
-        return socket.read(self.fd, max_bytes)
+        let data = socket.read(self.fd, max_bytes)
+        if socket.read_timed_out() == 1 {
+            raise TimedOut { message: "socket read timed out" }
+        }
+        return data
+    }
+
+    // Set a read deadline (milliseconds) for subsequent read() calls on this
+    // connection (SO_RCVTIMEO). ms <= 0 clears the deadline.
+    fn set_read_timeout(self, ms: int) int {
+        return socket.set_read_timeout(self.fd, ms)
     }
 
     fn write(self, data: string) int {

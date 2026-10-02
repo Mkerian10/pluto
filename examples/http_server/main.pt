@@ -98,7 +98,7 @@ fn main() {
 
     while true {
         let conn = server.accept()
-        let request = conn.read(4096)
+        let request = conn.read(4096) catch ""
 
         if request.len() > 0 {
             let path = parse_request_path(request)

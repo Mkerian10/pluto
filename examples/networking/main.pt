@@ -10,7 +10,7 @@ import std.socket
 //   curl http://127.0.0.1:<port>
 
 fn handle(conn: net.TcpConnection) {
-    let request = conn.read(4096)
+    let request = conn.read(4096) catch ""
     print("--- request ---")
     print(request)
 

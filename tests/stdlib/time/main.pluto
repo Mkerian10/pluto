@@ -40,11 +40,16 @@ test "two monotonic calls are non-decreasing" {
     expect(b >= a).to_be_true()
 }
 
-test "sleep 50ms" {
+// In deterministic tests sleep is a YIELD POINT, not wall time: the
+// duration is semantically erased and the scheduler resumes the fiber when
+// it chooses (timeout-as-choice model, issue #370). A real nanosleep here
+// used to stall the whole single-threaded scheduler. So these tests assert
+// sleep completes promptly instead of burning wall clock.
+test "sleep returns promptly (yield point, duration erased)" {
     let start = time.monotonic()
     time.sleep(50)
     let delta = time.monotonic() - start
-    expect(delta >= 40).to_be_true()
+    expect(delta < 50).to_be_true()
 }
 
 test "sleep 0 does not hang" {
@@ -52,11 +57,11 @@ test "sleep 0 does not hang" {
     expect(true).to_be_true()
 }
 
-test "elapsed after sleep" {
+test "elapsed still works across a sleep" {
     let start = time.monotonic()
     time.sleep(50)
     let e = time.elapsed(start)
-    expect(e >= 40).to_be_true()
+    expect(e >= 0).to_be_true()
 }
 
 test "elapsed near-instant" {

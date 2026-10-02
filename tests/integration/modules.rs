@@ -993,7 +993,7 @@ fn main() {
     let conn = server.accept()
 
     client.write("ping")
-    let msg = conn.read(1024)
+    let msg = conn.read(1024) catch ""
     print(msg)
 
     conn.close()
@@ -1003,6 +1003,71 @@ fn main() {
 "#),
     ]);
     assert_eq!(out, "ping\n");
+}
+
+#[test]
+fn stdlib_net_read_timeout_raises_timed_out() {
+    // A read deadline on a quiet connection raises TimedOut after roughly
+    // the deadline; EOF after the peer closes stays a plain empty read
+    // (timeout is distinct from connection end). Dynamic port via port 0.
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.net
+import std.time
+
+fn main() {
+    let server = net.listen("127.0.0.1", 0)
+    let port = server.port()
+    let client = net.connect("127.0.0.1", port)
+    let conn = server.accept()
+
+    client.set_read_timeout(100)
+    let start = time.monotonic()
+    let data = client.read(64) catch err: TimedOut { "TIMEOUT" }
+    let waited = time.monotonic() - start >= 80
+    print(data)
+    print(waited)
+
+    // EOF is NOT a timeout: close the peer, the read returns empty without
+    // raising TimedOut.
+    conn.close()
+    let eof = client.read(64) catch err: TimedOut { "WRONG" }
+    print(f"eof:[{eof}]")
+
+    client.close()
+    server.close()
+}
+"#),
+    ]);
+    assert_eq!(out, "TIMEOUT
+true
+eof:[]
+");
+}
+
+#[test]
+fn stdlib_net_read_within_deadline_delivers_data() {
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.net
+
+fn main() {
+    let server = net.listen("127.0.0.1", 0)
+    let port = server.port()
+    let client = net.connect("127.0.0.1", port)
+    let conn = server.accept()
+
+    client.set_read_timeout(5000)
+    conn.write("hello")
+    let data = client.read(64) catch err: TimedOut { "TIMEOUT" }
+    print(data)
+
+    conn.close()
+    client.close()
+    server.close()
+}
+"#),
+    ]);
+    assert_eq!(out, "hello
+");
 }
 
 #[test]

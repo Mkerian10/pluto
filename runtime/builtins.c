@@ -1143,7 +1143,28 @@ long __pluto_socket_connect(long fd, void *host_str, long port) {
     return rc == 0 ? 0 : -1;
 }
 
+// Read-deadline support (issue #370). SO_RCVTIMEO is the mechanism
+// __pluto_serve_accept already uses for its hardcoded 5s guard; this exposes
+// it as a per-connection setting. A timed-out read is reported through a
+// thread-local flag so the stdlib can raise a typed TimedOut distinct from
+// connection errors — a plain socket-read timeout is a LOCAL fact ("no bytes
+// arrived within the deadline"), never a claim about the peer.
+static __thread int socket_read_timed_out = 0;
+
+long __pluto_socket_set_read_timeout(long fd, long ms) {
+    struct timeval tv;
+    if (ms < 0) ms = 0;  // 0 clears the deadline (kernel semantics)
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    return setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0 ? 0 : -1;
+}
+
+long __pluto_socket_read_timed_out(void) {
+    return socket_read_timed_out;
+}
+
 void *__pluto_socket_read(long fd, long max_bytes) {
+    socket_read_timed_out = 0;
     if (max_bytes <= 0) {
         return __pluto_string_new("", 0);
     }
@@ -1152,8 +1173,12 @@ void *__pluto_socket_read(long fd, long max_bytes) {
     if (!buf) return __pluto_string_new("", 0);
     __pluto_gc_enter_safe_region();
     ssize_t n = read((int)fd, buf, (size_t)max_bytes);
+    int read_errno = errno;
     __pluto_gc_leave_safe_region();
     if (n <= 0) {
+        if (n < 0 && (read_errno == EAGAIN || read_errno == EWOULDBLOCK)) {
+            socket_read_timed_out = 1;
+        }
         free(buf);
         return __pluto_string_new("", 0);
     }
@@ -1223,15 +1248,26 @@ long __pluto_write_framed(long fd, void *str) {
     return 0;
 }
 
+// Whether the last __pluto_read_framed failure on this thread was a read
+// deadline expiring (SO_RCVTIMEO) rather than EOF/reset. Lets the RPC client
+// name the timeout in its (still ambiguous) classification message.
+static __thread int framed_read_timed_out = 0;
+
 // Read a length-framed message into a pluto string. Returns NULL on failure.
 void *__pluto_read_framed(long fd) {
+    framed_read_timed_out = 0;
     unsigned char hdr[4];
     long got = 0;
     while (got < 4) {
         __pluto_gc_enter_safe_region();
         ssize_t n = read((int)fd, hdr + got, (size_t)(4 - got));
+        int read_errno = errno;
         __pluto_gc_leave_safe_region();
-        if (n <= 0) return NULL;
+        if (n <= 0) {
+            if (n < 0 && (read_errno == EAGAIN || read_errno == EWOULDBLOCK))
+                framed_read_timed_out = 1;
+            return NULL;
+        }
         got += n;
     }
     long len = ((long)hdr[0] << 24) | ((long)hdr[1] << 16) | ((long)hdr[2] << 8) | (long)hdr[3];
@@ -1242,8 +1278,14 @@ void *__pluto_read_framed(long fd) {
     while (off < len) {
         __pluto_gc_enter_safe_region();
         ssize_t n = read((int)fd, buf + off, (size_t)(len - off));
+        int read_errno = errno;
         __pluto_gc_leave_safe_region();
-        if (n <= 0) { free(buf); return NULL; }
+        if (n <= 0) {
+            if (n < 0 && (read_errno == EAGAIN || read_errno == EWOULDBLOCK))
+                framed_read_timed_out = 1;
+            free(buf);
+            return NULL;
+        }
         off += n;
     }
     void *result = __pluto_string_new(buf, len);
@@ -1482,13 +1524,33 @@ static void *pluto_request_to_addr(const char *addr, void *method_str, void *pay
         pluto_boundary_fail(1, "send failed before the request frame completed (not dispatched)");
         return NULL;
     }
+    // Client-side response deadline (rfc-distributed-safety.md names this
+    // gap): PLUTO_RPC_TIMEOUT_MS, default 30s, <= 0 disables. Applied only
+    // AFTER the request frame went out — a response-wait timeout is the
+    // canonical AMBIGUOUS failure and must never be laundered into a
+    // definite one.
+    {
+        long rpc_timeout_ms = 30000;
+        const char *env = getenv("PLUTO_RPC_TIMEOUT_MS");
+        if (env && *env) rpc_timeout_ms = atol(env);
+        if (rpc_timeout_ms > 0) {
+            __pluto_socket_set_read_timeout(fd, rpc_timeout_ms);
+        }
+    }
     void *resp = __pluto_read_framed(fd);
+    int timed_out = framed_read_timed_out;
     __pluto_socket_close(fd);
     if (!resp) {
         // The full request frame was handed off and no response returned
-        // (reset, EOF, or a truncated response). The effect may or may not
-        // have applied — the one honest classification is ambiguity.
-        pluto_boundary_fail(0, "request sent, no response (outcome unknown)");
+        // (reset, EOF, truncated response, or the response deadline
+        // elapsed). The effect may or may not have applied — the one honest
+        // classification is ambiguity; the timeout is named in the message
+        // as diagnostic detail only.
+        if (timed_out) {
+            pluto_boundary_fail(0, "request sent, no response within deadline (outcome unknown)");
+        } else {
+            pluto_boundary_fail(0, "request sent, no response (outcome unknown)");
+        }
     }
     return resp; // NULL on read failure -> caller raises NetworkError
 }
