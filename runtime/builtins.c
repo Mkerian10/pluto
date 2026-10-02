@@ -2864,16 +2864,6 @@ void *__pluto_fs_list_dir(void *path_str) {
     return arr;
 }
 
-// Transitional shims for the pre-typestate stdlib surface; removed when
-// stdlib/fs/fs.pt moves to the negative-errno protocol and the Seek enum.
-void *__pluto_fs_strerror(void) {
-    const char *msg = strerror(errno);
-    return __pluto_string_new(msg, (long)strlen(msg));
-}
-long __pluto_fs_seek_set(void) { return 0; }
-long __pluto_fs_seek_cur(void) { return 1; }
-long __pluto_fs_seek_end(void) { return 2; }
-
 void *__pluto_fs_temp_dir(void) {
     __pluto_fs_saved_errno = 0;
     char tmpl[] = "/tmp/pluto_XXXXXX";

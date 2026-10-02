@@ -1,118 +1,436 @@
+// std.fs — the filesystem API as evidence (docs/design/rfc-fs-api.md).
+//
+// The OS is the authority: the filesystem owns the real state. A `File`
+// value is a CAPABILITY the authority minted at open() — a linear,
+// must-release piece of evidence ("I opened this and have not yet
+// closed it"). Typestate makes the protocol compile-checked:
+//
+// - open_read/open_write/open_append mint a `File<_, Open>` in a
+//   must-release state: dropping it, capturing it in a closure/spawn, or
+//   storing it in a field is a compile error. fd leaks are inexpressible.
+// - read/write/seek exist only `where S == Open` (and only in the right
+//   mode): use-after-close, double-close, and write-on-a-read-handle are
+//   not runtime errors; the methods do not exist on those types.
+// - close() is a consuming transition to `Closed` (inert, droppable).
+// - a failed write or sync DEGRADES the handle: the error carries the
+//   file as `File<Write, Poisoned>`, and the only method on Poisoned is
+//   discard(). The fsyncgate rule — never retry a failed sync, the
+//   kernel cannot re-issue the durability warrant — is not
+//   documentation; the method to retry does not exist on the type the
+//   failure hands you. Recovery is reopen-and-rewrite from data the
+//   program still owns, or crash and recover from a log.
+//
+// Durability (issue #367): sync() means FULL durability on every
+// platform — fsync on Linux, fcntl(F_FULLFSYNC) on Darwin (Darwin's
+// fsync does not flush the drive's volatile cache). ENOTSUP from
+// F_FULLFSYNC (SMB/NFS mounts) raises; it never silently degrades.
+// The implementation is syscall-faithful, not crash-tested: CI verifies
+// the syscalls are issued and the error paths are honest; actual
+// power-loss durability and drive-firmware honesty cannot be tested
+// here.
+//
+// Every fs failure is DEFINITE (local syscalls — the request never
+// leaves the process), so no failure here is ambiguous. The one
+// epistemically special failure is sync: definite failure with
+// retroactive scope — it destroys the warrant for previously-reported
+// write successes. That is what Degraded-carrying-Poisoned encodes.
+
+// ── Errors ───────────────────────────────────────────────────────────
+//
+// Split by what callers DO, not errno taxonomy: NotFound is the one
+// branch-worthy case; FileError carries the path and the raw errno
+// captured at the syscall site for everything else definite.
+
 pub error FileError {
+    path: string
+    code: int
     message: string
 }
 
-extern fn __pluto_fs_strerror() string
+// ENOENT — the branch-worthy case (404 shapes, config defaulting).
+pub error NotFound {
+    path: string
+}
+
+// close() failed. The fd is released regardless (POSIX deallocates the
+// descriptor even when close fails) — this is a durability report, not
+// a retry invitation.
+pub error CloseError {
+    code: int
+    message: string
+}
+
+// One-shot durability failure (sync_dir, replace_all). For replace_all:
+// SyncError means the rename LANDED but its durability is unwarranted
+// (the directory fsync failed); FileError means the old file is intact.
+pub error SyncError {
+    path: string
+    code: int
+    message: string
+}
+
+// Degradation: a write or sync on an open handle failed, destroying the
+// durability warrant for the fd. The payload is the file in its honest
+// post-failure state — catching this consumes the Open binding (the
+// value now lives in `.file`), and a wildcard catch cannot swallow it:
+// the Poisoned payload is must-release, so only a typed handler that
+// takes on the obligation is legal.
+pub error Degraded {
+    file: File<Write, Poisoned>
+    code: int
+    message: string
+}
+
+// ── Runtime externs ──────────────────────────────────────────────────
+//
+// Protocol: long-returning externs return >= 0 on success and -errno on
+// failure; string/array-returning externs record errno in a
+// thread-local read via __pluto_fs_last_errno() (0 = success), captured
+// at the syscall site before control returns to Pluto code.
+
+extern fn __pluto_fs_last_errno() int
+extern fn __pluto_fs_errstr(code: int) string
+extern fn __pluto_fs_err_noent() int
 extern fn __pluto_fs_open_read(path: string) int
 extern fn __pluto_fs_open_write(path: string) int
 extern fn __pluto_fs_open_append(path: string) int
 extern fn __pluto_fs_close(fd: int) int
 extern fn __pluto_fs_read(fd: int, max_bytes: int) string
 extern fn __pluto_fs_write(fd: int, data: string) int
-extern fn __pluto_fs_seek(fd: int, offset: int, whence: int) int
+extern fn __pluto_fs_seek(fd: int, offset: int, whence_tag: int) int
+extern fn __pluto_fs_sync(fd: int) int
+extern fn __pluto_fs_sync_data(fd: int) int
+extern fn __pluto_fs_sync_dir(path: string) int
+extern fn __pluto_fs_replace_all(path: string, data: string) int
+extern fn __pluto_fs_replace_phase() int
 extern fn __pluto_fs_read_all(path: string) string
 extern fn __pluto_fs_write_all(path: string, data: string) int
 extern fn __pluto_fs_append_all(path: string, data: string) int
 extern fn __pluto_fs_exists(path: string) int
 extern fn __pluto_fs_file_size(path: string) int
+extern fn __pluto_fs_stat(path: string) [int]
 extern fn __pluto_fs_is_dir(path: string) int
 extern fn __pluto_fs_is_file(path: string) int
 extern fn __pluto_fs_remove(path: string) int
 extern fn __pluto_fs_mkdir(path: string) int
+extern fn __pluto_fs_create_dir_all(path: string) int
 extern fn __pluto_fs_rmdir(path: string) int
+extern fn __pluto_fs_remove_dir_all(path: string) int
 extern fn __pluto_fs_rename(from: string, to: string) int
 extern fn __pluto_fs_copy(from: string, to: string) int
 extern fn __pluto_fs_list_dir(path: string) [string]
 extern fn __pluto_fs_temp_dir() string
-extern fn __pluto_fs_seek_set() int
-extern fn __pluto_fs_seek_cur() int
-extern fn __pluto_fs_seek_end() int
 
-// An open file is an entity: it owns an OS file descriptor and a cursor, so
-// two copies of one File would be semantically wrong (shared offset, double
-// close). As an object it is spawn-shared and its methods serialize.
-pub object File {
+// ── Typestate markers ────────────────────────────────────────────────
+// Plain classes used as phantom type arguments; never constructed.
+
+// Modes — fixed at open, never transition.
+pub class Read { tag: int }
+pub class Write { tag: int }
+
+// States.
+pub class Open { tag: int }
+pub class Poisoned { tag: int }
+pub class Closed { tag: int }
+
+// Seek target (replaces the old whence-int constants).
+pub enum Seek {
+    Start { offset: int }
+    Current { delta: int }
+    End { delta: int }
+}
+
+// ── The handle ───────────────────────────────────────────────────────
+
+pub class File<M, S> {
     fd: int
 
-    // The descriptor is fixed for the entity's whole life (a two-state
-    // frame invariant, proven at every mut-self boundary and foreign write
-    // site): a File never re-points at a different OS file. Note what this
-    // deliberately rules out: the "-1 after close" sentinel pattern. close()
-    // releases the OS resource but does NOT rewrite fd — staleness after
-    // close is the OS's error (read/write/seek report it), not a mutated
-    // handle.
+    // The descriptor is fixed for the value's whole life within a state
+    // (two-state frame invariant, proven once on the template — the
+    // vocabulary is param-independent). Transitions construct fresh
+    // values carrying the same fd; no "-1 after close" sentinel exists
+    // anywhere.
     invariant self.fd == old(self.fd)
 
-    fn read(self, max_bytes: int) string {
-        return __pluto_fs_read(self.fd, max_bytes)
+    // Evidence is not duplicable and may not be abandoned: an Open or
+    // Poisoned handle must be transitioned out (close/discard), moved
+    // onward, or returned. Closed is inert and droppable.
+    must_release S == Open
+    must_release S == Poisoned
+
+    // Read up to max_bytes. "" means EOF; failures raise FileError (the
+    // runtime disambiguates EOF from error, so "" is never a disguised
+    // failure). `requires max_bytes > 0` feeds the prover; call sites
+    // that guard (or pass literals) are provable, and the entry check
+    // elides via the $nochk twin once per-instantiation twins land for
+    // generic-class methods (contracts.md phase 6).
+    fn read(self, max_bytes: int) string
+        where M == Read, S == Open
+        requires max_bytes > 0
+    {
+        let s = __pluto_fs_read(self.fd, max_bytes)
+        let e = __pluto_fs_last_errno()
+        if e != 0 {
+            raise FileError { path: "", code: e, message: __pluto_fs_errstr(e) }
+        }
+        return s
     }
 
-    fn write(self, data: string) int {
+    // Write all of data: loops to completion, so success means every
+    // byte reached the OS (short writes are never silently dropped). A
+    // failed write leaves the prefix state unknown — the same destroyed
+    // warrant as a failed sync — so the handle degrades (owner decision
+    // D3): the error carries this file as File<Write, Poisoned>.
+    fn write(self, data: string)
+        where M == Write, S == Open
+    {
         let n = __pluto_fs_write(self.fd, data)
         if n < 0 {
-            raise FileError { message: __pluto_fs_strerror() }
+            let code = 0 - n
+            raise Degraded {
+                file: File<Write, Poisoned> { fd: self.fd },
+                code: code,
+                message: __pluto_fs_errstr(code)
+            }
         }
-        return n
     }
 
-    fn seek(self, offset: int, whence: int) int {
-        let pos = __pluto_fs_seek(self.fd, offset, whence)
-        if pos < 0 {
-            raise FileError { message: __pluto_fs_strerror() }
+    // Full durability: after this returns, everything previously
+    // written through this fd is durable — fsync on Linux, F_FULLFSYNC
+    // on Darwin. On failure the durability warrant for this fd is
+    // destroyed and the kernel cannot re-issue it (errseq_t reports
+    // once and marks pages clean — fsyncgate): the handle degrades.
+    fn sync(self)
+        where M == Write, S == Open
+    {
+        let r = __pluto_fs_sync(self.fd)
+        if r < 0 {
+            let code = 0 - r
+            raise Degraded {
+                file: File<Write, Poisoned> { fd: self.fd },
+                code: code,
+                message: __pluto_fs_errstr(code)
+            }
         }
-        return pos
     }
 
-    fn close(self) {
+    // Data + size metadata only (skips mtime-only flushes): fdatasync
+    // on Linux; on Darwin there is no honest cheaper form, so this is
+    // F_FULLFSYNC too. Same degradation contract as sync().
+    fn sync_data(self)
+        where M == Write, S == Open
+    {
+        let r = __pluto_fs_sync_data(self.fd)
+        if r < 0 {
+            let code = 0 - r
+            raise Degraded {
+                file: File<Write, Poisoned> { fd: self.fd },
+                code: code,
+                message: __pluto_fs_errstr(code)
+            }
+        }
+    }
+
+    // Reposition the OS cursor; returns the new offset. Both modes:
+    // seek is how a reader skips and how a writer (non-append)
+    // repositions. Note: there is no `pos` field mirroring the cursor —
+    // that would be a belief about the authority's state presented as
+    // knowledge (O_APPEND writes and short reads would falsify it).
+    fn seek(self, to: Seek) int
+        where S == Open
+    {
+        let mut off = 0
+        let mut tag = 0
+        match to {
+            Seek.Start { offset: o } {
+                off = o
+                tag = 0
+            }
+            Seek.Current { delta: d } {
+                off = d
+                tag = 1
+            }
+            Seek.End { delta: d } {
+                off = d
+                tag = 2
+            }
+        }
+        let r = __pluto_fs_seek(self.fd, off, tag)
+        if r < 0 {
+            let code = 0 - r
+            raise FileError { path: "", code: code, message: __pluto_fs_errstr(code) }
+        }
+        return r
+    }
+
+    // Consuming transition out: releases the fd and discharges the
+    // obligation. Surfaces the close() result — on NFS-class
+    // filesystems close is where deferred write errors appear — but
+    // either way the fd is gone (POSIX deallocates the descriptor even
+    // when close fails): CloseError is a durability report, not a retry
+    // invitation. The returned Closed value is inert and droppable, so
+    // `f.close()!` in statement position fully discharges.
+    fn close(self) File<M, Closed>
+        where S == Open
+    {
         let r = __pluto_fs_close(self.fd)
         if r < 0 {
-            raise FileError { message: __pluto_fs_strerror() }
+            let code = 0 - r
+            raise CloseError { code: code, message: __pluto_fs_errstr(code) }
         }
+        return File<M, Closed> { fd: self.fd }
     }
+
+    // The only exit from Poisoned. Closes the fd and NEVER raises: the
+    // durability warrant for this fd is already destroyed, so a close
+    // report would be testimony about nothing. Recovery is
+    // reopen-and-rewrite from data the program still owns.
+    fn discard(self) File<M, Closed>
+        where S == Poisoned
+    {
+        __pluto_fs_close(self.fd)
+        return File<M, Closed> { fd: self.fd }
+    }
+
+    // Reserved for issue #368 (bytes I/O), blocked on extern support
+    // for the bytes type. The RFC fixes their shapes so that work drops
+    // in without touching this design:
+    //   fn read_at(self, offset: int, max_bytes: int) bytes
+    //       where M == Read, S == Open
+    //       requires offset >= 0
+    //       requires max_bytes > 0
+    //   fn read_bytes(self, max_bytes: int) bytes
+    //       where M == Read, S == Open
+    //       requires max_bytes > 0
+    //   fn write_at(self, offset: int, data: bytes)
+    //       where M == Write, S == Open
+    //       requires offset >= 0
+    //   fn write_bytes(self, data: bytes)
+    //       where M == Write, S == Open
 }
 
-pub fn open_read(path: string) File {
+// ── Constructors: the authority mints evidence ───────────────────────
+
+// Raises NotFound | FileError.
+pub fn open_read(path: string) File<Read, Open> {
     let fd = __pluto_fs_open_read(path)
     if fd < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
+        raise_path_error(path, 0 - fd)!
     }
-    return File { fd: fd }
+    return File<Read, Open> { fd: fd }
 }
 
-pub fn open_write(path: string) File {
+// O_WRONLY|O_CREAT|O_TRUNC.
+pub fn open_write(path: string) File<Write, Open> {
     let fd = __pluto_fs_open_write(path)
     if fd < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
+        raise_path_error(path, 0 - fd)!
     }
-    return File { fd: fd }
+    return File<Write, Open> { fd: fd }
 }
 
-pub fn open_append(path: string) File {
+// O_WRONLY|O_CREAT|O_APPEND. Append-ness lives in the fd (O_APPEND),
+// not the type: a third mode marker would force method duplication for
+// no checked gain.
+pub fn open_append(path: string) File<Write, Open> {
     let fd = __pluto_fs_open_append(path)
     if fd < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
+        raise_path_error(path, 0 - fd)!
     }
-    return File { fd: fd }
+    return File<Write, Open> { fd: fd }
 }
 
-pub fn read_all(path: string) string {
-    if __pluto_fs_exists(path) == 0 {
-        raise FileError { message: "file not found: " + path }
+// ── Metadata ─────────────────────────────────────────────────────────
+
+pub class Metadata {
+    size: int
+    modified: int        // unix seconds
+    is_dir: bool
+    is_file: bool
+    mode: int            // permission bits
+
+    invariant self.size >= 0
+    // Constructed by stat() behind an `if size < 0 { raise }` guard —
+    // the construction proof discharges from the flow fact. std.fs
+    // proves its own invariant; callers assume size >= 0 for free.
+}
+
+// Raises NotFound | FileError.
+pub fn stat(path: string) Metadata {
+    let a = __pluto_fs_stat(path)
+    if a.len() == 0 {
+        raise_path_error(path, __pluto_fs_last_errno())!
     }
-    return __pluto_fs_read_all(path)
+    let size = a[0]
+    if size < 0 {
+        raise FileError { path: path, code: 0, message: "stat reported a negative size" }
+    }
+    return Metadata {
+        size: size,
+        modified: a[1],
+        is_dir: a[2] == 1,
+        is_file: a[3] == 1,
+        mode: a[4]
+    }
+}
+
+// ── One-shot helpers ─────────────────────────────────────────────────
+// The fd lives and dies inside the call, so no evidence value appears;
+// close() errors are folded into the result (issue #367 fix) — success
+// means the bytes were written AND the descriptor closed cleanly.
+
+// Raises NotFound | FileError.
+pub fn read_all(path: string) string {
+    let s = __pluto_fs_read_all(path)
+    let e = __pluto_fs_last_errno()
+    if e != 0 {
+        raise_path_error(path, e)!
+    }
+    return s
 }
 
 pub fn write_all(path: string, data: string) {
     let r = __pluto_fs_write_all(path, data)
     if r < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
+        raise_path_error(path, 0 - r)!
     }
 }
 
 pub fn append_all(path: string, data: string) {
     let r = __pluto_fs_append_all(path, data)
     if r < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
+        raise_path_error(path, 0 - r)!
+    }
+}
+
+// Atomic durable replace (issue #367): write a temp file in the same
+// directory, sync it to full durability, rename it over `path`, then
+// fsync the parent directory (the name→inode mapping is the DIRECTORY's
+// dirty page, not the file's). The four steps are packaged because the
+// only safe traversal is this one, and intermediate failures must clean
+// up the temp file.
+//
+// Error contract: FileError ⇒ the old file is intact (failure before
+// the rename; the temp was cleaned up). SyncError ⇒ the rename landed
+// but its durability is unwarranted (the directory fsync failed).
+pub fn replace_all(path: string, data: string) {
+    let r = __pluto_fs_replace_all(path, data)
+    if r < 0 {
+        let code = 0 - r
+        if __pluto_fs_replace_phase() == 1 {
+            raise SyncError { path: path, code: code, message: __pluto_fs_errstr(code) }
+        }
+        raise_path_error(path, code)!
+    }
+}
+
+// fsync a directory: required for crash-safe rename/create/remove
+// compositions. One-shot by nature (there is no directory handle).
+pub fn sync_dir(path: string) {
+    let r = __pluto_fs_sync_dir(path)
+    if r < 0 {
+        let code = 0 - r
+        raise SyncError { path: path, code: code, message: __pluto_fs_errstr(code) }
     }
 }
 
@@ -120,12 +438,9 @@ pub fn exists(path: string) bool {
     return __pluto_fs_exists(path) == 1
 }
 
+// Raises NotFound | FileError. Equivalent to stat(path).size.
 pub fn file_size(path: string) int {
-    let s = __pluto_fs_file_size(path)
-    if s < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
-    }
-    return s
+    return stat(path)!.size
 }
 
 pub fn is_dir(path: string) bool {
@@ -139,57 +454,92 @@ pub fn is_file(path: string) bool {
 pub fn remove(path: string) {
     let r = __pluto_fs_remove(path)
     if r < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
+        raise_path_error(path, 0 - r)!
     }
 }
 
 pub fn mkdir(path: string) {
     let r = __pluto_fs_mkdir(path)
     if r < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
+        raise_path_error(path, 0 - r)!
+    }
+}
+
+// mkdir -p: creates every missing component; an existing directory is
+// success.
+pub fn create_dir_all(path: string) {
+    let r = __pluto_fs_create_dir_all(path)
+    if r < 0 {
+        raise_path_error(path, 0 - r)!
     }
 }
 
 pub fn rmdir(path: string) {
     let r = __pluto_fs_rmdir(path)
     if r < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
+        raise_path_error(path, 0 - r)!
+    }
+}
+
+// Recursive delete (rm -rf). Refuses "/" and "" outright. Symlinks are
+// unlinked, never followed.
+pub fn remove_dir_all(path: string) {
+    if path == "" {
+        raise FileError { path: path, code: 0, message: "remove_dir_all: refusing to remove empty path" }
+    }
+    if path == "/" {
+        raise FileError { path: path, code: 0, message: "remove_dir_all: refusing to remove /" }
+    }
+    let r = __pluto_fs_remove_dir_all(path)
+    if r < 0 {
+        raise_path_error(path, 0 - r)!
     }
 }
 
 pub fn rename(from: string, to: string) {
     let r = __pluto_fs_rename(from, to)
     if r < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
+        raise_path_error(from, 0 - r)!
     }
 }
 
+// Close errors on either descriptor are surfaced (issue #367 fix);
+// both descriptors are always released.
 pub fn copy(from: string, to: string) {
     let r = __pluto_fs_copy(from, to)
     if r < 0 {
-        raise FileError { message: __pluto_fs_strerror() }
+        raise_path_error(from, 0 - r)!
     }
 }
 
+// Raises NotFound | FileError (e.g. ENOTDIR).
 pub fn list_dir(path: string) [string] {
-    if __pluto_fs_is_dir(path) == 0 {
-        raise FileError { message: "not a directory: " + path }
+    let entries = __pluto_fs_list_dir(path)
+    let e = __pluto_fs_last_errno()
+    if e != 0 {
+        raise_path_error(path, e)!
     }
-    return __pluto_fs_list_dir(path)
+    return entries
 }
 
 pub fn temp_dir() string {
     return __pluto_fs_temp_dir()
 }
 
-pub fn SEEK_SET() int {
-    return __pluto_fs_seek_set()
-}
+// Reserved for issue #368 (bytes I/O), blocked on extern support for
+// the bytes type:
+//   pub fn read_all_bytes(path: string) bytes
+//   pub fn write_all_bytes(path: string, data: bytes)
+//   pub fn append_all_bytes(path: string, data: bytes)
 
-pub fn SEEK_CUR() int {
-    return __pluto_fs_seek_cur()
-}
+// ── Internal ─────────────────────────────────────────────────────────
 
-pub fn SEEK_END() int {
-    return __pluto_fs_seek_end()
+// The uniform path-failure raise: ENOENT is the branch-worthy case and
+// becomes NotFound; every other errno is a general FileError carrying
+// the raw code captured at the syscall site.
+fn raise_path_error(path: string, code: int) {
+    if code == __pluto_fs_err_noent() {
+        raise NotFound { path: path }
+    }
+    raise FileError { path: path, code: code, message: __pluto_fs_errstr(code) }
 }
