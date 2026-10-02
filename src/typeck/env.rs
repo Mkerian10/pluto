@@ -137,6 +137,8 @@ pub enum MethodResolution {
     ChannelTrySend,
     /// Channel try_recv — fallible (ChannelClosed + ChannelEmpty)
     ChannelTryRecv,
+    /// Channel recv_timeout — fallible (ChannelClosed + TimedOut)
+    ChannelRecvTimeout,
     /// Task.detach() — infallible
     TaskDetach,
     /// Task.cancel() — infallible
@@ -741,6 +743,7 @@ impl TypeEnv {
             Some(MethodResolution::ChannelRecv) => Ok(true),
             Some(MethodResolution::ChannelTrySend) => Ok(true),
             Some(MethodResolution::ChannelTryRecv) => Ok(true),
+            Some(MethodResolution::ChannelRecvTimeout) => Ok(true),
             Some(MethodResolution::TaskDetach) => Ok(false),
             Some(MethodResolution::TaskCancel) => Ok(false),
             None => Err(format!(

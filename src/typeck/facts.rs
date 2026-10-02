@@ -1585,7 +1585,7 @@ pub fn immediate_exprs(stmt: &crate::parser::ast::Stmt) -> Vec<&Spanned<Expr>> {
                 exprs.push(c);
             }
         }
-        Stmt::Select { arms, .. } => {
+        Stmt::Select { arms, after, .. } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => exprs.push(channel),
@@ -1594,6 +1594,9 @@ pub fn immediate_exprs(stmt: &crate::parser::ast::Stmt) -> Vec<&Spanned<Expr>> {
                         exprs.push(value);
                     }
                 }
+            }
+            if let Some(a) = after {
+                exprs.push(&a.duration);
             }
         }
         Stmt::Scope { seeds, .. } => {

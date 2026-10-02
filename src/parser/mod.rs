@@ -2968,6 +2968,7 @@ impl<'a> Parser<'a> {
 
         let mut arms = Vec::new();
         let mut default_block = None;
+        let mut after_arm: Option<SelectAfter> = None;
 
         while self.peek().is_some() && !matches!(self.peek().expect("token should exist after is_some check").node, Token::RBrace) {
             // Check for `default { ... }`
@@ -2980,6 +2981,31 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 default_block = Some(self.parse_block()?);
+                self.skip_newlines();
+                continue;
+            }
+
+            // Check for `after <int-expr> { ... }` — the timeout arm
+            // (contextual keyword, precedent: `default`). `after` stays a
+            // valid identifier elsewhere: `after = ch.recv()` (recv binding)
+            // and `after.send(v)` (send channel) still parse as ordinary
+            // arms because the timeout form is only taken when `after` is
+            // not followed by `=` or `.`.
+            if self.is_select_after_ahead() {
+                let after_tok = self.advance().expect("peeked token exists");
+                let after_span = after_tok.span;
+                if after_arm.is_some() {
+                    return Err(CompileError::syntax(
+                        "duplicate after arm in select (at most one timeout)",
+                        after_span,
+                    ));
+                }
+                let old_restrict = self.restrict_struct_lit;
+                self.restrict_struct_lit = true;
+                let duration = self.parse_expr(0)?;
+                self.restrict_struct_lit = old_restrict;
+                let body = self.parse_block()?;
+                after_arm = Some(SelectAfter { duration, body });
                 self.skip_newlines();
                 continue;
             }
@@ -3042,14 +3068,48 @@ impl<'a> Parser<'a> {
         let close = self.expect(&Token::RBrace)?;
         let end = close.span.end;
 
-        if arms.is_empty() && default_block.is_none() {
+        if arms.is_empty() && default_block.is_none() && after_arm.is_none() {
             return Err(CompileError::syntax(
                 "select must have at least one arm or a default",
                 Span::new(start, end),
             ));
         }
 
-        Ok(Spanned::new(Stmt::Select { arms, default: default_block }, Span::new(start, end)))
+        // `default` IS `after 0` — allowing both would be a contradiction
+        // (which one fires when nothing is ready?).
+        if default_block.is_some() && after_arm.is_some() {
+            return Err(CompileError::syntax(
+                "select cannot have both a default arm and an after arm (default is 'after 0'; keep one)",
+                Span::new(start, end),
+            ));
+        }
+
+        Ok(Spanned::new(
+            Stmt::Select { arms, default: default_block, after: after_arm },
+            Span::new(start, end),
+        ))
+    }
+
+    /// True when the next tokens form `after <expr>` as a select timeout arm
+    /// — the contextual keyword `after` NOT followed by `=` (a recv binding
+    /// named `after`) or `.` (a send on a channel named `after`).
+    fn is_select_after_ahead(&self) -> bool {
+        let mut i = self.pos;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        let Some(tok) = self.tokens.get(i) else { return false };
+        if !matches!(tok.node, Token::Ident) || &self.source[tok.span.start..tok.span.end] != "after" {
+            return false;
+        }
+        i += 1;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        !matches!(
+            self.tokens.get(i).map(|t| &t.node),
+            Some(Token::Eq) | Some(Token::Dot)
+        )
     }
 
     fn parse_scope_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
@@ -4547,6 +4607,12 @@ mod tests {
         let tokens = lex(src).unwrap();
         let mut parser = Parser::new(&tokens, src);
         parser.parse_program().unwrap()
+    }
+
+    fn parse_err(src: &str) -> CompileError {
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        parser.parse_program().unwrap_err()
     }
 
     #[test]
@@ -6082,6 +6148,64 @@ mod tests {
         match &f.body.node.stmts[1].node {
             Stmt::Select { default, .. } => {
                 assert!(default.is_some());
+            }
+            _ => panic!("expected select statement"),
+        }
+    }
+
+    #[test]
+    fn parse_select_with_after() {
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        val = r.recv() {\n        }\n        after 150 {\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[1].node {
+            Stmt::Select { arms, default, after } => {
+                assert_eq!(arms.len(), 1);
+                assert!(default.is_none());
+                let a = after.as_ref().expect("after arm parsed");
+                assert!(matches!(a.duration.node, Expr::IntLit(150)));
+            }
+            _ => panic!("expected select statement"),
+        }
+    }
+
+    #[test]
+    fn parse_select_after_expression_duration() {
+        // The duration is an arbitrary int expression (Raft: base + jitter).
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>()\n    let base = 150\n    select {\n        val = r.recv() {\n        }\n        after base + 100 {\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[2].node {
+            Stmt::Select { after, .. } => {
+                let a = after.as_ref().expect("after arm parsed");
+                assert!(matches!(a.duration.node, Expr::BinOp { .. }));
+            }
+            _ => panic!("expected select statement"),
+        }
+    }
+
+    #[test]
+    fn parse_select_after_plus_default_rejected() {
+        let err = parse_err("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        val = r.recv() {\n        }\n        default {\n        }\n        after 100 {\n        }\n    }\n}");
+        assert!(err.to_string().contains("cannot have both a default arm and an after arm"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_select_duplicate_after_rejected() {
+        let err = parse_err("fn main() {\n    let (s, r) = chan<int>()\n    select {\n        val = r.recv() {\n        }\n        after 100 {\n        }\n        after 200 {\n        }\n    }\n}");
+        assert!(err.to_string().contains("duplicate after arm"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_select_after_stays_valid_identifier() {
+        // `after` is contextual: a recv binding named `after` and a send on a
+        // channel named `after` still parse as ordinary arms.
+        let prog = parse("fn main() {\n    let (s, r) = chan<int>()\n    let after = s\n    select {\n        after = r.recv() {\n        }\n        after.send(1) {\n        }\n    }\n}");
+        let f = &prog.functions[0].node;
+        match &f.body.node.stmts[2].node {
+            Stmt::Select { arms, after, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert!(after.is_none());
+                assert!(matches!(&arms[0].op, SelectOp::Recv { binding, .. } if binding.node == "after"));
+                assert!(matches!(&arms[1].op, SelectOp::Send { .. }));
             }
             _ => panic!("expected select statement"),
         }

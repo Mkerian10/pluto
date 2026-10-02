@@ -51,6 +51,7 @@ tx.try_send(value)!          // Non-blocking. Fails immediately if buffer full.
 let val = rx.recv()!              // Block until a value arrives.
 let val = rx.recv() catch -1      // Block, with fallback on error.
 let val = rx.try_recv()!          // Non-blocking. Fails immediately if empty.
+let val = rx.recv_timeout(250)!   // Block at most 250 ms, then TimedOut.
 ```
 
 `recv()` blocks the calling task until a value is available.
@@ -58,6 +59,12 @@ let val = rx.try_recv()!          // Non-blocking. Fails immediately if empty.
 `recv()` fails with `ChannelClosed` if the channel is closed and the buffer is empty. Buffered values are drained before the error is raised.
 
 `try_recv()` fails with `ChannelEmpty` if the buffer is empty, or `ChannelClosed` if closed and empty.
+
+`recv_timeout(ms)` is a bounded `recv`: it blocks until a value arrives or `ms` milliseconds elapse, raising `TimedOut` when the deadline fires. `ChannelClosed` wins over the deadline — a closed-and-drained channel is a definite state, not a bounded wait. The duration is a plain `int` of milliseconds (matching `std.time.sleep`); a `Duration` type can arrive later without breaking call sites.
+
+`TimedOut` is a plain local fact: "nothing arrived on this channel within the deadline." It licenses *acting on not-knowing* — retry idempotently, escalate, degrade — and never licenses the claim "the peer failed" (the peer may have died, stalled, or already sent a value that is in flight). Boundary-layer timeouts carry their epistemic classification separately in `NetworkError.definite` (see rfc-distributed-safety.md).
+
+**Deterministic tests** model the timeout as a *nondeterministic scheduler choice*, not virtual time: a fiber blocked with a deadline is enabled, and the exhaustive strategy explores both outcomes of every timeout race (timeout-fires-first and value-arrives-first). Non-exhaustive strategies prefer real progress and fire a pending timeout only where the scheduler would otherwise report deadlock. `std.time.sleep` in test mode is the degenerate timed wait — a yield point, not a real nanosleep.
 
 ### Closing
 
@@ -78,6 +85,7 @@ After `close()`:
 error ChannelClosed { message: string }
 error ChannelFull { message: string }
 error ChannelEmpty { message: string }
+error TimedOut { message: string }
 ```
 
 These are built-in error types registered by the compiler. The error inference system automatically knows that `tx.send()` can raise `ChannelClosed`, etc.
@@ -153,6 +161,7 @@ The compiler infers channel errors automatically:
 - `rx.recv()` → can raise `ChannelClosed`
 - `tx.try_send(v)` → can raise `ChannelClosed`, `ChannelFull`
 - `rx.try_recv()` → can raise `ChannelClosed`, `ChannelEmpty`
+- `rx.recv_timeout(ms)` → can raise `ChannelClosed`, `TimedOut`
 
 ### For-in Desugaring
 
@@ -213,8 +222,17 @@ Both `Sender<T>` and `Receiver<T>` are I64 pointers to the same underlying chann
 - **Reference counting / implicit close-on-drop** — Auto-close when last sender goes out of scope. Needs scope-exit hooks. Phase 2.
 - **True rendezvous (capacity 0)** — Sender blocks until receiver is ready. Phase 2.
 - **Stdlib channel methods** (`.connections()`, `.lines()`, `.stream()`) — Expose I/O as channels.
-- ~~**Select/race** — Multiplexing across multiple channels.~~ Implemented: `select { val = rx.recv() { ... } tx.send(v) { ... } default { ... } }`
-- **Timeouts** (`rx.recv_timeout(duration)`) — Needs a `Duration` type.
+- ~~**Select/race** — Multiplexing across multiple channels.~~ Implemented: `select { val = rx.recv() { ... } tx.send(v) { ... } default { ... } }`, plus the timeout arm (Erlang `receive ... after` lineage):
+
+  ```
+  select {
+      hb = rx.recv() { handle(hb) }
+      after election_timeout_ms { become_candidate() }
+  }
+  ```
+
+  `after <int-expr> { ... }` — at most one per select, mutually exclusive with `default` (`default` is `after 0`). The duration expression is **re-evaluated on each select entry**, so `after base + jitter()` re-randomizes every loop iteration (exactly Raft's randomized election window). Taking the arm is NOT an error — it runs the arm's block; a select with `after` never contributes to deadlock detection (its timeout transition is always enabled). All-channels-closed still raises `ChannelClosed` — a fully closed select can never complete, so there is nothing to wait out. In deterministic tests the arm is an enabled scheduler choice: exhaustive exploration covers both the arm-fires and arm-loses outcomes of every race.
+- ~~**Timeouts** (`rx.recv_timeout(duration)`)~~ — Implemented: `rx.recv_timeout(ms)` raising `TimedOut` (see "Receiving"), and the select `after` arm above. Duration stayed a plain `int` of ms; a `Duration` type remains future work.
 - **Move semantics** — Send copies the pointer for heap types (shared reference). Real ownership transfer is future work.
 - **Cross-pod channels** — Compiler-synthesized serialization for channels across pod boundaries.
 

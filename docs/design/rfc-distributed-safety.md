@@ -151,11 +151,18 @@ Two consequences worth naming:
   the classification in hand — a runtime-level resend of an ambiguous call
   would be acting on knowledge nobody has.
 
-Timeouts: the client transport currently has no response deadline of its own
-(the server's 5s receive timeout bounds half-open *requests*). When client-side
-deadlines are added, the same rule decides their classification: a
-connect-phase timeout is definite; any timeout after the request frame
-completed is ambiguous.
+Timeouts: the client transport now carries a response deadline of its own
+(`PLUTO_RPC_TIMEOUT_MS`, default 30s, `<= 0` disables; the server's 5s receive
+timeout bounds half-open *requests*). Its classification follows the rule
+above exactly: the deadline is armed only after the request frame completes,
+so a response-wait timeout is **ambiguous** (`definite == false`, message
+"request sent, no response within deadline (outcome unknown)") — the timeout
+is named in the message as diagnostic detail, never as a cause variant.
+Connect-phase timeouts remain definite (the connection never opened; nothing
+was sent). At the plain-socket layer, `TcpConnection.set_read_timeout(ms)`
+(SO_RCVTIMEO) makes a quiet read raise `TimedOut` — a local fact about this
+socket, distinct from connection errors and carrying no claim about the
+peer.
 
 ### Wire Type Validation
 

@@ -2254,3 +2254,87 @@ fn entity_handle_calls_serialize_with_local_calls() {
     let _ = server.kill();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1050\n");
 }
+
+// ── RPC response deadline (issue #370) ──────────────────────────────────────────
+
+const DEADLINE_CLIENT_SRC: &str = "\
+import billing
+
+app Payments[billing: remote billing.BillingService] {
+    fn main(self) {
+        let r = self.billing.charge(21) catch err: NetworkError {
+            if err.definite {
+                print(\"definite\")
+            } else {
+                print(f\"ambiguous: {err.message}\")
+            }
+            -1
+        }
+        print(f\"result:{r}\")
+    }
+}";
+
+/// A server that accepts the connection and reads the request but never
+/// replies. The client's response deadline (PLUTO_RPC_TIMEOUT_MS) must fire,
+/// and the failure must be classified AMBIGUOUS (definite=false): the request
+/// frame went out, so the effect may or may not have applied
+/// (rfc-distributed-safety.md "Failure classification").
+#[test]
+fn rpc_response_deadline_fires_and_is_ambiguous() {
+    use std::io::Read as _;
+    use std::time::{Duration, Instant};
+
+    let (_cd, client_bin) =
+        build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", DEADLINE_CLIENT_SRC)]);
+
+    // Stalling server: accept, read the request frame, never respond.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let stall = std::thread::spawn(move || {
+        if let Ok((mut conn, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf); // consume the request frame
+            // Hold the connection open, silent, until the client gives up.
+            std::thread::sleep(Duration::from_secs(20));
+            drop(conn);
+        }
+    });
+
+    let start = Instant::now();
+    let mut child = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
+        .env("PLUTO_RPC_TIMEOUT_MS", "500")
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Watchdog: the deadline is 500ms — if the client is still running after
+    // 15s the deadline did not fire.
+    let out = loop {
+        match child.try_wait().unwrap() {
+            Some(_) => break child.wait_with_output().unwrap(),
+            None if start.elapsed() > Duration::from_secs(15) => {
+                let _ = child.kill();
+                panic!("RPC client hung: response deadline never fired");
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
+    drop(stall); // detached; the sleeping thread dies with the test process
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ambiguous:"),
+        "a post-send timeout must classify as ambiguous (definite=false); stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("deadline"),
+        "the classification message should name the deadline; stdout: {stdout}"
+    );
+    assert!(stdout.contains("result:-1"), "stdout: {stdout}");
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "client should give up shortly after the 500ms deadline (took {:?})",
+        start.elapsed()
+    );
+}

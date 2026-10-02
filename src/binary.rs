@@ -33,7 +33,7 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// phase 5): Function.provides, ExternFnDecl.assumes, TypeExpr::Fn.provides,
 /// PropertyParamKind::Expr, PropertyAtomKind::Ensures,
 /// DerivedInfo.assumptions.
-const SCHEMA_VERSION: u32 = 15;
+const SCHEMA_VERSION: u32 = 16;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;

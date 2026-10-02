@@ -271,7 +271,7 @@ fn collect_stmt_xrefs(
                 collect_expr_xrefs(&cap.node, cap.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
             }
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => {
@@ -286,6 +286,10 @@ fn collect_stmt_xrefs(
             }
             if let Some(def) = default {
                 collect_block_xrefs(&def.node, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
+            }
+            if let Some(a) = after {
+                collect_expr_xrefs(&a.duration.node, a.duration.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
+                collect_block_xrefs(&a.body.node, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
             }
         }
         Stmt::Break | Stmt::Continue => {}

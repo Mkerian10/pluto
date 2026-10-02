@@ -187,7 +187,7 @@ fn main() {
     conn.send_response(http.ok("done"))
     conn.close()
 
-    let resp = client.read(4096)
+    let resp = client.read(4096) catch ""
     print(strings.contains(resp, "200 OK"))
     client.close()
     server.close()
@@ -302,7 +302,7 @@ fn main() {
     conn.send_response(http.ok_json(resp_json.to_string()))
     conn.close()
 
-    let resp = client.read(4096)
+    let resp = client.read(4096) catch ""
     print(strings.contains(resp, "Hello, Alice!"))
     print(strings.contains(resp, "application/json"))
     client.close()

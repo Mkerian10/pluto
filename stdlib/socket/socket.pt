@@ -8,6 +8,8 @@ extern fn __pluto_socket_write(fd: int, data: string) int
 extern fn __pluto_socket_close(fd: int) int
 extern fn __pluto_socket_set_reuseaddr(fd: int) int
 extern fn __pluto_socket_get_port(fd: int) int
+extern fn __pluto_socket_set_read_timeout(fd: int, ms: int) int
+extern fn __pluto_socket_read_timed_out() int
 
 pub fn create(domain: int, sock_type: int, protocol: int) int {
     return __pluto_socket_create(domain, sock_type, protocol)
@@ -47,4 +49,18 @@ pub fn set_reuseaddr(fd: int) int {
 
 pub fn get_port(fd: int) int {
     return __pluto_socket_get_port(fd)
+}
+
+// Set a read deadline on the socket (SO_RCVTIMEO): subsequent reads block at
+// most `ms` milliseconds. ms <= 0 clears the deadline. After a read returns
+// empty, read_timed_out() distinguishes "the deadline elapsed" from EOF or a
+// connection error.
+pub fn set_read_timeout(fd: int, ms: int) int {
+    return __pluto_socket_set_read_timeout(fd, ms)
+}
+
+// Whether the most recent read() on this thread came back empty because the
+// read deadline elapsed (1) rather than EOF/error (0).
+pub fn read_timed_out() int {
+    return __pluto_socket_read_timed_out()
 }

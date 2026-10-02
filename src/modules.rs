@@ -1811,7 +1811,7 @@ fn resolve_qualified_access_in_stmt(stmt: &mut Stmt, module_names: &HashSet<Stri
                 resolve_qualified_access_in_expr(&mut cap.node, cap.span, module_names, enum_name_map);
             }
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &mut arm.op {
                     SelectOp::Recv { channel, .. } => {
@@ -1826,6 +1826,10 @@ fn resolve_qualified_access_in_stmt(stmt: &mut Stmt, module_names: &HashSet<Stri
             }
             if let Some(def) = default {
                 resolve_qualified_access_in_block(&mut def.node, module_names, enum_name_map);
+            }
+            if let Some(a) = after {
+                resolve_qualified_access_in_expr(&mut a.duration.node, a.duration.span, module_names, enum_name_map);
+                resolve_qualified_access_in_block(&mut a.body.node, module_names, enum_name_map);
             }
         }
         Stmt::Scope { seeds, body, .. } => {

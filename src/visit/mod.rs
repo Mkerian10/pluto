@@ -543,7 +543,7 @@ pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Spanned<Stmt>) {
                 v.visit_expr(cap);
             }
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => v.visit_expr(channel),
@@ -556,6 +556,10 @@ pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Spanned<Stmt>) {
             }
             if let Some(d) = default {
                 v.visit_block(d);
+            }
+            if let Some(a) = after {
+                v.visit_expr(&a.duration);
+                v.visit_block(&a.body);
             }
         }
         Stmt::Scope {
@@ -1126,7 +1130,7 @@ pub fn walk_stmt_mut<V: VisitMut>(v: &mut V, stmt: &mut Spanned<Stmt>) {
                 v.visit_expr_mut(cap);
             }
         }
-        Stmt::Select { arms, default } => {
+        Stmt::Select { arms, default, after } => {
             for arm in arms {
                 match &mut arm.op {
                     SelectOp::Recv { channel, .. } => v.visit_expr_mut(channel),
@@ -1139,6 +1143,10 @@ pub fn walk_stmt_mut<V: VisitMut>(v: &mut V, stmt: &mut Spanned<Stmt>) {
             }
             if let Some(d) = default {
                 v.visit_block_mut(d);
+            }
+            if let Some(a) = after {
+                v.visit_expr_mut(&mut a.duration);
+                v.visit_block_mut(&mut a.body);
             }
         }
         Stmt::Scope {

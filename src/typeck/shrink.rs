@@ -703,9 +703,10 @@ impl SummaryBuilder<'_> {
                 }
                 self.poison_raises = prev;
             }
-            Stmt::Select { arms, default } => {
+            Stmt::Select { arms, default, after } => {
                 if default.is_none() {
-                    // Select without default raises ChannelClosed directly.
+                    // Select without default raises ChannelClosed directly
+                    // (an after arm does not remove the all-closed raise).
                     self.out.poison("ChannelClosed");
                 }
                 // Channel operations behave like calls.
@@ -726,6 +727,10 @@ impl SummaryBuilder<'_> {
                 }
                 if let Some(def) = default {
                     self.walk_block(&def.node);
+                }
+                if let Some(a) = after {
+                    self.scan_expr(&a.duration);
+                    self.walk_block(&a.body.node);
                 }
                 self.poison_raises = prev;
             }
@@ -1260,6 +1265,10 @@ fn deferred_poisons(
                 Some(MethodResolution::ChannelTryRecv) => {
                     named.insert("ChannelClosed".to_string());
                     named.insert("ChannelEmpty".to_string());
+                }
+                Some(MethodResolution::ChannelRecvTimeout) => {
+                    named.insert("ChannelClosed".to_string());
+                    named.insert("TimedOut".to_string());
                 }
                 Some(MethodResolution::TaskGet { spawned_fn: None }) => {
                     // Unknown task origin widens by every declared error.

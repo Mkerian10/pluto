@@ -102,6 +102,13 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     env.errors.entry("TaskCancelled".to_string()).or_insert(ErrorInfo {
         fields: vec![("message".to_string(), PlutoType::String)],
     });
+    // TimedOut is a plain LOCAL fact — "nothing arrived within the deadline".
+    // It licenses reacting to absence (retry, escalate, degrade); it never
+    // licenses the claim "the peer failed". Boundary-layer timeouts carry
+    // their epistemic classification in NetworkError.definite instead.
+    env.errors.entry("TimedOut".to_string()).or_insert(ErrorInfo {
+        fields: vec![("message".to_string(), PlutoType::String)],
+    });
     // NetworkError carries the boundary-failure classification (epistemics.md,
     // rfc-distributed-safety.md "Failure classification"): `definite == true`
     // means the request is KNOWN not to have been dispatched — the effect did
@@ -458,12 +465,15 @@ fn collect_unreachable_warnings(
             Stmt::Scope { body, .. } => {
                 collect_unreachable_warnings(&body.node, warnings);
             }
-            Stmt::Select { arms, default } => {
+            Stmt::Select { arms, default, after } => {
                 for arm in arms {
                     collect_unreachable_warnings(&arm.body.node, warnings);
                 }
                 if let Some(def) = default {
                     collect_unreachable_warnings(&def.node, warnings);
+                }
+                if let Some(a) = after {
+                    collect_unreachable_warnings(&a.body.node, warnings);
                 }
             }
             _ => {}

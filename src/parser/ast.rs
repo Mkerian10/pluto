@@ -472,6 +472,14 @@ pub enum Stmt {
     Select {
         arms: Vec<SelectArm>,
         default: Option<Spanned<Block>>,
+        /// `after <int-expr> { ... }` — timeout arm (Erlang `receive ... after`
+        /// lineage). The duration expression is re-evaluated on each select
+        /// entry (so `after base + jitter()` re-randomizes per loop
+        /// iteration). Mutually exclusive with `default` (`default` is
+        /// `after 0`); at most one per select. Taking the arm is NOT an
+        /// error, and a select with `after` never deadlocks (the timeout
+        /// transition is always enabled).
+        after: Option<SelectAfter>,
     },
     Scope {
         seeds: Vec<Spanned<Expr>>,
@@ -511,6 +519,14 @@ pub enum SelectOp {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectArm {
     pub op: SelectOp,
+    pub body: Spanned<Block>,
+}
+
+/// Timeout arm of a `select`: `after <int-expr> { ... }`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectAfter {
+    /// Deadline in milliseconds, evaluated once at each select entry.
+    pub duration: Spanned<Expr>,
     pub body: Spanned<Block>,
 }
 
