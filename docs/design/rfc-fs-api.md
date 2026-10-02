@@ -214,6 +214,33 @@ pub class File<M, S> {
         where M == Read, S == Open
         requires max_bytes > 0
 
+    // ── Relay (#373 half 1) ──────────────────────────────────
+    fn send_to(self, socket_fd: int, offset: int, max_bytes: int) int
+        where M == Read, S == Open
+        requires offset >= 0
+        requires max_bytes > 0
+    // Kernel-assisted file→socket transfer (sendfile(2); transparent
+    // runtime-C pread→write fallback on EINVAL/ENOTSUP/ENOSYS/ENOTSOCK).
+    // Offset-explicit like read_at: the seek cursor is neither read nor
+    // moved. Returns bytes sent; partial transfer returns the count and
+    // callers loop. Failure raises FileError and does NOT consume or
+    // degrade the handle — the failing party is the socket, the read
+    // capability is untouched, and retry from offset + sent is well-
+    // defined. The socket is a raw int fd (net.TcpConnection.fd()):
+    // std.fs stays dependency-free and the handle obligation never moves
+    // across a module boundary.
+
+    fn receive_from(self, socket_fd: int, max_bytes: int) int
+        where M == Write, S == Open
+        requires max_bytes > 0
+    // Socket→file: a runtime-C read→write loop (no Darwin primitive
+    // exists), writing at the file's cursor; bytes never touch the GC
+    // heap. Returns bytes written; 0 = socket EOF before any data. The
+    // failure asymmetry is the typestate's point: a FILE-side write
+    // failure raises Degraded carrying File<Write, Poisoned> exactly
+    // like write (the prefix state is unknown — destroyed warrant); a
+    // SOCKET-side read failure raises FileError (the file is sound).
+
     // ── Writing ──────────────────────────────────────────────
     fn write(self, data: string)
         where M == Write, S == Open

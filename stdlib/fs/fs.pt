@@ -101,6 +101,9 @@ extern fn __pluto_fs_read_at(fd: int, offset: int, max_bytes: int) bytes
 extern fn __pluto_fs_write(fd: int, data: string) int
 extern fn __pluto_fs_write_bytes(fd: int, data: bytes) int
 extern fn __pluto_fs_write_at(fd: int, offset: int, data: bytes) int
+extern fn __pluto_fs_send_to_socket(fd: int, sock_fd: int, offset: int, max_bytes: int) int
+extern fn __pluto_fs_recv_from_socket(fd: int, sock_fd: int, max_bytes: int) int
+extern fn __pluto_fs_relay_side() int
 extern fn __pluto_fs_seek(fd: int, offset: int, whence_tag: int) int
 extern fn __pluto_fs_sync(fd: int) int
 extern fn __pluto_fs_sync_data(fd: int) int
@@ -214,6 +217,61 @@ pub class File<M, S> {
             raise FileError { path: "", code: e, message: __pluto_fs_errstr(e) }
         }
         return b
+    }
+
+    // Kernel-assisted relay (issue #373): transfer up to max_bytes from
+    // this file, starting at offset, into a connected stream socket —
+    // sendfile(2) where the kernel offers it, a runtime-C pread→write
+    // loop otherwise. The bytes never touch the GC heap, and the
+    // descriptor's seek cursor is neither read nor moved (offset-explicit,
+    // like read_at). Returns the count sent: less than max_bytes means
+    // EOF arrived first or the transfer was partial (e.g. EAGAIN after
+    // progress) — callers loop, advancing offset by the return value.
+    // Takes the socket as a raw fd (net.TcpConnection.fd(), or std.socket
+    // directly): fs stays dependency-free and the handle obligation never
+    // moves. Does NOT consume the handle — relay failure raises FileError
+    // with the file still sound (the failing party is the socket; the
+    // read capability is untouched), so retry from a new offset is
+    // well-defined.
+    fn send_to(self, socket_fd: int, offset: int, max_bytes: int) int
+        where M == Read, S == Open
+        requires offset >= 0
+        requires max_bytes > 0
+    {
+        let n = __pluto_fs_send_to_socket(self.fd, socket_fd, offset, max_bytes)
+        if n < 0 {
+            let code = 0 - n
+            raise FileError { path: "", code: code, message: __pluto_fs_errstr(code) }
+        }
+        return n
+    }
+
+    // The socket→file direction (issue #373): read from the socket, write
+    // at this file's current cursor, up to max_bytes, through a runtime-C
+    // scratch buffer (no kernel primitive exists on Darwin; the point is
+    // that the bytes never round-trip the GC heap). Returns bytes written;
+    // 0 means the socket was at EOF before any data — the loop terminator.
+    // The failure asymmetry is the typestate's point: a FILE-side write
+    // failure destroys the durability warrant exactly like write(), so it
+    // raises Degraded carrying this file as File<Write, Poisoned>; a
+    // SOCKET-side read failure leaves the file sound and raises FileError.
+    fn receive_from(self, socket_fd: int, max_bytes: int) int
+        where M == Write, S == Open
+        requires max_bytes > 0
+    {
+        let n = __pluto_fs_recv_from_socket(self.fd, socket_fd, max_bytes)
+        if n < 0 {
+            let code = 0 - n
+            if __pluto_fs_relay_side() == 1 {
+                raise Degraded {
+                    file: File<Write, Poisoned> { fd: self.fd },
+                    code: code,
+                    message: __pluto_fs_errstr(code)
+                }
+            }
+            raise FileError { path: "", code: code, message: __pluto_fs_errstr(code) }
+        }
+        return n
     }
 
     // Write all of data: loops to completion, so success means every
