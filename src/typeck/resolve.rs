@@ -578,6 +578,11 @@ pub(crate) fn ensure_generic_class_instantiated(
         impl_traits: gen_info.impl_traits.clone(),
         lifecycle: gen_info.lifecycle,
     });
+    // Structural record of this instantiation's type args (issue #412):
+    // consumers (the linearity pass) must never recover positional args by
+    // re-splitting the mangled name — nested generic args corrupt positions.
+    env.class_instance_args
+        .insert(mangled.clone(), (base_name.to_string(), type_args.to_vec()));
     // Contract specs declared on the template apply to every instantiation
     // verbatim (their vocabulary is param-independent by construction):
     // stamp them under the mangled names so construction/write obligations,

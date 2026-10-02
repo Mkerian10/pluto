@@ -221,6 +221,22 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// An identifier optionally qualified by dots (`marks.Held`): typestate
+    /// state names in `where`/`must_release` clauses may be types imported
+    /// from another module (issue #413).
+    fn expect_dotted_ident(&mut self) -> Result<Spanned<String>, CompileError> {
+        let mut id = self.expect_ident()?;
+        while self.peek().is_some_and(|t| matches!(t.node, Token::Dot)) {
+            self.advance(); // consume '.'
+            let seg = self.expect_ident()?;
+            id = Spanned::new(
+                format!("{}.{}", id.node, seg.node),
+                Span::new(id.span.start, seg.span.end),
+            );
+        }
+        Ok(id)
+    }
+
     /// True when the next significant token is the identifier `ensures` —
     /// a contextual keyword, recognized in contract position only (the
     /// proof-form postcondition, docs/design/rfc-properties.md; `ensures`
@@ -1457,10 +1473,12 @@ impl<'a> Parser<'a> {
                 // as a MustRelease clause; validated during registration.
                 let mr_tok = self.advance().expect("token should exist after peek");
                 let mr_start = mr_tok.span.start;
-                let first = self.expect_ident()?;
+                // The simple form's state (and the general form's RHS) may be
+                // a module-qualified type name (`must_release marks.Held`).
+                let first = self.expect_dotted_ident()?;
                 let (expr, mr_end) = if self.peek().is_some_and(|t| matches!(t.node, Token::EqEq)) {
                     self.advance(); // consume '=='
-                    let state = self.expect_ident()?;
+                    let state = self.expect_dotted_ident()?;
                     let end = state.span.end;
                     let clause_span = Span::new(first.span.start, end);
                     (
@@ -1971,7 +1989,9 @@ impl<'a> Parser<'a> {
                     loop {
                         let param = self.expect_ident()?;
                         self.expect(&Token::EqEq)?;
-                        let state = self.expect_ident()?;
+                        // The state may be a module-qualified type name
+                        // (`where S == marks.Held`, issue #413).
+                        let state = self.expect_dotted_ident()?;
                         let clause_span = Span::new(param.span.start, state.span.end);
                         let expr = Spanned::new(
                             Expr::BinOp {

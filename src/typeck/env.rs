@@ -264,6 +264,12 @@ pub struct TypeEnv {
     pub generic_classes: HashMap<String, GenericClassInfo>,
     pub generic_enums: HashMap<String, GenericEnumInfo>,
     pub instantiations: HashSet<Instantiation>,
+    /// Structural record of every generic-class instantiation: mangled
+    /// instance name -> (base class name, actual type arguments). The
+    /// authoritative way to recover an instance's positional type args —
+    /// re-parsing the mangled string corrupts positions after a nested
+    /// generic argument (issue #412).
+    pub class_instance_args: HashMap<String, (String, Vec<PlutoType>)>,
     pub generic_rewrites: HashMap<(usize, usize), String>,
     /// Method resolutions recorded during type inference, keyed by (current_fn_mangled_name, method.span.start)
     pub method_resolutions: HashMap<(String, usize), MethodResolution>,
@@ -530,6 +536,7 @@ impl TypeEnv {
             generic_classes: HashMap::new(),
             generic_enums: HashMap::new(),
             instantiations: HashSet::new(),
+            class_instance_args: HashMap::new(),
             generic_rewrites: HashMap::new(),
             method_resolutions: HashMap::new(),
             remote_types: HashSet::new(),
@@ -796,7 +803,7 @@ pub fn mangle_name(base: &str, type_args: &[PlutoType]) -> String {
     format!("{}$${}", base, suffixes.join("$"))
 }
 
-fn mangle_type(ty: &PlutoType) -> String {
+pub(crate) fn mangle_type(ty: &PlutoType) -> String {
     match ty {
         PlutoType::Int => "int".into(),
         PlutoType::Float => "float".into(),

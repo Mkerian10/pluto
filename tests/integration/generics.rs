@@ -2031,3 +2031,541 @@ fn main() {
         "cannot prove invariant 'self.v >= 0' of class 'Gauge<T>'",
     );
 }
+
+// ── Must-release default-deny: moves discharge only into obligation-carrying
+// positions (issues #404–#412, #420). Every laundering boundary rejects,
+// naming the boundary. ──
+
+/// #404 repro 1: a generic `fn sink<T>(x: T)` cannot swallow a must-release
+/// value — the skolem-checked template body never re-imposes the obligation.
+#[test]
+fn must_release_generic_param_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn sink<T>(x: T) {
+                print("sunk")
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                sink(h)
+            }
+            "#,
+        ),
+        "may not be moved into the generic type parameter 'T'",
+    );
+}
+
+/// #404 repro 2: the double-release driver — passing the value at T to a
+/// higher-order generic — is cut off at the same boundary.
+#[test]
+fn must_release_generic_twice_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn twice<T>(g: fn(T), x: T) {
+                g(x)
+                g(x)
+            }
+
+            fn rel(h: Lease<Held>) {
+                let done = h.release()
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 7 }
+                let h = l.acquire()
+                twice(rel, h)
+            }
+            "#,
+        ),
+        "may not be moved into the generic type parameter 'T'",
+    );
+}
+
+/// #405: returning a must-release value at trait type discharges nothing —
+/// the trait handle would carry no obligation.
+#[test]
+fn must_release_trait_upcast_return_rejected() {
+    compile_should_fail_with(
+        r#"
+        class Unlocked { tag: int }
+        class Locked { tag: int }
+
+        trait Peeker {
+            fn peek(self) int
+        }
+
+        class Lock<S> impl Peeker {
+            id: int
+
+            must_release Locked
+
+            fn acquire(self) Lock<Locked> where S == Unlocked {
+                return Lock<Locked> { id: self.id }
+            }
+
+            fn release(self) Lock<Unlocked> where S == Locked {
+                return Lock<Unlocked> { id: self.id }
+            }
+
+            fn peek(self) int {
+                return self.id
+            }
+        }
+
+        fn launder(l: Lock<Locked>) Peeker {
+            return l
+        }
+
+        fn main() {
+            let u = Lock<Unlocked> { id: 3 }
+            let l = u.acquire()
+            let t = launder(l)
+            print(t.peek())
+        }
+        "#,
+        "may not be moved into the trait type 'Peeker' — upcasting erases the typestate",
+    );
+}
+
+/// #406 route 1: a nullable-typed parameter swallows the obligation.
+#[test]
+fn must_release_nullable_param_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn swallow(x: Lease<Held>?) {
+                print("swallowed")
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 14 }
+                let h = l.acquire()
+                swallow(h)
+            }
+            "#,
+        ),
+        "may not be moved into a nullable type — a release obligation does not survive nullable wrapping",
+    );
+}
+
+/// #406 route 2: a nullable return type launders toward the caller.
+#[test]
+fn must_release_nullable_return_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn make_opt() Lease<Held>? {
+                let l = Lease<Idle> { id: 5 }
+                let h = l.acquire()
+                return h
+            }
+
+            fn main() {
+                let f = make_opt()
+                print(1)
+            }
+            "#,
+        ),
+        "may not be moved into a nullable type",
+    );
+}
+
+/// #406 route 3: binding a must-release value at a nullable annotation (the
+/// `??`-aliasing driver) is rejected at the binding.
+#[test]
+fn must_release_nullable_binding_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let l: Lease<Held>? = Lease<Idle> { id: 6 }.acquire()
+                print(1)
+            }
+            "#,
+        ),
+        "may not be moved into a nullable binding",
+    );
+}
+
+/// #407 repro 1: `.push()` is not a carrying destination — the stored
+/// element would come back untracked via indexing.
+#[test]
+fn must_release_container_push_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let arr: [Lease<Held>] = []
+                let l = Lease<Idle> { id: 9 }
+                let h = l.acquire()
+                arr.push(h)
+            }
+            "#,
+        ),
+        "may not be moved into the builtin method '.push()'",
+    );
+}
+
+/// #407 repro 2: a channel send launders the obligation into the buffer.
+#[test]
+fn must_release_channel_send_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let (tx, rx) = chan<Lease<Held>>(2)
+                let l = Lease<Idle> { id: 18 }
+                let h = l.acquire()
+                tx.send(h)!
+                print(1)
+            }
+            "#,
+        ),
+        "a release obligation cannot be sent through a channel",
+    );
+}
+
+/// #408: an if-expression yielding the same binding from both arms is a
+/// consume-once — the original binding is moved and unusable.
+#[test]
+fn must_release_if_expression_yield_consumes() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let l = Lease<Idle> { id: 8 }
+                let h = l.acquire()
+                let g = if true { h } else { h }
+                let x = g.release()
+                let y = h.release()
+            }
+            "#,
+        ),
+        "'h' was moved (yielded from an if-expression)",
+    );
+}
+
+/// #408: the consume-once form is legal — the result carries the obligation
+/// and a single release discharges it.
+#[test]
+fn must_release_if_expression_consume_once_ok() {
+    let out = compile_and_run_stdout(&lease_src(
+        r#"
+        fn main() {
+            let l = Lease<Idle> { id: 8 }
+            let h = l.acquire()
+            let g = if h.id > 0 { h } else { h }
+            let x = g.release()
+            print(x.id)
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "8");
+}
+
+/// #408: arms that disagree on consumption are rejected outright.
+#[test]
+fn must_release_if_expression_arm_disagreement_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let a = Lease<Idle> { id: 1 }
+                let h = a.acquire()
+                let b = Lease<Idle> { id: 2 }
+                let other = b.acquire()
+                let g = if h.id > 0 { h } else { other }
+                let x = g.release()
+                let y = other.release()
+                let z = h.release()
+            }
+            "#,
+        ),
+        "the arms of this if-expression disagree about",
+    );
+}
+
+/// #408: the match-expression form is the same door.
+#[test]
+fn must_release_match_expression_yield_consumes() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            enum Pick { A B }
+
+            fn main() {
+                let l = Lease<Idle> { id: 12 }
+                let h = l.acquire()
+                let g = match Pick.A {
+                    Pick.A => h,
+                    Pick.B => h
+                }
+                let x = g.release()
+                let y = h.release()
+            }
+            "#,
+        ),
+        "'h' was moved (yielded from a match expression)",
+    );
+}
+
+/// #409: stashing a must-release binding in an enum variant payload is a
+/// store the analysis cannot track — rejected like a field store.
+#[test]
+fn must_release_enum_payload_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            enum Stash {
+                Hold { kept: Lease<Held> }
+                Empty
+            }
+
+            fn main() {
+                let l = Lease<Idle> { id: 4 }
+                let h = l.acquire()
+                let s = Stash.Hold { kept: h }
+                let x = h.release()
+            }
+            "#,
+        ),
+        "may not be stored in an enum variant payload",
+    );
+}
+
+/// #410: aliasing a caught error binding whose payload is must-release would
+/// let the alias double-extract the payload.
+#[test]
+fn must_release_error_binding_alias_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            error Oops { lease: Lease<Held> }
+
+            fn risky() {
+                let u = Lease<Idle> { id: 2 }
+                raise Oops { lease: u.acquire() }
+            }
+
+            fn main() {
+                risky() catch e: Oops {
+                    let e2 = e
+                    let a = e.lease
+                    let b = e2.lease
+                    let x = a.release()
+                    let y = b.release()
+                }
+            }
+            "#,
+        ),
+        "cannot copy the caught error binding 'e'",
+    );
+}
+
+/// Calling a method directly on an un-extracted error payload would bypass
+/// the extraction tracking — the payload must be bound first.
+#[test]
+fn must_release_error_payload_direct_call_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            error Oops { lease: Lease<Held> }
+
+            fn risky() {
+                let u = Lease<Idle> { id: 2 }
+                raise Oops { lease: u.acquire() }
+            }
+
+            fn main() {
+                risky() catch e: Oops {
+                    let x = e.lease.release()
+                    let a = e.lease
+                    let y = a.release()
+                }
+            }
+            "#,
+        ),
+        "cannot call '.release()' directly on the error payload 'e.lease'",
+    );
+}
+
+/// #411: a closure parameter typed at a must-release state carries the
+/// obligation into the body — dropping it there is the usual leak error.
+#[test]
+fn must_release_closure_param_carries_obligation() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let cl = (h: Lease<Held>) => {
+                    print(h.id)
+                }
+                print(1)
+            }
+            "#,
+        ),
+        "'h' still holds Lease<Held>, a must_release state, when it goes out of scope",
+    );
+}
+
+/// #411: a call through a function value is not a carrying destination — the
+/// analysis cannot see through fn-typed values.
+#[test]
+fn must_release_fn_value_call_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let cl = (h: Lease<Held>) => {
+                    let done = h.release()
+                }
+                let l = Lease<Idle> { id: 11 }
+                let h = l.acquire()
+                cl(h)
+            }
+            "#,
+        ),
+        "not a named function",
+    );
+}
+
+/// #412: a nested generic DATA argument before the state position must not
+/// corrupt state parsing — the obligation stays attached and the leak is
+/// caught (structural instance args, not mangled-string re-parsing).
+#[test]
+fn must_release_nested_generic_data_arg_still_enforced() {
+    compile_should_fail_with(
+        r#"
+        class Box<T> { v: T }
+        class Free { tag: int }
+        class Held { tag: int }
+
+        class R<T, S> {
+            v: T
+            must_release S == Held
+            fn grab(self) R<T, Held> where S == Free {
+                return R<T, Held> { v: self.v }
+            }
+            fn drop_it(self) R<T, Free> where S == Held {
+                return R<T, Free> { v: self.v }
+            }
+        }
+
+        fn main() {
+            let r = R<Box<int>, Free> { v: Box<int> { v: 1 } }
+            let h = r.grab()
+            print(1)
+        }
+        "#,
+        "'h' still holds R<Box<int>, Held>, a must_release state",
+    );
+}
+
+/// #414: the leak hint only suggests transitions that exist on the actual
+/// instantiation — here no transition out of 'A' exists on M2<A, Q>, so the
+/// hint names the state without a bogus method suggestion.
+#[test]
+fn must_release_leak_hint_respects_instantiation() {
+    compile_should_fail_with(
+        r#"
+        class A { tag: int }
+        class B { tag: int }
+        class P { tag: int }
+        class Q { tag: int }
+
+        class M2<X, Y> {
+            id: int
+            must_release X == A
+
+            fn go(self) M2<B, Q> where X == A, Y == P { return M2<B, Q> { id: self.id } }
+            fn slide(self) M2<X, Q> where Y == P { return M2<X, Q> { id: self.id } }
+            fn back(self) M2<A, P> where X == B { return M2<A, P> { id: self.id } }
+        }
+
+        fn main() {
+            let m = M2<A, P> { id: 16 }
+            let s = m.slide()
+        }
+        "#,
+        "transition it out of 'A', move it onward, or return it",
+    );
+}
+
+/// #420: a `where`-constrained method whose body transitions `self` without
+/// declaring the transition in its signature is rejected at the declaration —
+/// otherwise the checker would force callers into a double release.
+#[test]
+fn must_release_hidden_self_transition_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                print(1)
+            }
+            "#,
+        )
+        .replace(
+            "fn describe(self) string {",
+            r#"fn sneaky(self) int where S == Held {
+                let a = self.release()
+                return 0
+            }
+
+            fn describe(self) string {"#,
+        ),
+        "method 'sneaky' calls the transition '.release()' on 'self' but its signature does not declare a transition",
+    );
+}
+
+/// #420 companion: declaring the transition honestly (same body, transition
+/// signature) compiles and consumes the caller's binding exactly once.
+#[test]
+fn must_release_declared_self_transition_ok() {
+    let out = compile_and_run_stdout(&lease_src(
+        r#"
+        fn main() {
+            let l = Lease<Idle> { id: 23 }
+            let h = l.acquire()
+            let done = h.release()
+            print(done.id)
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "23");
+}
+
+/// Default-deny on temporaries: a non-transition method on an unbound
+/// must-release temporary would drop the value after the call.
+#[test]
+fn must_release_unbound_temporary_receiver_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let n = Lease<Idle> { id: 3 }.acquire().describe()
+                print(n)
+            }
+            "#,
+        ),
+        "is an unbound value in the must_release state",
+    );
+}
+
+/// Chained transitions on temporaries stay legal: each call consumes the
+/// previous temporary and the final droppable state needs no release.
+#[test]
+fn must_release_chained_transition_temporaries_ok() {
+    let out = compile_and_run_stdout(&lease_src(
+        r#"
+        fn main() {
+            let idle = Lease<Idle> { id: 5 }.acquire().release()
+            print(idle.id)
+        }
+        "#,
+    ));
+    assert_eq!(out.trim(), "5");
+}
