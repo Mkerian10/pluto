@@ -2954,3 +2954,79 @@ fn bytes_payload_round_trips_over_rpc() {
         "direct:true\nnested:true tag:42\n"
     );
 }
+
+// ── Interface-hash short-name injectivity (issue #419) ──────────────────────
+//
+// The interface hash reduces type names to their last segment so that
+// independently-compiled binaries agree on it (module-prefix independence).
+// Two distinct wire types with the same short name inside one interface's
+// surface would make contract/signature skew between them hash-invisible,
+// so such interfaces are rejected at compile time with rename guidance.
+
+/// Like [`compile_project_should_fail_with`], resolving the repo stdlib
+/// (needed when the failing project legitimately imports std.wire).
+fn compile_project_with_stdlib_should_fail_with(files: &[(&str, &str)], expected_msg: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, content) in files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+    }
+    let bin = dir.path().join("test_bin");
+    match pluto::compile_file_with_stdlib(&dir.path().join("main.pluto"), &bin, Some(&manifest_stdlib())) {
+        Ok(_) => panic!("Compilation should have failed"),
+        Err(e) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains(expected_msg),
+                "error did not contain '{expected_msg}'.\nActual: {msg}"
+            );
+        }
+    }
+}
+
+#[test]
+fn remote_interface_with_colliding_wire_type_names_rejected() {
+    compile_project_with_stdlib_should_fail_with(
+        &[
+            ("alpha.pluto", "pub class Foo {\n    n: int\n}"),
+            ("beta.pluto", "pub class Foo {\n    n: int\n}"),
+            (
+                "main.pluto",
+                "import std.wire\nimport alpha\nimport beta\n\nclass BillingService {\n    fn combine(self, x: alpha.Foo, y: beta.Foo) int {\n        return x.n + y.n\n    }\n}\n\napp Payments[billing: remote BillingService] {\n    fn main(self) {\n        print(\"up\")\n    }\n}",
+            ),
+        ],
+        "ambiguous under module-prefix-independent hashing",
+    );
+}
+
+#[test]
+fn served_interface_with_colliding_wire_type_names_rejected() {
+    compile_project_with_stdlib_should_fail_with(
+        &[
+            ("alpha.pluto", "pub class Foo {\n    n: int\n}"),
+            ("beta.pluto", "pub class Foo {\n    n: int\n}"),
+            (
+                "main.pluto",
+                "import std.wire\nimport alpha\nimport beta\n\nclass Svc {\n    fn combine(self, x: alpha.Foo, y: beta.Foo) int {\n        return x.n + y.n\n    }\n}\n\nfn main() {\n    let svc = Svc { }\n    serve svc on 0\n}",
+            ),
+        ],
+        "ambiguous under module-prefix-independent hashing",
+    );
+}
+
+#[test]
+fn distinct_wire_type_names_across_modules_still_compile() {
+    // The non-colliding cross-module case keeps working: same shapes,
+    // unique short names, served boundary and all.
+    let (_dir, _bin) = build_binary(&[
+        ("alpha.pluto", "pub class Foo {\n    n: int\n}"),
+        ("beta.pluto", "pub class Bar {\n    n: int\n}"),
+        (
+            "main.pluto",
+            "import std.wire\nimport alpha\nimport beta\n\nclass Svc {\n    fn combine(self, x: alpha.Foo, y: beta.Bar) int {\n        return x.n + y.n\n    }\n}\n\nfn main() {\n    let svc = Svc { }\n    serve svc on 0\n}",
+        ),
+    ]);
+}

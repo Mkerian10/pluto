@@ -1570,72 +1570,96 @@ pub(crate) fn format_invariant_expr(expr: &Expr) -> String {
 /// signature — downstream proofs assume the clauses, so a consumer
 /// compiled against the old contract must be refused, and consumers must
 /// mirror the clauses in their interface declarations.
-pub fn interface_hash(env: &crate::typeck::env::TypeEnv, class_name: &str) -> String {
-    use std::collections::BTreeSet;
+///
+/// # Short-name injectivity (issue #419)
+///
+/// The reduction to last segments is sound only while it is injective over
+/// ONE interface's wire-type set: if `a.Foo` and `b.Foo` both crossed the
+/// same boundary, their contracts and signature strings would label
+/// identically, and a producer/consumer pair that swapped the clauses
+/// between the two types would hash equal — silent version skew. No
+/// deterministic disambiguation can be derived from the hashed surface
+/// itself (two same-named types may be structurally identical and differ
+/// only in contracts, which is exactly the skew to catch), so
+/// [`check_interface_name_collisions`] REJECTS such interfaces at compile
+/// time; this function may assume injectivity.
+fn short_name(n: &str) -> &str {
+    n.rsplit('.').next().unwrap_or(n)
+}
 
-    fn sig(t: &PlutoType) -> String {
-        match t {
-            PlutoType::Int => "int".to_string(),
-            PlutoType::Float => "float".to_string(),
-            PlutoType::Bool => "bool".to_string(),
-            PlutoType::Byte => "byte".to_string(),
-            PlutoType::Bytes => "bytes".to_string(),
-            PlutoType::String => "string".to_string(),
-            PlutoType::Void => "void".to_string(),
-            PlutoType::Class(n) | PlutoType::Enum(n) => short_name(n).to_string(),
-            PlutoType::Array(e) => format!("[{}]", sig(e)),
-            PlutoType::Nullable(i) => format!("{}?", sig(i)),
-            other => format!("{other}"),
-        }
-    }
-    fn short_name(n: &str) -> &str {
-        n.rsplit('.').next().unwrap_or(n)
-    }
-    /// Collect the named types a wire value of type `t` can carry,
-    /// recursing through value-class and enum-variant fields. Entities are
-    /// excluded: they cross as handles, and `interface_hash(entity)`
-    /// carries their own contracts.
-    fn collect_wire_types(
-        env: &crate::typeck::env::TypeEnv,
-        t: &PlutoType,
-        out: &mut BTreeSet<String>,
-    ) {
-        match t {
-            PlutoType::Class(n) => {
-                if env.object_types.contains(n) {
-                    return;
+/// Collect the named types a wire value of type `t` can carry, recursing
+/// through value-class and enum-variant fields. Entities are excluded:
+/// they cross as handles, and `interface_hash(entity)` carries their own
+/// contracts.
+fn collect_wire_types(
+    env: &crate::typeck::env::TypeEnv,
+    t: &PlutoType,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    match t {
+        PlutoType::Class(n) => {
+            if env.object_types.contains(n) {
+                return;
+            }
+            if out.insert(n.clone()) {
+                if let Some(info) = env.classes.get(n) {
+                    for (_, fty, _) in &info.fields {
+                        collect_wire_types(env, fty, out);
+                    }
                 }
-                if out.insert(n.clone()) {
-                    if let Some(info) = env.classes.get(n) {
-                        for (_, fty, _) in &info.fields {
+            }
+        }
+        PlutoType::Enum(n) => {
+            if out.insert(n.clone()) {
+                if let Some(info) = env.enums.get(n) {
+                    for (_, fields) in &info.variants {
+                        for (_, fty) in fields {
                             collect_wire_types(env, fty, out);
                         }
                     }
                 }
             }
-            PlutoType::Enum(n) => {
-                if out.insert(n.clone()) {
-                    if let Some(info) = env.enums.get(n) {
-                        for (_, fields) in &info.variants {
-                            for (_, fty) in fields {
-                                collect_wire_types(env, fty, out);
-                            }
-                        }
-                    }
-                }
-            }
-            PlutoType::Array(e)
-            | PlutoType::Nullable(e)
-            | PlutoType::Set(e)
-            | PlutoType::Stream(e) => collect_wire_types(env, e, out),
-            PlutoType::Map(k, v) => {
-                collect_wire_types(env, k, out);
-                collect_wire_types(env, v, out);
-            }
-            _ => {}
         }
+        PlutoType::Array(e)
+        | PlutoType::Nullable(e)
+        | PlutoType::Set(e)
+        | PlutoType::Stream(e) => collect_wire_types(env, e, out),
+        PlutoType::Map(k, v) => {
+            collect_wire_types(env, k, out);
+            collect_wire_types(env, v, out);
+        }
+        _ => {}
     }
+}
 
+/// Canonical, module-prefix-independent rendering of a wire type, shared
+/// by the signature, contract, and layout sections of the hash.
+fn sig(t: &PlutoType) -> String {
+    match t {
+        PlutoType::Int => "int".to_string(),
+        PlutoType::Float => "float".to_string(),
+        PlutoType::Bool => "bool".to_string(),
+        PlutoType::Byte => "byte".to_string(),
+        PlutoType::Bytes => "bytes".to_string(),
+        PlutoType::String => "string".to_string(),
+        PlutoType::Void => "void".to_string(),
+        PlutoType::Class(n) | PlutoType::Enum(n) => short_name(n).to_string(),
+        PlutoType::Array(e) => format!("[{}]", sig(e)),
+        PlutoType::Nullable(i) => format!("{}?", sig(i)),
+        other => format!("{other}"),
+    }
+}
+
+/// The dispatchable surface of `class_name`: sorted signature strings and
+/// the set of boundary-crossing VALUE types reachable through those
+/// signatures (the hashed class itself is excluded; consumers add it where
+/// it belongs). Shared by [`interface_hash`] and
+/// [`check_interface_name_collisions`] so the injectivity check covers
+/// exactly the set the hash folds.
+fn interface_surface(
+    env: &crate::typeck::env::TypeEnv,
+    class_name: &str,
+) -> (Vec<String>, std::collections::BTreeSet<String>) {
     let supported = |t: &PlutoType| {
         // Top-level entities cross as handles; entities NESTED in values
         // are still untransferable (a copy would fork identity).
@@ -1650,8 +1674,11 @@ pub fn interface_hash(env: &crate::typeck::env::TypeEnv, class_name: &str) -> St
 
     let mut sigs: Vec<String> = Vec::new();
     // Value classes/enums reachable through the dispatchable signatures:
-    // their field layout AND contracts are wire surface.
-    let mut value_types: BTreeSet<String> = BTreeSet::new();
+    // their field layout AND contracts are wire surface. The hashed type
+    // itself is NOT in this set — each consumer adds it where it belongs
+    // (its contracts hash and collide; its own field layout is not wire
+    // surface, since consumer stubs do not mirror implementation fields).
+    let mut value_types: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     if let Some(info) = env.classes.get(class_name) {
         for mname in &info.methods {
             let mangled = crate::typeck::env::mangle_method(class_name, mname);
@@ -1669,12 +1696,17 @@ pub fn interface_hash(env: &crate::typeck::env::TypeEnv, class_name: &str) -> St
         }
     }
     sigs.sort();
+    (sigs, value_types)
+}
+
+pub fn interface_hash(env: &crate::typeck::env::TypeEnv, class_name: &str) -> String {
+    let (sigs, value_types) = interface_surface(env, class_name);
 
     // The hashed type itself always contributes its contracts (an entity's
     // own clauses live on its own hash) — but not its field layout, which
     // a consumer stub does not mirror (implementation fields are not wire
     // surface; only value types crossing the boundary are).
-    let mut wire_types: BTreeSet<String> = value_types.clone();
+    let mut wire_types: std::collections::BTreeSet<String> = value_types.clone();
     wire_types.insert(class_name.to_string());
 
     // Contract section: every clause of every boundary-crossing type, in a
@@ -1758,6 +1790,102 @@ pub fn interface_hash(env: &crate::typeck::env::TypeEnv, class_name: &str) -> St
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{h:016x}")
+}
+
+/// Short-name ambiguity in one interface's hashed surface (issue #419):
+/// groups of DISTINCT full names that fold to one label. Checked over the
+/// wire-type set and over the `satisfies` property names those types
+/// export, since both are reduced to last segments by the hash.
+pub fn interface_short_name_collisions(
+    env: &crate::typeck::env::TypeEnv,
+    class_name: &str,
+) -> Vec<(String, Vec<String>)> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let (_, mut wire_types) = interface_surface(env, class_name);
+    // The hashed type's own contracts and properties fold into the hash
+    // too, so its short name participates in the injectivity requirement.
+    wire_types.insert(class_name.to_string());
+    let mut groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for t in &wire_types {
+        groups
+            .entry(format!("type name '{}'", short_name(t)))
+            .or_default()
+            .insert(t.clone());
+    }
+    for t in &wire_types {
+        for prop in env.class_properties.get(t).map(Vec::as_slice).unwrap_or(&[]) {
+            groups
+                .entry(format!("property name '{}'", short_name(&prop.name)))
+                .or_default()
+                .insert(prop.name.clone());
+        }
+    }
+    groups
+        .into_iter()
+        .filter(|(_, g)| g.len() > 1)
+        .map(|(k, g)| (k, g.into_iter().collect()))
+        .collect()
+}
+
+/// Reject interfaces whose hashed surface is ambiguous under short-name
+/// folding (issue #419). The hash reduces type and property names to their
+/// last segment so that independently-compiled producer and consumer
+/// binaries — whose module prefixes differ — agree on the hash of the same
+/// interface. That reduction must be injective within one interface's wire
+/// surface: with `a.Foo` and `b.Foo` both crossing one boundary, swapping
+/// a contract clause between them would be hash-invisible, silencing
+/// exactly the version-skew rejection #385 added. No canonical
+/// disambiguation is derivable from the hashed surface itself (the
+/// colliding types may be structurally identical, differing only in the
+/// contracts whose movement must be detected), so the honest answer is to
+/// refuse the interface and ask for a rename — which preserves the
+/// cross-program agreement property for every non-colliding interface
+/// unchanged.
+///
+/// Runs once per compile over every class that participates in a boundary:
+/// served classes, remote interface types, and — when any boundary exists
+/// — object (entity) types, whose methods are dispatched through the same
+/// served connections keyed by their own interface hash.
+pub fn check_interface_name_collisions(
+    program: &crate::parser::ast::Program,
+    env: &crate::typeck::env::TypeEnv,
+) -> Result<(), crate::diagnostics::CompileError> {
+    let mut boundary: std::collections::BTreeSet<String> =
+        crate::marshal::collect_served_classes(program)
+            .into_iter()
+            .collect();
+    boundary.extend(env.remote_types.iter().cloned());
+    if !boundary.is_empty() {
+        boundary.extend(env.object_types.iter().cloned());
+    }
+    for cname in &boundary {
+        let collisions = interface_short_name_collisions(env, cname);
+        let Some((label, names)) = collisions.first() else {
+            continue;
+        };
+        let span = program
+            .classes
+            .iter()
+            .find(|c| c.node.name.node == *cname)
+            .map(|c| c.node.name.span)
+            .unwrap_or_else(crate::span::Span::dummy);
+        let list = names.join("', '");
+        return Err(crate::diagnostics::CompileError::type_err(
+            format!(
+                "interface of '{cname}' is ambiguous under module-prefix-independent \
+                 hashing: {label} abbreviates distinct boundary-crossing declarations \
+                 '{list}'. The interface hash reduces names to their last segment so \
+                 independently-compiled binaries agree on it, which requires short \
+                 names to be unique within one interface's wire surface — otherwise a \
+                 contract clause could move between the same-named declarations \
+                 without changing the hash, and version skew would go undetected. \
+                 Rename one of them (or wrap one in a differently-named type) so \
+                 everything crossing this boundary has a unique name"
+            ),
+            span,
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2271,6 +2399,195 @@ mod tests {
             interface_hash(&plain, "Billing"),
             interface_hash(&with_requires, "Billing")
         );
+    }
+
+    // ===== short-name injectivity (issue #419) =====
+
+    /// Hand-build the minimal TypeEnv shape the surface traversal reads:
+    /// an interface class `Billing` with one dispatchable method, plus the
+    /// named wire types it carries. Module-prefixed names (`a.Foo`) cannot
+    /// be produced by single-file parsing, so these tests construct the
+    /// post-flattening state directly.
+    fn synth_env(
+        method_params: Vec<crate::typeck::types::PlutoType>,
+        wire_classes: &[&str],
+        invariants: &[(&str, &str)],
+    ) -> crate::typeck::env::TypeEnv {
+        use crate::typeck::env::{ClassInfo, FuncSig};
+        use crate::typeck::types::PlutoType;
+        let mut env = crate::typeck::env::TypeEnv::new();
+        for cname in wire_classes {
+            env.classes.insert(
+                cname.to_string(),
+                ClassInfo {
+                    fields: vec![("n".to_string(), PlutoType::Int, false)],
+                    methods: vec![],
+                    impl_traits: vec![],
+                    lifecycle: crate::parser::ast::Lifecycle::Singleton,
+                },
+            );
+        }
+        env.classes.insert(
+            "Billing".to_string(),
+            ClassInfo {
+                fields: vec![],
+                methods: vec!["m".to_string()],
+                impl_traits: vec![],
+                lifecycle: crate::parser::ast::Lifecycle::Singleton,
+            },
+        );
+        let mut params = vec![PlutoType::Class("Billing".to_string())];
+        params.extend(method_params);
+        env.functions.insert(
+            crate::typeck::env::mangle_method("Billing", "m"),
+            FuncSig { params, return_type: PlutoType::Void },
+        );
+        for (cname, desc) in invariants {
+            env.class_invariants.insert(
+                cname.to_string(),
+                vec![crate::typeck::discharge::InvariantSpec {
+                    expr: Expr::BoolLit(true),
+                    desc: desc.to_string(),
+                    span: crate::span::Span::dummy(),
+                    two_state: false,
+                    provenance: None,
+                }],
+            );
+        }
+        env
+    }
+
+    #[test]
+    fn colliding_wire_type_short_names_detected() {
+        use crate::typeck::types::PlutoType;
+        let env = synth_env(
+            vec![
+                PlutoType::Class("a.Foo".to_string()),
+                PlutoType::Class("b.Foo".to_string()),
+            ],
+            &["a.Foo", "b.Foo"],
+            &[],
+        );
+        let collisions = interface_short_name_collisions(&env, "Billing");
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].0, "type name 'Foo'");
+        assert_eq!(collisions[0].1, vec!["a.Foo".to_string(), "b.Foo".to_string()]);
+    }
+
+    #[test]
+    fn non_colliding_cross_module_names_report_nothing() {
+        use crate::typeck::types::PlutoType;
+        let env = synth_env(
+            vec![
+                PlutoType::Class("a.Foo".to_string()),
+                PlutoType::Class("b.Bar".to_string()),
+            ],
+            &["a.Foo", "b.Bar"],
+            &[],
+        );
+        assert!(interface_short_name_collisions(&env, "Billing").is_empty());
+    }
+
+    #[test]
+    fn module_prefix_independence_preserved_for_unique_short_names() {
+        // The cross-program agreement property #385 built the reduction
+        // for: the same interface compiled under different module prefixes
+        // hashes identically — including its contracts.
+        use crate::typeck::types::PlutoType;
+        let server = synth_env(
+            vec![PlutoType::Class("a.Foo".to_string())],
+            &["a.Foo"],
+            &[("a.Foo", "self.n >= 0")],
+        );
+        let consumer = synth_env(
+            vec![PlutoType::Class("b.Foo".to_string())],
+            &["b.Foo"],
+            &[("b.Foo", "self.n >= 0")],
+        );
+        assert_eq!(
+            interface_hash(&server, "Billing"),
+            interface_hash(&consumer, "Billing")
+        );
+        assert!(interface_short_name_collisions(&server, "Billing").is_empty());
+    }
+
+    #[test]
+    fn contract_swap_between_same_named_types_is_caught_by_rejection() {
+        // The sensitivity gap the issue demonstrates: with `a.Foo` and
+        // `b.Foo` in one surface, moving the invariant from one to the
+        // other is hash-INVISIBLE — which is exactly why such surfaces are
+        // refused before hashing rather than disambiguated.
+        use crate::typeck::types::PlutoType;
+        let params = || {
+            vec![
+                PlutoType::Class("a.Foo".to_string()),
+                PlutoType::Class("b.Foo".to_string()),
+            ]
+        };
+        let producer = synth_env(params(), &["a.Foo", "b.Foo"], &[("a.Foo", "self.n >= 0")]);
+        let skewed = synth_env(params(), &["a.Foo", "b.Foo"], &[("b.Foo", "self.n >= 0")]);
+        assert_eq!(
+            interface_hash(&producer, "Billing"),
+            interface_hash(&skewed, "Billing"),
+            "the collision really is hash-invisible (why rejection is required)"
+        );
+        assert!(!interface_short_name_collisions(&producer, "Billing").is_empty());
+        assert!(!interface_short_name_collisions(&skewed, "Billing").is_empty());
+    }
+
+    #[test]
+    fn colliding_property_short_names_detected() {
+        use crate::typeck::env::ProvidedProperty;
+        use crate::typeck::types::PlutoType;
+        let mut env = synth_env(
+            vec![PlutoType::Class("a.Foo".to_string())],
+            &["a.Foo"],
+            &[],
+        );
+        env.class_properties.insert(
+            "Billing".to_string(),
+            vec![ProvidedProperty {
+                name: "verify.monotonic".to_string(),
+                args: vec!["self.n".to_string()],
+            }],
+        );
+        env.class_properties.insert(
+            "a.Foo".to_string(),
+            vec![ProvidedProperty {
+                name: "monotonic".to_string(),
+                args: vec!["self.n".to_string()],
+            }],
+        );
+        let collisions = interface_short_name_collisions(&env, "Billing");
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].0, "property name 'monotonic'");
+        assert_eq!(
+            collisions[0].1,
+            vec!["monotonic".to_string(), "verify.monotonic".to_string()]
+        );
+    }
+
+    #[test]
+    fn same_property_name_on_two_types_is_not_a_collision() {
+        // The SAME full property name exported by two wire types folds to
+        // one entry — injective, no ambiguity.
+        use crate::typeck::env::ProvidedProperty;
+        use crate::typeck::types::PlutoType;
+        let mut env = synth_env(
+            vec![PlutoType::Class("a.Foo".to_string())],
+            &["a.Foo"],
+            &[],
+        );
+        for t in ["Billing", "a.Foo"] {
+            env.class_properties.insert(
+                t.to_string(),
+                vec![ProvidedProperty {
+                    name: "verify.monotonic".to_string(),
+                    args: vec!["self.n".to_string()],
+                }],
+            );
+        }
+        assert!(interface_short_name_collisions(&env, "Billing").is_empty());
     }
 
     #[test]
