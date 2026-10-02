@@ -1,6 +1,6 @@
 # RFC: The Verification Engine
 
-**Status:** Draft — direction accepted in design discussion (2026-09-28); phases 1–3 implemented
+**Status:** Draft — direction accepted in design discussion (2026-09-28); phases 1–3 implemented; phase 6 (Blob in stdlib — the acceptance test) complete via `std.blob`
 **Author:** Design discussion
 **Date:** 2026-09-28
 **Related:** [epistemics.md](epistemics.md) (the semantic this engine instantiates), [v1-vision.md](../v1-vision.md) (Static Verification), [contracts.md](contracts.md), [rfc-typestates.md](rfc-typestates.md), [rfc-objects.md](rfc-objects.md), [rfc-distributed-safety.md](rfc-distributed-safety.md), [distributed-model.md](distributed-model.md)
@@ -269,8 +269,24 @@ Distribution patterns are compositions of these, written as libraries.
 
 ## Acceptance test: Blob is a stdlib module
 
-The engine is done when this is expressible in the standard library, in Pluto, with
-its theorem checked (syntax illustrative — see open questions):
+**COMPLETE** (phase 6). `std.blob` (`stdlib/blob/blob.pt`) ships the fenced
+single-writer store as a library: a `BlobAuthority` entity carrying
+`satisfies verify.monotonic(self.epoch), verify.fenced(self.data, self.epoch,
+WriteGrant)` (both discharged at compile time and exported by name in
+analyze/DerivedInfo), the two hand-written protocol invariants, the exact
+`ensures self.epoch == old(self.epoch) + 1` mint relation and the
+`apply` frame ensures, and the typed `StaleGrant` rejection. A server can
+own the authority and clients drive the whole protocol through entity
+handles and `at` across processes
+(tests/integration/distributed.rs `blob_authority_serves_fenced_writes_across_processes`);
+examples/blob/main.pt is now a thin consumer of the module. Deviations from
+the sketch below: the lease window and the `Blob<S>` capability-carrying
+client view are future liveness/ergonomics layers, not safety, and are not
+yet shipped; the boundary payload is `string` (bytes cannot cross a
+placement boundary yet).
+
+The original target, as sketched before the engine shipped (syntax
+illustrative — see open questions):
 
 ```pluto
 object BlobAuthority {
@@ -439,7 +455,12 @@ then a stdlib import, not a language feature.
    consumption composed with the phase-2 flow rules, `must_release` state
    annotations with full move/capture/store/scope-exit linearity, and
    catch-obligation handling for must-release payloads.
-6. **Blob in stdlib** — the acceptance test, end to end.
+6. **Blob in stdlib** — the acceptance test, end to end. **Shipped**
+   (`stdlib/blob/blob.pt`, module `std.blob`): the authority, grant, and
+   typed rejection as a library, every claim from the example discharged
+   across the module boundary, the theorem exported by name, and the
+   protocol proven over two processes (tests/integration/distributed.rs).
+   See "Acceptance test: Blob is a stdlib module" above.
 
 Phases 1–3 are pure compiler work with no language-surface change beyond diagnostics,
 and each pays for itself independently of the distributed story.
