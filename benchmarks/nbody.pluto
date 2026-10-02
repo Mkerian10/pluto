@@ -145,7 +145,7 @@ fn main() {
     let start = time_ns()
 
     let e0 = energy(bodies)
-    print("energy before: {e0}")
+    print(f"energy before: {e0}")
 
     i = 0
     while i < steps {
@@ -154,9 +154,9 @@ fn main() {
     }
 
     let e1 = energy(bodies)
-    print("energy after: {e1}")
+    print(f"energy after: {e1}")
 
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("elapsed: {ms} ms")
+    print(f"elapsed: {ms} ms")
 }

@@ -26,6 +26,6 @@ fn main() {
     }
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("sum = {sum}")
-    print("elapsed: {ms} ms")
+    print(f"sum = {sum}")
+    print(f"elapsed: {ms} ms")
 }

@@ -1,27 +1,27 @@
 fn fannkuch(n: int) int {
     // Initialize permutation
-    let perm = [0]
-    let i = 1
+    let mut perm = [0]
+    let mut i = 1
     while i < n {
         perm.push(i)
         i = i + 1
     }
-    let perm1 = [0]
+    let mut perm1 = [0]
     i = 1
     while i < n {
         perm1.push(i)
         i = i + 1
     }
-    let count = [0]
+    let mut count = [0]
     i = 1
     while i < n {
         count.push(0)
         i = i + 1
     }
 
-    let max_flips = 0
-    let checksum = 0
-    let perm_count = 0
+    let mut max_flips = 0
+    let mut checksum = 0
+    let mut perm_count = 0
 
     // Initialize perm1 to identity
     i = 0
@@ -38,19 +38,19 @@ fn fannkuch(n: int) int {
     }
 
     // Process first permutation
-    let first = perm1[0]
+    let mut first = perm1[0]
     if first != 0 {
         i = 0
         while i < n {
             perm[i] = perm1[i]
             i = i + 1
         }
-        let flips = 0
+        let mut flips = 0
         while perm[0] != 0 {
             let k = perm[0]
             // Reverse first k+1 elements
-            let lo = 0
-            let hi = k
+            let mut lo = 0
+            let mut hi = k
             while lo < hi {
                 let tmp = perm[lo]
                 perm[lo] = perm[hi]
@@ -72,10 +72,10 @@ fn fannkuch(n: int) int {
     perm_count = perm_count + 1
 
     // Generate permutations
-    let done = false
+    let mut done = false
     while !done {
         // Rotate: perm1[0] <- perm1[1] <- ... <- perm1[r] <- perm1[0]
-        let r = 1
+        let mut r = 1
         while r < n {
             let perm0 = perm1[0]
             i = 0
@@ -103,11 +103,11 @@ fn fannkuch(n: int) int {
                     perm[i] = perm1[i]
                     i = i + 1
                 }
-                let flips = 0
+                let mut flips = 0
                 while perm[0] != 0 {
                     let k = perm[0]
-                    let lo = 0
-                    let hi = k
+                    let mut lo = 0
+                    let mut hi = k
                     while lo < hi {
                         let tmp = perm[lo]
                         perm[lo] = perm[hi]
@@ -130,7 +130,7 @@ fn fannkuch(n: int) int {
         }
     }
 
-    print("checksum: {checksum}")
+    print(f"checksum: {checksum}")
     return max_flips
 }
 
@@ -140,6 +140,6 @@ fn main() {
     let result = fannkuch(n)
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("max flips: {result}")
-    print("elapsed: {ms} ms")
+    print(f"max flips: {result}")
+    print(f"elapsed: {ms} ms")
 }

@@ -46,6 +46,6 @@ fn main() {
     let bounces = bounce_sim(steps)
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("bounces: {bounces}")
-    print("elapsed: {ms} ms")
+    print(f"bounces: {bounces}")
+    print(f"elapsed: {ms} ms")
 }

@@ -1,9 +1,9 @@
 // Array-backed linked list (no null pointers in Pluto)
 // values[i] = value of node i, nexts[i] = index of next node (-1 = end)
 
-fn make_list(values: [int], nexts: [int], n: int) int {
+fn make_list(mut values: [int], mut nexts: [int], n: int) int {
     // Clear and rebuild
-    let i = 0
+    let mut i = 0
     while i < n {
         if i >= values.len() {
             values.push(i)
@@ -19,8 +19,8 @@ fn make_list(values: [int], nexts: [int], n: int) int {
 }
 
 fn list_length(nexts: [int], head: int) int {
-    let count = 0
-    let curr = head
+    let mut count = 0
+    let mut curr = head
     while curr != -1 {
         count = count + 1
         curr = nexts[curr]
@@ -29,8 +29,8 @@ fn list_length(nexts: [int], head: int) int {
 }
 
 fn list_sum(values: [int], nexts: [int], head: int) int {
-    let sum = 0
-    let curr = head
+    let mut sum = 0
+    let mut curr = head
     while curr != -1 {
         sum = sum + values[curr]
         curr = nexts[curr]
@@ -38,9 +38,9 @@ fn list_sum(values: [int], nexts: [int], head: int) int {
     return sum
 }
 
-fn list_reverse(nexts: [int], head: int) int {
-    let prev = -1
-    let curr = head
+fn list_reverse(mut nexts: [int], head: int) int {
+    let mut prev = -1
+    let mut curr = head
     while curr != -1 {
         let next = nexts[curr]
         nexts[curr] = prev
@@ -51,8 +51,8 @@ fn list_reverse(nexts: [int], head: int) int {
 }
 
 fn list_nth(nexts: [int], head: int, n: int) int {
-    let curr = head
-    let i = 0
+    let mut curr = head
+    let mut i = 0
     while i < n {
         if curr == -1 {
             return -1
@@ -71,8 +71,8 @@ fn main() {
     let values = [0]
     let nexts = [0]
 
-    let total = 0
-    let i = 0
+    let mut total = 0
+    let mut i = 0
     while i < iters {
         let head = make_list(values, nexts, n)
 
@@ -94,6 +94,6 @@ fn main() {
 
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("total: {total}")
-    print("elapsed: {ms} ms")
+    print(f"total: {total}")
+    print(f"elapsed: {ms} ms")
 }

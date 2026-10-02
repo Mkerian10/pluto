@@ -1,14 +1,14 @@
-fn swap(arr: [int], i: int, j: int) {
+fn swap(mut arr: [int], i: int, j: int) {
     let tmp = arr[i]
     arr[i] = arr[j]
     arr[j] = tmp
 }
 
-fn permute(arr: [int], n: int, count: int) int {
+fn permute(arr: [int], n: int, mut count: int) int {
     if n == 1 {
         return count + 1
     }
-    let i = 0
+    let mut i = 0
     while i < n {
         count = permute(arr, n - 1, count)
         if n % 2 == 0 {
@@ -26,7 +26,7 @@ fn main() {
     let start = time_ns()
 
     let arr = [0]
-    let i = 1
+    let mut i = 1
     while i < size {
         arr.push(i)
         i = i + 1
@@ -36,6 +36,6 @@ fn main() {
 
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
-    print("permutations of {size}: {count}")
-    print("elapsed: {ms} ms")
+    print(f"permutations of {size}: {count}")
+    print(f"elapsed: {ms} ms")
 }

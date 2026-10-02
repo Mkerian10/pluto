@@ -25,34 +25,34 @@ fn main() {
     let start = time_ns()
 
     let stretch = make_tree(stretch_depth)
-    print("stretch tree of depth {stretch_depth} check: {check(stretch)}")
+    print(f"stretch tree of depth {stretch_depth} check: {check(stretch)}")
 
     let long_lived = make_tree(max_depth)
 
-    let depth = min_depth
+    let mut depth = min_depth
     while depth <= max_depth {
-        let iterations = 1
-        let d = 0
+        let mut iterations = 1
+        let mut d = 0
         while d < (max_depth - depth + min_depth) {
             iterations = iterations * 2
             d = d + 1
         }
-        let total_check = 0
-        let i = 0
+        let mut total_check = 0
+        let mut i = 0
         while i < iterations {
             let t = make_tree(depth)
             total_check = total_check + check(t)
             i = i + 1
         }
-        print("{iterations} trees of depth {depth} check: {total_check}")
+        print(f"{iterations} trees of depth {depth} check: {total_check}")
         depth = depth + 2
     }
 
-    print("long lived tree of depth {max_depth} check: {check(long_lived)}")
+    print(f"long lived tree of depth {max_depth} check: {check(long_lived)}")
 
     let elapsed = time_ns() - start
     let ms = elapsed / 1000000
     let heap = gc_heap_size()
-    print("heap_size: {heap} bytes")
-    print("elapsed: {ms} ms")
+    print(f"heap_size: {heap} bytes")
+    print(f"elapsed: {ms} ms")
 }
