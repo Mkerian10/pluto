@@ -1,6 +1,6 @@
 # RFC: Entity Lifecycle — the Release Protocol
 
-**Status:** Draft — awaiting owner review; resolves rfc-objects.md open question 4 (the registry half)
+**Status:** Accepted (2026-10-02); resolves rfc-objects.md open question 4 (the registry half)
 **Author:** Design discussion
 **Date:** 2026-10-01
 **Related:** [rfc-objects.md](rfc-objects.md) (the registry this governs), [epistemics.md](epistemics.md) (warrants and leases — the lens), [rfc-verification.md](rfc-verification.md) (the lease-window doctrine, degradation), [rfc-distributed-safety.md](rfc-distributed-safety.md) (failure classification), [rfc-typestates.md](rfc-typestates.md) (must-release linearity), [distributed-model.md](distributed-model.md)
