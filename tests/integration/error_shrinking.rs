@@ -63,8 +63,14 @@ fn unguarded_method_call_still_requires_handling() {
             }
         }
 
+        fn seed() int {
+            return 100
+        }
+
         fn main() {
-            let mut account = Account { balance: 100 }
+            // Opaque initializer: a literal would grant the exact
+            // construction fact (balance == 100) and shrink the call.
+            let mut account = Account { balance: seed() }
             account.withdraw(30)
         }
         "#,
@@ -1089,8 +1095,14 @@ fn param_field_guard_without_caller_fact_requires_handling() {
             return g.token
         }
 
+        fn seed() int {
+            return 5
+        }
+
         fn main() {
-            let g = Grant { token: 5 }
+            // Opaque initializer: a literal would grant the exact
+            // construction fact (token == 5) and shrink the call.
+            let g = Grant { token: seed() }
             print(redeem(g))
         }
         "#,
@@ -1098,8 +1110,9 @@ fn param_field_guard_without_caller_fact_requires_handling() {
     );
 }
 
-/// An interleaved call between the field guard and the call kills the
-/// caller's field fact (an alias may have mutated the object).
+/// An interleaved call that may reach the guarded class (its declared
+/// parameter is class-typed, so it may hold an alias) kills the caller's
+/// field fact.
 #[test]
 fn interleaved_call_kills_param_field_guard() {
     compile_should_fail_with(
@@ -1110,8 +1123,8 @@ fn interleaved_call_kills_param_field_guard() {
             token: int
         }
 
-        fn noop() int {
-            return 0
+        fn poke(h: Grant) int {
+            return h.token
         }
 
         fn redeem(g: Grant) int {
@@ -1123,10 +1136,148 @@ fn interleaved_call_kills_param_field_guard() {
 
         fn main() {
             let g = Grant { token: 5 }
+            let h = Grant { token: 7 }
+            if g.token > 0 {
+                let x = poke(h)
+                print(redeem(g) + x)
+            }
+        }
+        "#,
+        "must be handled",
+    );
+}
+
+/// The purity-aware flip side: an interleaved call that provably cannot
+/// reach the guarded class (declared params are reach-free) no longer
+/// kills the guard fact — the shrink survives.
+#[test]
+fn reach_free_interleaved_call_keeps_param_field_guard() {
+    let out = compile_and_run_stdout(
+        r#"
+        error BadToken {}
+
+        class Grant {
+            token: int
+        }
+
+        fn noop() int {
+            return 0
+        }
+
+        fn read_token() int {
+            return 5
+        }
+
+        fn redeem(g: Grant) int {
+            if g.token <= 0 {
+                raise BadToken {}
+            }
+            return g.token
+        }
+
+        fn main() {
+            let mut g = Grant { token: 0 }
+            g.token = read_token()
             if g.token > 0 {
                 let x = noop()
                 print(redeem(g) + x)
             }
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "5");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Construction facts (phase 4.5 precision)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Construction is fully transparent: `balance == 100` flows to the
+/// caller's fact env, refuting the raise condition with no guard at all.
+#[test]
+fn construction_facts_enable_shrinking() {
+    let out = compile_and_run_stdout(
+        r#"
+        error Insufficient {}
+
+        class Account {
+            balance: int
+
+            fn try_withdraw(mut self, amount: int) int {
+                if amount > self.balance {
+                    raise Insufficient {}
+                }
+                self.balance = self.balance - amount
+                return self.balance
+            }
+        }
+
+        fn main() {
+            let mut acc = Account { balance: 100 }
+            print(acc.try_withdraw(50))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "50");
+}
+
+/// Initializers that are caller locals transfer as relation facts
+/// (`b.cap == base`, with `base` a local no callee can change) — enough to
+/// refute a raise condition phrased against the same local.
+#[test]
+fn construction_facts_relate_to_locals() {
+    let out = compile_and_run_stdout(
+        r#"
+        error Empty {}
+
+        class Buffer {
+            cap: int
+
+            fn take(mut self, n: int) int {
+                if n > self.cap {
+                    raise Empty {}
+                }
+                self.cap = self.cap - n
+                return self.cap
+            }
+        }
+
+        fn main() {
+            let base = 60
+            let mut b = Buffer { cap: base }
+            print(b.take(base))
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "0");
+}
+
+/// An opaque initializer (a call) grants nothing — handling required.
+#[test]
+fn opaque_construction_grants_no_facts() {
+    compile_should_fail_with(
+        r#"
+        error Insufficient {}
+
+        fn seed() int {
+            return 100
+        }
+
+        class Account {
+            balance: int
+
+            fn try_withdraw(mut self, amount: int) int {
+                if amount > self.balance {
+                    raise Insufficient {}
+                }
+                self.balance = self.balance - amount
+                return self.balance
+            }
+        }
+
+        fn main() {
+            let mut acc = Account { balance: seed() }
+            print(acc.try_withdraw(50))
         }
         "#,
         "must be handled",

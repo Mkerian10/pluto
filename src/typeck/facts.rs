@@ -52,14 +52,30 @@
 //! - Any field assignment kills *all* field-path facts (aliasing: two locals
 //!   can point at the same object, so a write through one invalidates facts
 //!   about the other).
-//! - Any statement whose immediate expressions contain an *impure*
-//!   call-like node (call, method call other than builtin collection `len`,
-//!   static trait call, `at`, `spawn`) kills all field-path facts *and all
-//!   length terms* — the callee may mutate any reachable object, including
-//!   a collection an alias shares (`push`/`pop`/`clear`/`insert` are method
-//!   calls and mut-arg passes are calls, so every mutating use of `xs` is
-//!   covered; indexing, iteration, and `len` itself are not calls and kill
-//!   nothing). Local int variables survive calls: parameters are passed by
+//! - Any statement whose immediate expressions contain a call-like node
+//!   (call, method call, static trait call, `at`, `spawn`) kills facts
+//!   according to the call's *severity* ([`call_severity`], the one shared
+//!   exemption predicate — invariant discharge and `guarded_by` dominance
+//!   consume the same classification rather than keeping their own copies):
+//!
+//!   - [`CallSeverity::Pure`] — builtin collection `len()` on a trackable
+//!     path, and builtin *free functions* (`print`, `abs`, ...) whose
+//!     argument values provably cannot reach any class instance. These run
+//!     no user code and mutate nothing; they kill nothing.
+//!   - [`CallSeverity::Collections`] — calls that may mutate collection
+//!     contents/lengths but provably cannot write any class's int fields:
+//!     builtin *methods* (receiver of primitive/collection type — see the
+//!     load-bearing survey on [`call_severity`]), and direct calls to known
+//!     functions/methods none of whose declared parameter types can reach a
+//!     class value ([`type_reaches_class`]). These kill all *length terms*
+//!     (a builtin `push`/`pop`/`clear` on an alias changes `xs.len()`) but
+//!     leave field-path facts alone.
+//!   - [`CallSeverity::All`] — everything else (the callee may reach and
+//!     mutate any object an argument or receiver can reach, aliasing
+//!     coarse by type): kills all field-path facts *and* all length terms,
+//!     exactly the old conservative rule.
+//!
+//!   Local int variables survive every call: parameters are passed by
 //!   value and `mut` params are local copies, so no call can change a
 //!   caller's local.
 //! - Loop entry (`while` / `for`) drops **all** facts, and they stay dropped
@@ -102,13 +118,13 @@
 //! affine vocabulary (ghost variables over a method body, field
 //! substitutions at construction sites).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::parser::ast::{BinOp, Expr, UnaryOp};
 use crate::span::Spanned;
 use crate::visit::{walk_expr, Visitor};
 
-use super::env::TypeEnv;
+use super::env::{mangle_method, TypeEnv};
 use super::types::PlutoType;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -244,6 +260,9 @@ enum KillEvent {
     Path(String),
     /// All dotted (field) paths were killed.
     Fields,
+    /// All length terms were killed (a call that may mutate collection
+    /// contents but cannot write class int fields).
+    LenTerms,
     /// Everything was killed.
     All,
 }
@@ -355,6 +374,22 @@ impl FactEnv {
         self.kill_log.push(KillEvent::Fields);
     }
 
+    /// Kill every fact involving a length term, in every frame. Applied for
+    /// [`CallSeverity::Collections`] calls: the callee may grow or shrink a
+    /// collection through an alias (builtin `push` on a shared array), but
+    /// provably cannot write any class's int fields, so plain field-path
+    /// facts survive.
+    pub fn kill_len_terms(&mut self) {
+        for frame in &mut self.frames {
+            frame.intervals.retain(|k, _| !is_len_term(k));
+            frame
+                .relations
+                .retain(|(a, _, b)| !is_len_term(a) && !is_len_term(b));
+            frame.ne_consts.retain(|(p, _)| !is_len_term(p));
+        }
+        self.kill_log.push(KillEvent::LenTerms);
+    }
+
     /// Drop every fact (loop entry — see module docs).
     pub fn havoc_all(&mut self) {
         for frame in &mut self.frames {
@@ -380,6 +415,7 @@ impl FactEnv {
                 fact.paths().any(|p| match ev {
                     KillEvent::Path(root) => path_under(p, root),
                     KillEvent::Fields => p.contains('.'),
+                    KillEvent::LenTerms => is_len_term(p),
                     KillEvent::All => true,
                 })
             })
@@ -593,6 +629,328 @@ pub fn contains_impure_call(expr: &Spanned<Expr>, env: &TypeEnv) -> bool {
     let mut scan = CallScan { env, found: false };
     scan.visit_expr(expr);
     scan.found
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Call severity — the one shared purity-exemption predicate
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// How badly the call-like nodes of an expression can invalidate facts.
+/// This is THE exemption predicate for call-severing decisions: the
+/// statement kill rules here, invariant/ensures discharge's ghost-scope
+/// severing (`discharge::pre_stmt`), and `guarded_by` dominance's call
+/// safety all consume this classification instead of keeping their own
+/// copies of the exemption logic.
+///
+/// Ordered: `Pure < Collections < All` — a statement's severity is the max
+/// over its call-like nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CallSeverity {
+    /// No call at all, or only calls that run no user code and mutate
+    /// nothing: builtin collection `len()` on a trackable path, and builtin
+    /// free functions whose argument values provably cannot reach a class
+    /// instance.
+    Pure,
+    /// Calls that may mutate collection contents (and therefore lengths)
+    /// but provably cannot write any int field of the target class (of
+    /// *any* class when the target is `None`).
+    ///
+    /// LOAD-BEARING SURVEY (builtin methods cannot write class int fields):
+    /// every builtin method dispatches on a receiver of primitive or
+    /// collection type (`int`/`float`/`bool`/`byte`/`string`/`bytes`/
+    /// arrays/maps/sets/ranges — see `infer.rs`'s builtin method tables).
+    /// No builtin method takes a *class* receiver, runs user code, or
+    /// follows references into class instances: mutating builtins
+    /// (`push`/`pop`/`insert`/`remove`/`clear`/...) move element
+    /// *references* and change lengths, never the fields of the objects
+    /// those references point at. A class's int fields are therefore
+    /// unreachable from any builtin — which is exactly why this level
+    /// kills length terms but not field-path facts. If a builtin that
+    /// writes through to class fields is ever added, this classification
+    /// must be revisited.
+    Collections,
+    /// The callee may reach the target (receiver passed, an argument whose
+    /// type can transitively reach the target's class — alias-coarse by
+    /// type — or an opaque callee: closures, trait dispatch, `at`, `spawn`,
+    /// static trait calls, unknown functions). Everything may be mutated.
+    All,
+}
+
+/// Can a value of type `ty` transitively reach (alias) an instance of class
+/// `target` — or of *any* class when `target` is `None`? Reachability
+/// follows the heap: class/entity fields, enum payloads, container
+/// elements. Opaque types (traits, fn values — whose captures may hold
+/// anything — type params, generic instances, error values) conservatively
+/// reach everything.
+pub(crate) fn type_reaches_class(ty: &PlutoType, target: Option<&str>, env: &TypeEnv) -> bool {
+    fn go(
+        ty: &PlutoType,
+        target: Option<&str>,
+        env: &TypeEnv,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        match ty {
+            PlutoType::Int
+            | PlutoType::Float
+            | PlutoType::Bool
+            | PlutoType::Byte
+            | PlutoType::Bytes
+            | PlutoType::String
+            | PlutoType::Void
+            | PlutoType::Range => false,
+            PlutoType::Array(e)
+            | PlutoType::Set(e)
+            | PlutoType::Nullable(e)
+            | PlutoType::Task(e)
+            | PlutoType::Sender(e)
+            | PlutoType::Receiver(e)
+            | PlutoType::Stream(e) => go(e, target, env, visiting),
+            PlutoType::Map(k, v) => {
+                go(k, target, env, visiting) || go(v, target, env, visiting)
+            }
+            PlutoType::Class(c) => {
+                if target.is_none() || target == Some(c.as_str()) {
+                    return true;
+                }
+                if !visiting.insert(format!("c:{c}")) {
+                    return false; // already on the walk — cycle
+                }
+                match env.classes.get(c) {
+                    Some(ci) => ci
+                        .fields
+                        .iter()
+                        .any(|(_, ft, _)| go(ft, target, env, visiting)),
+                    None => true, // unknown class — conservative
+                }
+            }
+            PlutoType::Enum(name) => {
+                if !visiting.insert(format!("e:{name}")) {
+                    return false;
+                }
+                match env.enums.get(name) {
+                    Some(ei) => ei.variants.iter().any(|(_, fields)| {
+                        fields.iter().any(|(_, ft)| go(ft, target, env, visiting))
+                    }),
+                    None => true,
+                }
+            }
+            PlutoType::Trait(_)
+            | PlutoType::TypeParam(_)
+            | PlutoType::Fn(..)
+            | PlutoType::Error
+            | PlutoType::GenericInstance(..) => true,
+        }
+    }
+    go(ty, target, env, &mut HashSet::new())
+}
+
+/// Best-effort *syntactic* typing of a value expression, for classifying
+/// builtin free-function arguments before inference has run on the
+/// statement. `leaf_ty` resolves trackable paths (callers plug in
+/// `typed_path` or dominance's local vocabulary). Anything unresolvable is
+/// `None` (conservative).
+fn syntactic_type(
+    e: &Expr,
+    env: &TypeEnv,
+    leaf_ty: &dyn Fn(&Expr) -> Option<PlutoType>,
+) -> Option<PlutoType> {
+    if let Some(t) = leaf_ty(e) {
+        return Some(t);
+    }
+    match e {
+        Expr::IntLit(_) => Some(PlutoType::Int),
+        Expr::FloatLit(_) => Some(PlutoType::Float),
+        Expr::BoolLit(_) => Some(PlutoType::Bool),
+        Expr::StringLit(_) | Expr::StringInterp { .. } => Some(PlutoType::String),
+        Expr::UnaryOp { op: UnaryOp::Neg, operand } => {
+            syntactic_type(&operand.node, env, leaf_ty)
+        }
+        Expr::UnaryOp { op: UnaryOp::Not, .. } => Some(PlutoType::Bool),
+        Expr::BinOp { op, lhs, rhs } => {
+            if is_comparison(*op) || matches!(op, BinOp::And | BinOp::Or) {
+                return Some(PlutoType::Bool);
+            }
+            // Arithmetic / concat / bitwise: both sides must agree on a
+            // primitive type.
+            let l = syntactic_type(&lhs.node, env, leaf_ty)?;
+            let r = syntactic_type(&rhs.node, env, leaf_ty)?;
+            (l == r
+                && matches!(
+                    l,
+                    PlutoType::Int | PlutoType::Float | PlutoType::String | PlutoType::Byte
+                ))
+            .then_some(l)
+        }
+        Expr::MethodCall { object, method, args, .. }
+            if method.node == "len" && args.is_empty() =>
+        {
+            syntactic_type(&object.node, env, leaf_ty)
+                .filter(is_collection)
+                .map(|_| PlutoType::Int)
+        }
+        Expr::Call { name, .. } => {
+            // A direct call to a known function has its declared return
+            // type — unless a local variable shadows the name (closure).
+            if leaf_ty(&Expr::Ident(name.node.clone())).is_some() {
+                return None;
+            }
+            env.functions.get(&name.node).map(|sig| sig.return_type.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Classify a direct free-function call (shared with `guarded_by`
+/// dominance, which passes its own path vocabulary as `leaf_ty`):
+///
+/// - a call through a local fn-typed value (closure) is [`CallSeverity::All`]
+///   — its captures may alias anything;
+/// - a builtin free function (`print`, math, ...) runs no user code and
+///   mutates nothing: [`CallSeverity::Pure`] when every argument's value
+///   provably cannot reach the target class, [`CallSeverity::All`]
+///   otherwise (the task spec's alias-coarse discipline: handing `print` a
+///   possible alias of the receiver still severs);
+/// - a known user function is classified by its *declared* parameter types
+///   (stable without inference): no param type can reach the target ⇒
+///   [`CallSeverity::Collections`] (it may still mutate collections
+///   reachable from its args), else [`CallSeverity::All`];
+/// - anything unknown is [`CallSeverity::All`].
+pub(crate) fn free_call_severity(
+    name: &str,
+    args: &[Spanned<Expr>],
+    env: &TypeEnv,
+    target: Option<&str>,
+    leaf_ty: &dyn Fn(&Expr) -> Option<PlutoType>,
+) -> CallSeverity {
+    if leaf_ty(&Expr::Ident(name.to_string())).is_some() {
+        return CallSeverity::All;
+    }
+    if env.builtins.contains(name) {
+        let safe = args.iter().all(|a| {
+            syntactic_type(&a.node, env, leaf_ty)
+                .is_some_and(|t| !type_reaches_class(&t, target, env))
+        });
+        return if safe { CallSeverity::Pure } else { CallSeverity::All };
+    }
+    match env.functions.get(name) {
+        Some(sig) => {
+            if sig
+                .params
+                .iter()
+                .any(|t| type_reaches_class(t, target, env))
+            {
+                CallSeverity::All
+            } else {
+                CallSeverity::Collections
+            }
+        }
+        None => CallSeverity::All,
+    }
+}
+
+/// Classify a direct method call by its receiver's (path-resolvable) type.
+fn method_call_severity(
+    object: &Spanned<Expr>,
+    method: &Spanned<String>,
+    env: &TypeEnv,
+    target: Option<&str>,
+) -> CallSeverity {
+    let Some((_, rty)) = typed_path(&object.node, env) else {
+        return CallSeverity::All; // untrackable receiver (chained calls, ...)
+    };
+    match rty {
+        // Builtin method carriers — see the load-bearing survey on
+        // [`CallSeverity::Collections`].
+        PlutoType::Array(_)
+        | PlutoType::String
+        | PlutoType::Bytes
+        | PlutoType::Map(_, _)
+        | PlutoType::Set(_)
+        | PlutoType::Range
+        | PlutoType::Int
+        | PlutoType::Float
+        | PlutoType::Bool
+        | PlutoType::Byte => CallSeverity::Collections,
+        // Task bookkeeping that runs no user code in this thread.
+        PlutoType::Task(_) if method.node == "detach" || method.node == "cancel" => {
+            CallSeverity::Collections
+        }
+        PlutoType::Class(c) => {
+            match env.functions.get(&mangle_method(&c, &method.node)) {
+                // The receiver rides in params[0] as Class(c), so "can any
+                // declared parameter reach the target" covers the receiver
+                // itself (and sibling self-calls classify as All).
+                Some(sig) => {
+                    if sig
+                        .params
+                        .iter()
+                        .any(|t| type_reaches_class(t, target, env))
+                    {
+                        CallSeverity::All
+                    } else {
+                        CallSeverity::Collections
+                    }
+                }
+                None => CallSeverity::All,
+            }
+        }
+        _ => CallSeverity::All,
+    }
+}
+
+/// The severity of an expression: the max over every call-like node in it
+/// (closure bodies included — same conservatism as [`contains_impure_call`]).
+/// `target` scopes the question: `Some(class)` asks "can these calls write
+/// an int field of *this* class's instances" (invariant/ensures discharge);
+/// `None` asks about any class (the statement kill rules, dominance).
+pub(crate) fn call_severity(
+    expr: &Spanned<Expr>,
+    env: &TypeEnv,
+    target: Option<&str>,
+) -> CallSeverity {
+    struct Scan<'a> {
+        env: &'a TypeEnv,
+        target: Option<&'a str>,
+        sev: CallSeverity,
+    }
+    impl Visitor for Scan<'_> {
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            if self.sev == CallSeverity::All {
+                return;
+            }
+            match &expr.node {
+                Expr::MethodCall { .. } if len_path(&expr.node, self.env).is_some() => {
+                    // Pure length read; its object is a trackable path and
+                    // cannot itself contain calls.
+                    return;
+                }
+                Expr::MethodCall { object, method, .. } => {
+                    self.sev = self
+                        .sev
+                        .max(method_call_severity(object, method, self.env, self.target));
+                }
+                Expr::Call { name, args, .. } => {
+                    let leaf = |e: &Expr| typed_path(e, self.env).map(|(_, t)| t);
+                    self.sev = self.sev.max(free_call_severity(
+                        &name.node,
+                        args,
+                        self.env,
+                        self.target,
+                        &leaf,
+                    ));
+                }
+                Expr::StaticTraitCall { .. } | Expr::At { .. } | Expr::Spawn { .. } => {
+                    self.sev = CallSeverity::All;
+                    return;
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut scan = Scan { env, target, sev: CallSeverity::Pure };
+    scan.visit_expr(expr);
+    scan.sev
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1297,29 +1655,105 @@ pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
         | Stmt::Expr(_) => {}
     }
 
-    if immediate_exprs(stmt)
+    // Call kills, scaled by the shared severity classification (see the
+    // module docs): Pure kills nothing, Collections kills length terms
+    // (builtin mutators change lengths through aliases), All kills every
+    // field-path fact (length terms are dotted paths, so they die too).
+    let sev = immediate_exprs(stmt)
         .iter()
-        .any(|e| contains_impure_call(e, env))
-    {
-        env.facts.kill_fields();
+        .map(|e| call_severity(e, env, None))
+        .max()
+        .unwrap_or(CallSeverity::Pure);
+    match sev {
+        CallSeverity::Pure => {}
+        CallSeverity::Collections => env.facts.kill_len_terms(),
+        CallSeverity::All => env.facts.kill_fields(),
     }
 }
 
 /// Facts a `let`/`=` binding establishes about its target. Deliberately
-/// narrow: only a direct `xs.len()` value transfers (the bound variable
-/// inherits the automatic `>= 0` and an equality to the length term, which
-/// dies with the usual kills while the `>= 0` bound — true of the captured
-/// value forever — survives them). General value-to-binding fact transfer
-/// is out of scope. Callers assume these after the binding is defined; the
-/// statement's own kill (of the target's stale facts) has already run.
+/// narrow — two shapes transfer:
+///
+/// - a direct `xs.len()` value (the bound variable inherits the automatic
+///   `>= 0` and an equality to the length term, which dies with the usual
+///   kills while the `>= 0` bound — true of the captured value forever —
+///   survives them);
+/// - a struct literal of a (non-entity) class: construction is fully
+///   transparent — the construction proof obligation already evaluated the
+///   initializers, so the caller's fact env learns the exact int-field
+///   values (`acc.balance == 100` after `let acc = Account { balance: 100 }`).
+///   The usual kill rules take over from there. Entities are excluded
+///   (entity fields never carry flow facts).
+///
+/// General value-to-binding fact transfer is out of scope. Callers assume
+/// these after the binding is defined; the statement's own kill (of the
+/// target's stale facts) has already run.
 pub(crate) fn binding_facts(name: &str, value: &Expr, env: &TypeEnv) -> Vec<Fact> {
-    match len_path(value, env) {
-        Some(lp) => vec![
+    if let Some(lp) = len_path(value, env) {
+        return vec![
             Fact::Bound(name.to_string(), Interval::at_least(0)),
             Fact::Rel(name.to_string(), RelOp::Eq, lp),
-        ],
-        None => Vec::new(),
+        ];
     }
+    if let Expr::StructLit { name: cls, fields, .. } = value {
+        return construction_facts(name, &cls.node, fields, env);
+    }
+    Vec::new()
+}
+
+/// Exact post-construction facts for a struct-literal binding: for every
+/// int field whose initializer normalizes to an affine form,
+/// `root.field == <initializer affine>`. When the literal contains an
+/// impure call, only call-stable affines (constants and caller locals — no
+/// dotted terms) are kept: field initializers evaluate in order, so a
+/// sibling initializer's call may have mutated the object a dotted term
+/// reads through.
+fn construction_facts(
+    root: &str,
+    cls: &str,
+    lit_fields: &[(Spanned<String>, Spanned<Expr>)],
+    env: &TypeEnv,
+) -> Vec<Fact> {
+    // Entities mutate concurrently — their fields never carry flow facts.
+    if env.object_types.contains(cls)
+        || env.remote_types.contains(cls)
+        || env.domain_types.contains(cls)
+    {
+        return Vec::new();
+    }
+    let Some(info) = env.classes.get(cls) else {
+        return Vec::new();
+    };
+    let had_call = lit_fields
+        .iter()
+        .any(|(_, v)| contains_impure_call(v, env));
+    let mut out = Vec::new();
+    for (fname, fexpr) in lit_fields {
+        let is_int_field = info
+            .fields
+            .iter()
+            .any(|(n, t, _)| n == &fname.node && *t == PlutoType::Int);
+        if !is_int_field {
+            continue;
+        }
+        let Some(aff) = to_affine(&fexpr.node, env) else {
+            continue;
+        };
+        // Call-stability and self-reference guards: dotted terms are
+        // dropped when any initializer called out, and terms rooted at the
+        // binding itself (an `x = C { f: x.f }` rebinding) are never valid
+        // post-binding.
+        if aff.terms.keys().any(|t| path_under(t, root))
+            || (had_call && aff.terms.keys().any(|t| t.contains('.')))
+        {
+            continue;
+        }
+        let path = Affine::term(format!("{root}.{}", fname.node));
+        if let Some(d) = diff_affine(&path, &aff) {
+            out.extend(facts_from_diff(BinOp::Eq, &d));
+        }
+    }
+    out
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1423,6 +1857,27 @@ mod tests {
         assert_eq!(f.interval_of("x"), Interval::at_most(1));
         assert_eq!(f.interval_of("self.balance"), Interval::TOP);
         assert!(!f.rel_holds("x", RelOp::Le, "self.balance"));
+    }
+
+    #[test]
+    fn kill_len_terms_spares_field_paths() {
+        let mut f = FactEnv::new();
+        f.assume(Fact::Bound("x".into(), Interval::at_most(1)));
+        f.assume(Fact::Bound("self.balance".into(), Interval::at_least(0)));
+        f.assume(Fact::Bound("xs.len()".into(), Interval::at_least(3)));
+        f.assume(Fact::Rel("n".into(), RelOp::Eq, "xs.len()".into()));
+        let mark = f.kill_mark();
+        f.kill_len_terms();
+        // Locals and plain field paths survive.
+        assert_eq!(f.interval_of("x"), Interval::at_most(1));
+        assert_eq!(f.interval_of("self.balance"), Interval::at_least(0));
+        // Length terms are back to the automatic >= 0 and relations
+        // involving them die.
+        assert_eq!(f.interval_of("xs.len()"), Interval::at_least(0));
+        assert!(!f.rel_holds("n", RelOp::Eq, "xs.len()"));
+        // killed_since sees len-term facts as invalidated, others not.
+        assert!(f.killed_since(mark, &Fact::Bound("xs.len()".into(), Interval::at_least(3))));
+        assert!(!f.killed_since(mark, &Fact::Bound("self.balance".into(), Interval::at_least(0))));
     }
 
     #[test]

@@ -48,12 +48,18 @@
 //!   form over "ghost" variables — entry values of fields and locals), and
 //!   the invariant must be proven at every *boundary*: method exits
 //!   (return / fall-through), `raise`, `break`/`continue`, `yield`, any
-//!   statement containing a call (the callee — or anyone holding an alias
-//!   — may observe the object: this is the conservative slice-1 answer to
-//!   reentrancy, rfc-objects.md open question 6), loop entry/body-end, and
-//!   branch joins where a surviving branch changed the symbolic state.
-//!   *Between* those boundaries the invariant may be temporarily broken
-//!   (subtract-then-add works because the symbolic forms cancel).
+//!   statement containing a call *that may reach the receiver* (the callee
+//!   — or anyone holding an alias — may observe the object: this is the
+//!   conservative slice-1 answer to reentrancy, rfc-objects.md open
+//!   question 6), loop entry/body-end, and branch joins where a surviving
+//!   branch changed the symbolic state. Calls that provably cannot reach
+//!   the receiver — builtin/primitive methods, free functions whose
+//!   declared parameter types cannot reach the receiver's class
+//!   (facts::call_severity, the shared purity predicate) — are NOT
+//!   boundaries: with no possible observer or writer, exact two-state
+//!   knowledge survives them. *Between* boundaries the invariant may be
+//!   temporarily broken (subtract-then-add works because the symbolic
+//!   forms cancel).
 //!
 //! Raise paths are NOT exempt: for value classes a raised error can carry
 //! or share the receiver, so the invariant must hold when a raise leaves
@@ -66,9 +72,10 @@
 //! the invariants of every class-typed parameter. Inside a `mut self`
 //! method the same facts are mirrored into the ghost vocabulary. Guards
 //! (`if` conditions) contribute facts in both vocabularies; `assert`
-//! establishes facts for the remainder of the block. After any call, facts
-//! about fields are reduced to invariant-level knowledge (anything finer
-//! may have been invalidated by the callee).
+//! establishes facts for the remainder of the block. After a call that may
+//! reach the receiver, facts about fields are reduced to invariant-level
+//! knowledge (anything finer may have been invalidated by the callee);
+//! calls that provably cannot reach it leave the facts untouched.
 //!
 //! False rejection is the failure mode to fear: every Unknown verdict is a
 //! compile error under strict mode, so diagnostics name the invariant, the
@@ -1599,16 +1606,42 @@ pub(crate) fn pre_stmt(stmt: &Stmt, span: Span, env: &mut TypeEnv) -> Result<(),
     // statement's kills have not run yet). Assumed by `post_stmt`.
     stage_call_ensures(stmt, env);
 
-    // Call boundary: a statement performing any call may let the callee (or
-    // anyone holding an alias) observe the object — the invariant must hold
-    // here, and afterwards only invariant-level facts survive — plus, for a
-    // single direct self-call with ensures, the callee's declared two-state
-    // relation.
-    if env.invariant_scope.is_some()
-        && immediate_exprs(stmt).iter().any(|e| contains_impure_call(e, env))
-    {
-        checkpoint_scope(env, span, "this call (the callee may observe the object)")?;
-        apply_self_call_ensures(stmt, env);
+    // Call boundary — scaled by the shared purity classification
+    // (facts::call_severity with the receiver's class as target):
+    //
+    // - `All` (the callee may reach the receiver — self-calls, methods on a
+    //   possible alias, free functions whose declared params can reach the
+    //   class, opaque callees): the callee (or anyone holding an alias) may
+    //   observe the object, so the invariant must hold here, and afterwards
+    //   only invariant-level facts survive — plus, for a single direct
+    //   self-call with ensures, the callee's declared two-state relation.
+    // - `Collections` (builtin methods, reach-free functions): the callee
+    //   provably cannot read or write the receiver's int fields, so there
+    //   is no observer and no writer — exact two-state knowledge survives
+    //   (this is what lets `ensures count == old(count) + 1` prove through
+    //   a trailing `print()`, and frame ensures prove through builtin calls
+    //   on parameters). Only the ghost anchor epoch advances, so ghost
+    //   *length* terms recorded before the call go inert (a builtin `push`
+    //   on a local collection changes its length).
+    // - `Pure`: nothing to do.
+    if let Some(cls) = env.invariant_scope.as_ref().map(|s| s.class_name.clone()) {
+        let sev = immediate_exprs(stmt)
+            .iter()
+            .map(|e| super::facts::call_severity(e, env, Some(&cls)))
+            .max()
+            .unwrap_or(super::facts::CallSeverity::Pure);
+        match sev {
+            super::facts::CallSeverity::Pure => {}
+            super::facts::CallSeverity::Collections => {
+                if let Some(s) = env.invariant_scope.as_mut() {
+                    s.next_ghost += 1;
+                }
+            }
+            super::facts::CallSeverity::All => {
+                checkpoint_scope(env, span, "this call (the callee may observe the object)")?;
+                apply_self_call_ensures(stmt, env);
+            }
+        }
     }
 
     match stmt {
@@ -1726,11 +1759,20 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
             }
             ghost_len_binding(env, &target.node, &value.node);
         }
+        Stmt::If { .. } | Stmt::Match { .. } | Stmt::While { .. } | Stmt::For { .. } => {
+            // Branch-join / loop-exit anchoring: kills are flow events that
+            // remove facts from *every* frame, but the invariant-level
+            // reassumption a call triggers lands in the then-current
+            // (branch-local) frame and pops with it. Without this, a call
+            // inside a branch leaves the post-join state with no facts at
+            // all about invariant-carrying objects — so a subsequent call's
+            // ensures instantiation has no usable pre-state. Every object's
+            // invariant holds at every statement boundary, so re-anchoring
+            // the join (and the loop exit, whose havoc dropped everything)
+            // at invariant level is sound.
+            reassume_invariants_main(env);
+        }
         Stmt::Return(_)
-        | Stmt::If { .. }
-        | Stmt::While { .. }
-        | Stmt::For { .. }
-        | Stmt::Match { .. }
         | Stmt::IndexAssign { .. }
         | Stmt::Raise { .. }
         | Stmt::LetChan { .. }

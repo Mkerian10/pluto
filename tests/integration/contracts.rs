@@ -2505,3 +2505,263 @@ fn main() {
         "violates its invariant 'self.epoch >= 0'",
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4.5 precision: branch-join anchoring + construction facts
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The #357 census join bug, pinned: a call inside an `if` branch kills
+/// field facts from every frame (kills are flow events), and before the fix
+/// nothing restored invariant-level anchoring at the join — so a subsequent
+/// call's ensures instantiation had no usable pre-state and a bare
+/// `try_withdraw` after a branch failed to shrink. Fails on master.
+#[test]
+fn ensures_composition_survives_branch_join() {
+    let out = compile_and_run_stdout(
+        r#"
+error Insufficient {
+    needed: int
+}
+
+class BankAccount {
+    balance: int
+
+    invariant self.balance >= 0
+
+    fn deposit(mut self, amount: int)
+        requires amount > 0
+        ensures self.balance == old(self.balance) + amount
+    {
+        self.balance = self.balance + amount
+    }
+
+    fn try_withdraw(mut self, amount: int) int
+        requires amount > 0
+        ensures self.balance == old(self.balance) - amount
+    {
+        if amount > self.balance {
+            raise Insufficient { needed: amount }
+        }
+        self.balance = self.balance - amount
+        return self.balance
+    }
+}
+
+fn main() {
+    // Literal construction: the exact fact (balance == 100) is killed by
+    // the call inside the branch; only the join's invariant-level
+    // re-anchoring makes the composition below work.
+    let mut acc = BankAccount { balance: 100 }
+    if acc.balance > 50 {
+        acc.deposit(10)
+    }
+    acc.deposit(80)
+    let x = acc.try_withdraw(80)
+    print(x)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "110");
+}
+
+/// Loop exits get the same invariant-level re-anchoring: facts dropped by
+/// the loop havoc are restored to invariant level for ensures composition.
+#[test]
+fn ensures_composition_survives_loop_exit() {
+    let out = compile_and_run_stdout(
+        r#"
+error Insufficient {
+}
+
+class BankAccount {
+    balance: int
+
+    invariant self.balance >= 0
+
+    fn deposit(mut self, amount: int)
+        requires amount > 0
+        ensures self.balance == old(self.balance) + amount
+    {
+        self.balance = self.balance + amount
+    }
+
+    fn try_withdraw(mut self, amount: int) int
+        requires amount > 0
+    {
+        if amount > self.balance {
+            raise Insufficient { }
+        }
+        self.balance = self.balance - amount
+        return self.balance
+    }
+}
+
+fn main() {
+    let mut acc = BankAccount { balance: 5 }
+    for i in 0..3 {
+        acc.deposit(1)
+    }
+    acc.deposit(80)
+    let x = acc.try_withdraw(80)
+    print(x)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "8");
+}
+
+/// Construction is fully transparent: the caller's fact env knows the
+/// exact int-field values of a struct literal, so ensures instantiation
+/// composes from the construction with no guard — `balance == 100` plus
+/// deposit's `+80` refutes `try_withdraw(180)`'s raise condition exactly.
+#[test]
+fn construction_facts_feed_ensures_instantiation() {
+    let out = compile_and_run_stdout(
+        r#"
+error Insufficient {
+}
+
+class BankAccount {
+    balance: int
+
+    invariant self.balance >= 0
+
+    fn deposit(mut self, amount: int)
+        requires amount > 0
+        ensures self.balance == old(self.balance) + amount
+    {
+        self.balance = self.balance + amount
+    }
+
+    fn try_withdraw(mut self, amount: int) int
+        requires amount > 0
+    {
+        if amount > self.balance {
+            raise Insufficient { }
+        }
+        self.balance = self.balance - amount
+        return self.balance
+    }
+}
+
+fn main() {
+    let mut acc = BankAccount { balance: 100 }
+    acc.deposit(80)
+    let x = acc.try_withdraw(180)
+    print(x)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "0");
+}
+
+/// Construction facts die under the usual kill rules: a mut call whose
+/// ensures does not pin the field leaves only invariant-level knowledge,
+/// so the later bare call needs handling again.
+#[test]
+fn construction_facts_killed_by_mut_call() {
+    compile_should_fail_with(
+        r#"
+error Insufficient {
+}
+
+class BankAccount {
+    balance: int
+
+    invariant self.balance >= 0
+
+    fn touch(mut self) {
+        self.balance = self.balance + 0
+    }
+
+    fn try_withdraw(mut self, amount: int) int
+        requires amount > 0
+    {
+        if amount > self.balance {
+            raise Insufficient { }
+        }
+        self.balance = self.balance - amount
+        return self.balance
+    }
+}
+
+fn main() {
+    let mut acc = BankAccount { balance: 100 }
+    acc.touch()
+    let x = acc.try_withdraw(50)
+    print(x)
+}
+"#,
+        "call to fallible method 'try_withdraw' must be handled",
+    );
+}
+
+/// Reassignment of the binding kills the old construction facts; the new
+/// literal's facts take over (10 < 50, so the raise is *provable*, and the
+/// call still requires handling).
+#[test]
+fn construction_facts_killed_by_reassignment() {
+    compile_should_fail_with(
+        r#"
+error Insufficient {
+}
+
+class BankAccount {
+    balance: int
+
+    invariant self.balance >= 0
+
+    fn try_withdraw(mut self, amount: int) int
+        requires amount > 0
+    {
+        if amount > self.balance {
+            raise Insufficient { }
+        }
+        self.balance = self.balance - amount
+        return self.balance
+    }
+}
+
+fn main() {
+    let mut acc = BankAccount { balance: 100 }
+    acc = BankAccount { balance: 10 }
+    let x = acc.try_withdraw(50)
+    print(x)
+}
+"#,
+        "call to fallible method 'try_withdraw' must be handled",
+    );
+}
+
+/// Entities are excluded: entity fields never carry flow facts, so
+/// constructing an object grants the caller nothing to shrink with.
+#[test]
+fn construction_facts_not_assumed_for_entities() {
+    compile_should_fail_with(
+        r#"
+error Insufficient {
+}
+
+object Vault {
+    balance: int
+
+    fn try_withdraw(mut self, amount: int) int
+        requires amount > 0
+    {
+        if amount > self.balance {
+            raise Insufficient { }
+        }
+        self.balance = self.balance - amount
+        return self.balance
+    }
+}
+
+fn main() {
+    let mut v = Vault { balance: 100 }
+    let x = v.try_withdraw(50)
+    print(x)
+}
+"#,
+        "call to fallible method 'try_withdraw' must be handled",
+    );
+}

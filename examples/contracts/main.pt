@@ -103,6 +103,14 @@ fn main() int {
     let after_withdraw = account.withdraw(30)
     print(after_withdraw) // 120
 
+    // The classic guard-based shrinking: the caller's own branch refutes
+    // the raise condition. Remove the guard and this stops compiling.
+    let amount = 80
+    if amount <= account.balance {
+        let after_try = account.try_withdraw(amount)
+        print(after_try) // 40
+    }
+
     // Error-set shrinking with NO runtime guard: the caller's facts come
     // entirely from declared contracts composing. The invariant gives
     // balance >= 0 before the deposit, deposit's ensures then gives
@@ -111,18 +119,12 @@ fn main() int {
     // no `!`, no catch, and no `if`. Delete the deposit line (or weaken its
     // ensures) and this stops compiling: the proof rides on the callee's
     // declared relation, not on anything this function checked itself.
+    // (This works *after* the guarded block above because the branch join
+    // re-anchors invariant-level knowledge — the natural order no longer
+    // needs a reordering workaround.)
     account.deposit(80)
     let after_bare = account.try_withdraw(80)
-    print(after_bare) // 120
-
-    // The classic guard-based shrinking still works: the caller's own
-    // branch refutes the raise condition. Remove the guard and this stops
-    // compiling.
-    let amount = 80
-    if amount <= account.balance {
-        let after_try = account.try_withdraw(amount)
-        print(after_try) // 40
-    }
+    print(after_bare) // 40
 
     // Clamp (requires low <= high)
     let clamped = clamp(250, 0, 100)

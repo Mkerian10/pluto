@@ -361,8 +361,14 @@ class Account {
     }
 }
 
+fn seed() int {
+    return 5
+}
+
 fn main() {
-    let mut a = Account { balance: 5 }
+    // Opaque initializer: a literal would make the guard below degenerate
+    // (construction facts are transparent).
+    let mut a = Account { balance: seed() }
     if a.balance <= 10 {
         a.drain()
         if a.balance > 10 {
@@ -383,8 +389,12 @@ class Point {
     x: int
 }
 
+fn seed() int {
+    return 1
+}
+
 fn main() {
-    let mut p = Point { x: 1 }
+    let mut p = Point { x: seed() }
     if p.x <= 5 {
         p.x = 100
         if p.x > 5 {
@@ -548,8 +558,12 @@ class Point {
     x: int
 }
 
+fn seed() int {
+    return 1
+}
+
 fn main() {
-    let p = Point { x: 1 }
+    let p = Point { x: seed() }
     if p.x > 5 {
         let f = () => {
             if p.x <= 5 {
@@ -935,5 +949,149 @@ fn main() {
 }
 "#,
         "condition is always true",
+    );
+}
+
+// ── Phase 4.5 precision: purity-aware kills + construction transparency ─────
+
+#[test]
+fn construction_facts_make_guard_degenerate() {
+    // Construction is transparent: the literal's exact value decides the
+    // guard, and the engine says so.
+    assert_single_warning(
+        r#"
+class Point {
+    x: int
+}
+
+fn main() {
+    let p = Point { x: 1 }
+    if p.x <= 5 {
+        print(1)
+    }
+    print(p.x)
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn print_does_not_kill_field_fact() {
+    // print() provably cannot reach the object (its argument is an int
+    // value), so the guard fact survives it and still decides the inner
+    // condition.
+    assert_single_warning(
+        r#"
+class Point {
+    x: int
+}
+
+fn seed() int {
+    return 1
+}
+
+fn main() {
+    let p = Point { x: seed() }
+    if p.x <= 5 {
+        print(p.x)
+        if p.x <= 5 {
+            print(2)
+        }
+    }
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn reach_free_fn_does_not_kill_field_fact() {
+    // A free function whose declared params cannot reach any class value
+    // cannot invalidate field facts.
+    assert_single_warning(
+        r#"
+class Point {
+    x: int
+}
+
+fn seed() int {
+    return 1
+}
+
+fn noop(v: int) int {
+    return v
+}
+
+fn main() {
+    let p = Point { x: seed() }
+    if p.x <= 5 {
+        let y = noop(3)
+        if p.x <= 5 {
+            print(y)
+        }
+    }
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn class_taking_fn_still_kills_field_fact() {
+    // A free function whose declared parameter is class-typed may hold an
+    // alias — the kill still fires (the conservative negative).
+    assert_no_warnings(
+        r#"
+class Point {
+    x: int
+}
+
+fn seed() int {
+    return 1
+}
+
+fn poke(q: Point) int {
+    return q.x
+}
+
+fn main() {
+    let p = Point { x: seed() }
+    if p.x <= 5 {
+        let y = poke(p)
+        if p.x <= 5 {
+            print(y)
+        }
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn reach_free_fn_still_kills_len_fact() {
+    // A reach-free user function may still mutate a collection through an
+    // alias in principle (Collections severity) — length terms die.
+    assert_no_warnings(
+        r#"
+fn noop() int {
+    return 0
+}
+
+fn f(xs: [int]) int {
+    if 3 < xs.len() {
+        let v = noop()
+        if 3 < xs.len() {
+            return v
+        }
+        return 2
+    }
+    return 0
+}
+
+fn main() {
+    print(f([1, 2, 3, 4, 5]))
+}
+"#,
     );
 }

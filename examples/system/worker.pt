@@ -6,7 +6,7 @@ object JobRunner {
     // method boundary and foreign write site.
     invariant self.jobs_done >= old(self.jobs_done)
 
-    fn run_job(mut self, name: string) {
+    fn run_job(mut self, name: string) ensures self.jobs_done == old(self.jobs_done) + 1 {
         self.jobs_done = self.jobs_done + 1
         print("completed job: " + name)
     }
