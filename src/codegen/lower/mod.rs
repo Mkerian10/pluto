@@ -2398,7 +2398,17 @@ impl<'a> LowerContext<'a> {
         let count_val = self.builder.ins().iconst(types::I64, count);
         let has_default_val = self.builder.ins().iconst(types::I64, if default.is_some() { 1 } else { 0 });
         let timeout_val = match after {
-            Some(a) => self.lower_expr(&a.duration.node)?,
+            Some(a) => {
+                // Deadline rule (docs/design/channels.md): a non-positive
+                // `after` duration is an already-expired deadline — one
+                // readiness poll, then the arm fires (matching what
+                // recv_timeout does with 0/negative durations). Clamp
+                // negatives to 0 here so a computed -1 can never collide
+                // with the runtime's "no after arm" sentinel.
+                let d = self.lower_expr(&a.duration.node)?;
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                self.builder.ins().smax(d, zero)
+            }
             None => self.builder.ins().iconst(types::I64, -1),
         };
         let result = self.call_runtime("__pluto_select", &[buffer, count_val, has_default_val, timeout_val]);

@@ -1333,3 +1333,141 @@ fn main() {
 }
 "#, "select after expects int milliseconds");
 }
+
+// ── select `after` / recv_timeout duration edges (#423) ─────────────────────
+//
+// Shared deadline rule (docs/design/channels.md): a non-positive duration is
+// an already-expired deadline — one readiness poll, then the timeout fires;
+// a huge duration saturates to a far-future deadline instead of overflowing
+// into firing instantly. These run in PRODUCTION mode (real waits), with the
+// helper's watchdog guarding against the pre-fix block-forever behavior.
+
+#[test]
+fn select_after_negative_duration_fires_immediately() {
+    // Pre-fix, a computed negative duration collided with the runtime's
+    // "no after arm" sentinel and blocked forever in production.
+    let out = compile_and_run_stdout_timeout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let d = 0 - 5
+    select {
+        v = rx.recv() {
+            print("got value")
+        }
+        after d {
+            print("after fired")
+        }
+    }
+    tx.close()
+}
+"#, 10);
+    assert_eq!(out.trim(), "after fired");
+}
+
+#[test]
+fn select_after_zero_duration_fires_immediately() {
+    let out = compile_and_run_stdout_timeout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    select {
+        v = rx.recv() {
+            print("got value")
+        }
+        after 0 {
+            print("after fired")
+        }
+    }
+    tx.close()
+}
+"#, 10);
+    assert_eq!(out.trim(), "after fired");
+}
+
+#[test]
+fn select_after_negative_duration_ready_arm_still_wins() {
+    // One readiness poll happens before the expired deadline fires, so a
+    // ready arm still wins over a non-positive after.
+    let out = compile_and_run_stdout_timeout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.send(7)!
+    let d = 0 - 1
+    select {
+        v = rx.recv() {
+            print(f"got {v}")
+        }
+        after d {
+            print("after fired")
+        }
+    }
+}
+"#, 10);
+    assert_eq!(out.trim(), "got 7");
+}
+
+#[test]
+fn select_after_huge_duration_does_not_fire_instantly() {
+    // i64::MAX ms used to overflow the nanosecond multiply and fire the
+    // after arm instantly; it must saturate to a far-future deadline and
+    // let the producer's value win.
+    let out = compile_and_run_stdout_timeout(r#"
+fn producer(tx: Sender<int>) {
+    tx.send(42)!
+}
+
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    spawn producer(tx).detach()
+    select {
+        v = rx.recv() {
+            print(f"got {v}")
+        }
+        after 9223372036854775807 {
+            print("after fired")
+        }
+    }
+}
+"#, 10);
+    assert_eq!(out.trim(), "got 42");
+}
+
+#[test]
+fn recv_timeout_negative_duration_times_out_immediately() {
+    let out = compile_and_run_stdout_timeout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    let d = 0 - 5
+    let v = rx.recv_timeout(d) catch err: TimedOut { -1 }
+    print(v)
+    tx.close()
+}
+"#, 10);
+    assert_eq!(out.trim(), "-1");
+}
+
+#[test]
+fn recv_timeout_negative_duration_still_delivers_buffered_value() {
+    let out = compile_and_run_stdout_timeout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.send(9)!
+    let d = 0 - 5
+    let v = rx.recv_timeout(d) catch err: TimedOut { -1 }
+    print(v)
+}
+"#, 10);
+    assert_eq!(out.trim(), "9");
+}
+
+#[test]
+fn recv_timeout_huge_duration_delivers_buffered_value() {
+    let out = compile_and_run_stdout_timeout(r#"
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    tx.send(11)!
+    let v = rx.recv_timeout(9223372036854775807) catch err: TimedOut { -1 }
+    print(v)
+}
+"#, 10);
+    assert_eq!(out.trim(), "11");
+}
