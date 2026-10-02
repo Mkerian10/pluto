@@ -1536,6 +1536,17 @@ pub(crate) fn format_invariant_expr(expr: &Expr) -> String {
 /// # What hashes (the evolution surface)
 ///
 /// - Dispatchable method signatures (as before).
+/// - The FIELD LAYOUT (ordered field names + types, including nullability;
+///   for enums, ordered variant names + payload field shapes) of every
+///   value class/enum transitively reachable through the dispatchable
+///   signatures. The record encoding's field shape is wire surface: two
+///   peers that disagree on it (a reorder, rename, type change, or
+///   nullable flip) would otherwise pass the hash check and silently
+///   mis-assign field values (issue #424), so layout skew is refused
+///   pre-dispatch like any other skew. The served class's OWN fields are
+///   deliberately excluded (unless it itself crosses as a value): a
+///   consumer stub mirrors the dispatchable surface and contracts, not
+///   the server's private implementation fields.
 /// - Type-level contract clauses of the hashed type itself and of every
 ///   value class transitively reachable through the dispatchable
 ///   signatures (through arrays/maps/sets/nullables/streams and value
@@ -1638,10 +1649,9 @@ pub fn interface_hash(env: &crate::typeck::env::TypeEnv, class_name: &str) -> St
     };
 
     let mut sigs: Vec<String> = Vec::new();
-    // The hashed type itself always contributes its contracts (an entity's
-    // own clauses live on its own hash).
-    let mut wire_types: BTreeSet<String> = BTreeSet::new();
-    wire_types.insert(class_name.to_string());
+    // Value classes/enums reachable through the dispatchable signatures:
+    // their field layout AND contracts are wire surface.
+    let mut value_types: BTreeSet<String> = BTreeSet::new();
     if let Some(info) = env.classes.get(class_name) {
         for mname in &info.methods {
             let mangled = crate::typeck::env::mangle_method(class_name, mname);
@@ -1653,12 +1663,19 @@ pub fn interface_hash(env: &crate::typeck::env::TypeEnv, class_name: &str) -> St
                 let params = arg_types.iter().map(sig).collect::<Vec<_>>().join(",");
                 sigs.push(format!("{mname}({params}){}", sig(&ret)));
                 for t in arg_types.iter().chain(std::iter::once(&ret)) {
-                    collect_wire_types(env, t, &mut wire_types);
+                    collect_wire_types(env, t, &mut value_types);
                 }
             }
         }
     }
     sigs.sort();
+
+    // The hashed type itself always contributes its contracts (an entity's
+    // own clauses live on its own hash) — but not its field layout, which
+    // a consumer stub does not mirror (implementation fields are not wire
+    // surface; only value types crossing the boundary are).
+    let mut wire_types: BTreeSet<String> = value_types.clone();
+    wire_types.insert(class_name.to_string());
 
     // Contract section: every clause of every boundary-crossing type, in a
     // canonical, span-free, module-prefix-independent rendering.
@@ -1687,9 +1704,54 @@ pub fn interface_hash(env: &crate::typeck::env::TypeEnv, class_name: &str) -> St
     }
     contracts.sort();
 
+    // Layout section: the field shape of every value class/enum crossing
+    // the boundary, in declaration order — a reorder, rename, type change,
+    // or nullable flip on a wire-crossing type changes the hash, so
+    // layout-skewed peers refuse to pair instead of swapping field values
+    // (issue #424). Hidden injected fields are not wire surface (the
+    // marshalers skip them). Entities never enter `value_types` — they
+    // cross as identity handles, and their own hash covers their surface.
+    let mut layouts: Vec<String> = Vec::new();
+    for tname in &value_types {
+        let label = short_name(tname);
+        if let Some(info) = env.classes.get(tname) {
+            let fields = info
+                .fields
+                .iter()
+                .filter(|(_, _, is_injected)| !*is_injected)
+                .map(|(fname, fty, _)| format!("{fname}:{}", sig(fty)))
+                .collect::<Vec<_>>()
+                .join(",");
+            layouts.push(format!("class {label}{{{fields}}}"));
+        } else if let Some(info) = env.enums.get(tname) {
+            let variants = info
+                .variants
+                .iter()
+                .map(|(vname, vfields)| {
+                    let fs = vfields
+                        .iter()
+                        .map(|(fname, fty)| format!("{fname}:{}", sig(fty)))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!("{vname}{{{fs}}}")
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            layouts.push(format!("enum {label}{{{variants}}}"));
+        }
+    }
+    // Sorted by the short-name rendering, not the BTreeSet's full-name
+    // order, so module prefixes cannot affect the hash.
+    layouts.sort();
+
     // FNV-1a over the joined surface — deterministic across builds (unlike
     // DefaultHasher), so two separately-compiled binaries agree on the hash.
-    let joined = format!("{};contracts:{}", sigs.join(";"), contracts.join(";"));
+    let joined = format!(
+        "{};contracts:{};layout:{}",
+        sigs.join(";"),
+        contracts.join(";"),
+        layouts.join(";")
+    );
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in joined.bytes() {
         h ^= b as u64;
@@ -2222,5 +2284,95 @@ mod tests {
             "class Receipt {\n    amount: int\n    invariant self.amount >= 0\n}\n\nclass Billing {\n    rate: int\n    invariant self.rate >= 0\n\n    fn charge(self, amount: int) Receipt {\n        return Receipt { amount: 0 }\n    }\n}\n\nfn main() {}\n",
         );
         assert_eq!(interface_hash(&server, "Billing"), interface_hash(&stub, "Billing"));
+    }
+
+    // ===== interface_hash layout tests (field shape is wire surface, #424) =====
+
+    const LAYOUT_BASE: &str = "class Person {\n    first: string\n    last: string\n}\n\nclass Registry {\n    pad: int\n\n    fn whois(self, key: int) Person {\n        return Person { first: \"a\", last: \"b\" }\n    }\n}\n\nfn main() {}\n";
+
+    #[test]
+    fn field_reorder_on_wire_type_changes_hash() {
+        // The #424 repro shape: same fields, same types, different order.
+        // Positionally-compatible on the wire — and silently value-swapping
+        // — so the hash MUST split them.
+        let base = hash_env(LAYOUT_BASE);
+        let reordered = hash_env(
+            "class Person {\n    last: string\n    first: string\n}\n\nclass Registry {\n    pad: int\n\n    fn whois(self, key: int) Person {\n        return Person { first: \"a\", last: \"b\" }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_ne!(
+            interface_hash(&base, "Registry"),
+            interface_hash(&reordered, "Registry"),
+            "field order of a wire-crossing class is interface surface"
+        );
+    }
+
+    #[test]
+    fn field_rename_on_wire_type_changes_hash() {
+        let base = hash_env(LAYOUT_BASE);
+        let renamed = hash_env(
+            "class Person {\n    given: string\n    last: string\n}\n\nclass Registry {\n    pad: int\n\n    fn whois(self, key: int) Person {\n        return Person { given: \"a\", last: \"b\" }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_ne!(interface_hash(&base, "Registry"), interface_hash(&renamed, "Registry"));
+    }
+
+    #[test]
+    fn nullable_flip_on_wire_type_changes_hash() {
+        // The latent skew from #424's narrative: `nick: string?` vs
+        // `nick: string` only failed when a none actually flowed. With
+        // layout hashed, the pairing is refused pre-dispatch.
+        let nullable = hash_env(
+            "class Rec {\n    nick: string?\n    age: int\n}\n\nclass Svc {\n    pad: int\n\n    fn get(self, k: int) Rec {\n        return Rec { nick: none, age: 1 }\n    }\n}\n\nfn main() {}\n",
+        );
+        let plain = hash_env(
+            "class Rec {\n    nick: string\n    age: int\n}\n\nclass Svc {\n    pad: int\n\n    fn get(self, k: int) Rec {\n        return Rec { nick: \"x\", age: 1 }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_ne!(
+            interface_hash(&nullable, "Svc"),
+            interface_hash(&plain, "Svc"),
+            "a nullable flip on a wire-crossing field is a layout change"
+        );
+    }
+
+    #[test]
+    fn enum_variant_shape_changes_hash() {
+        let base = hash_env(
+            "enum Shape {\n    Circle { radius: int }\n    Dot\n}\n\nclass Svc {\n    pad: int\n\n    fn get(self, k: int) Shape {\n        return Shape.Dot\n    }\n}\n\nfn main() {}\n",
+        );
+        let changed = hash_env(
+            "enum Shape {\n    Circle { diameter: int }\n    Dot\n}\n\nclass Svc {\n    pad: int\n\n    fn get(self, k: int) Shape {\n        return Shape.Dot\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_ne!(
+            interface_hash(&base, "Svc"),
+            interface_hash(&changed, "Svc"),
+            "a variant payload shape change on a wire-crossing enum is a layout change"
+        );
+    }
+
+    #[test]
+    fn same_layout_same_hash_across_programs() {
+        // Two independently-compiled programs declaring the same wire-type
+        // layout agree — method bodies and field values do not hash.
+        let server = hash_env(LAYOUT_BASE);
+        let stub = hash_env(
+            "class Person {\n    first: string\n    last: string\n}\n\nclass Registry {\n    pad: int\n\n    fn whois(self, key: int) Person {\n        return Person { first: \"x\", last: \"y\" }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_eq!(interface_hash(&server, "Registry"), interface_hash(&stub, "Registry"));
+    }
+
+    #[test]
+    fn served_class_own_fields_do_not_change_hash() {
+        // A consumer stub mirrors the dispatchable surface, not the
+        // server's private implementation fields (the existing stubs in the
+        // distributed tests omit them) — so the served class's own layout
+        // must stay out of the hash unless it itself crosses as a value.
+        let server = hash_env(LAYOUT_BASE);
+        let stub = hash_env(
+            "class Person {\n    first: string\n    last: string\n}\n\nclass Registry {\n    cache: string\n    hits: int\n\n    fn whois(self, key: int) Person {\n        return Person { first: \"x\", last: \"y\" }\n    }\n}\n\nfn main() {}\n",
+        );
+        assert_eq!(
+            interface_hash(&server, "Registry"),
+            interface_hash(&stub, "Registry"),
+            "implementation fields of the served class are not wire surface"
+        );
     }
 }
