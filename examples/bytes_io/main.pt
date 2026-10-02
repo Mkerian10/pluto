@@ -1,0 +1,91 @@
+import std.net
+import std.base64
+import std.wire
+
+// Binary I/O with `bytes`: build a binary frame, move it through a TCP
+// connection with the bytes-typed read/write (no string laundering), and
+// show the same payload crossing the wire layer as a single base64 blob.
+//
+// Run:
+//   cargo run -- run examples/bytes_io/main.pt --stdlib stdlib
+
+// A frame header must be at least 4 bytes: [tag][len][payload...].
+// The fact fragment knows bytes len(), so this contract is enforceable.
+fn frame_tag(frame: bytes) int
+    requires frame.len() >= 4
+{
+    return frame[0] as int
+}
+
+fn main() {
+    // Build a frame holding every byte value 0..256 — bytes is the honest
+    // type for binary data: no encoding, no interpolation, just octets.
+    let frame = bytes_new()
+    frame.push(7 as byte)   // tag
+    frame.push(0 as byte)   // reserved
+    frame.push(1 as byte)   // length hi
+    frame.push(0 as byte)   // length lo
+    let mut i = 0
+    while i < 256 {
+        frame.push(i as byte)
+        i = i + 1
+    }
+    print(f"frame tag: {frame_tag(frame)}, total {frame.len()} bytes")
+
+    // ── TCP round-trip, bytes end to end ─────────────────────────────────
+    let server = net.listen("127.0.0.1", 0)
+    let client = net.connect("127.0.0.1", server.port())
+    let wrote = client.write_bytes(frame)
+    print(f"wrote {wrote} bytes to the socket")
+
+    let conn = server.accept()
+    let got = bytes_new()
+    while got.len() < 260 {
+        let chunk = conn.read_bytes(260 - got.len())
+        if chunk.len() == 0 {
+            break
+        }
+        let mut c = 0
+        while c < chunk.len() {
+            got.push(chunk[c])
+            c = c + 1
+        }
+    }
+    let mut intact = got.len() == 260
+    let mut j = 4
+    while j < got.len() {
+        if (got[j] as int) != j - 4 {
+            intact = false
+        }
+        j = j + 1
+    }
+    print(f"received {got.len()} bytes, payload intact: {intact}")
+    conn.close()
+    client.close()
+    server.close()
+
+    // ── The same payload as ONE blob at the wire layer ───────────────────
+    // WireValue.Bytes carries binary data as a single base64 blob in JSON —
+    // never element-wise.
+    let mut enc = wire.wire_value_encoder()
+    enc.encode_bytes(frame)
+    let fmt = wire.json_wire_format()
+    let json_form = fmt.serialize(enc.result())
+    print(f"wire JSON is {json_form.len()} chars for {frame.len()} bytes")
+
+    let wv = fmt.deserialize(json_form) catch err {
+        print("deserialize failed")
+        return
+    }
+    let mut dec = wire.wire_value_decoder(wv)
+    let back = dec.decode_bytes() catch err {
+        print("decode failed")
+        return
+    }
+    print(f"wire round-trip intact: {back.len() == frame.len()}")
+
+    // base64 is also directly available for bytes (binary-exact):
+    let b64 = base64.encode_bytes(frame)
+    let again = base64.decode_bytes(b64)
+    print(f"base64 round-trip intact: {again.len() == frame.len()}")
+}

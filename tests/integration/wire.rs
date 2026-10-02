@@ -72,6 +72,7 @@ fn main() {
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Bool { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Array { elements } { print("wrong") }
         wire.WireValue.Record { keys, values } { print("wrong") }
         wire.WireValue.Variant { name, data } { print("wrong") }
@@ -97,6 +98,7 @@ fn main() {
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Bool { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Array { elements } { print("wrong") }
         wire.WireValue.Record { keys, values } { print("wrong") }
         wire.WireValue.Variant { name, data } { print("wrong") }
@@ -139,6 +141,7 @@ fn main() {
         wire.WireValue.Int { value } { print("wrong") }
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Array { elements } { print("wrong") }
         wire.WireValue.Record { keys, values } { print("wrong") }
         wire.WireValue.Variant { name, data } { print("wrong") }
@@ -154,6 +157,7 @@ fn main() {
         wire.WireValue.Int { value } { print("wrong") }
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Array { elements } { print("wrong") }
         wire.WireValue.Record { keys, values } { print("wrong") }
         wire.WireValue.Variant { name, data } { print("wrong") }
@@ -176,6 +180,7 @@ fn main() {
     let r = fmt.deserialize(s) catch wire.wire_null()
     match r {
         wire.WireValue.Str { value } { print(value) }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Int { value } { print("wrong") }
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Bool { value } { print("wrong") }
@@ -206,6 +211,7 @@ fn main() {
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Bool { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Array { elements } { print("wrong") }
         wire.WireValue.Record { keys, values } { print("wrong") }
         wire.WireValue.Variant { name, data } { print("wrong") }
@@ -240,6 +246,7 @@ fn main() {
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Bool { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Record { keys, values } { print("wrong") }
         wire.WireValue.Variant { name, data } { print("wrong") }
         wire.WireValue.Null { print("wrong") }
@@ -269,6 +276,7 @@ fn main() {
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Bool { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Record { keys, values } { print("wrong") }
         wire.WireValue.Variant { name, data } { print("wrong") }
         wire.WireValue.Null { print("wrong") }
@@ -306,6 +314,7 @@ fn main() {
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Bool { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Array { elements } { print("wrong") }
         wire.WireValue.Variant { name, data } { print("wrong") }
         wire.WireValue.Null { print("wrong") }
@@ -337,6 +346,7 @@ fn main() {
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Bool { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Array { elements } { print("wrong") }
         wire.WireValue.Variant { name, data } { print("wrong") }
         wire.WireValue.Null { print("wrong") }
@@ -366,6 +376,7 @@ fn main() {
                 wire.WireValue.Float { value } { print("wrong") }
                 wire.WireValue.Bool { value } { print("wrong") }
                 wire.WireValue.Str { value } { print("wrong") }
+                wire.WireValue.Bytes { value } { print("wrong") }
                 wire.WireValue.Array { elements } { print("wrong") }
                 wire.WireValue.Record { keys, values } { print("wrong") }
                 wire.WireValue.Variant { name, data } { print("wrong") }
@@ -376,6 +387,7 @@ fn main() {
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Bool { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Array { elements } { print("wrong") }
         wire.WireValue.Record { keys, values } { print("wrong") }
         wire.WireValue.Null { print("wrong") }
@@ -420,6 +432,7 @@ fn main() {
                 wire.WireValue.Float { value } { print("wrong") }
                 wire.WireValue.Bool { value } { print("wrong") }
                 wire.WireValue.Str { value } { print("wrong") }
+                wire.WireValue.Bytes { value } { print("wrong") }
                 wire.WireValue.Record { keys, values } { print("wrong") }
                 wire.WireValue.Variant { name, data } { print("wrong") }
                 wire.WireValue.Null { print("wrong") }
@@ -429,6 +442,7 @@ fn main() {
         wire.WireValue.Float { value } { print("wrong") }
         wire.WireValue.Bool { value } { print("wrong") }
         wire.WireValue.Str { value } { print("wrong") }
+        wire.WireValue.Bytes { value } { print("wrong") }
         wire.WireValue.Array { elements } { print("wrong") }
         wire.WireValue.Variant { name, data } { print("wrong") }
         wire.WireValue.Null { print("wrong") }
@@ -965,4 +979,75 @@ stage Api[db: Database, repo: Repository] {
     }
 }
 "#);
+}
+
+// ── Bytes on the wire (#375): one blob, base64 in JSON ─────────────────────────
+
+/// A bytes value survives the full WireValue -> JSON -> WireValue round-trip
+/// for all 256 byte values, carried as a single base64 blob (never element-wise).
+#[test]
+fn wire_bytes_json_round_trip_all_values() {
+    let out = run_wire_test(r#"
+import std.wire
+
+fn main() {
+    let buf = bytes_new()
+    let mut i = 0
+    while i < 256 {
+        buf.push(i as byte)
+        i = i + 1
+    }
+    let mut enc = wire.wire_value_encoder()
+    enc.encode_bytes(buf)
+    let fmt = wire.json_wire_format()
+    let s = fmt.serialize(enc.result())
+    let wv = fmt.deserialize(s) catch err {
+        print("deserialize failed")
+        return
+    }
+    let mut dec = wire.wire_value_decoder(wv)
+    let out = dec.decode_bytes() catch err {
+        print("decode failed")
+        return
+    }
+    let mut ok = out.len() == 256
+    let mut j = 0
+    while j < out.len() {
+        if (out[j] as int) != j {
+            ok = false
+        }
+        j = j + 1
+    }
+    print(ok)
+}
+"#);
+    assert_eq!(out, "true\n");
+}
+
+/// Type mismatches against the Bytes variant raise WireError in both directions.
+#[test]
+fn wire_bytes_type_mismatch_raises() {
+    let out = run_wire_test(r#"
+import std.wire
+
+fn main() {
+    // decode_bytes on an Int value
+    let mut dec = wire.wire_value_decoder(wire.wire_int(7))
+    let b = dec.decode_bytes() catch err: wire.WireError {
+        print(err.message)
+        bytes_new()
+    }
+
+    // decode_int on a Bytes value
+    let buf = bytes_new()
+    buf.push(1 as byte)
+    let mut dec2 = wire.wire_value_decoder(wire.wire_bytes(buf))
+    let n = dec2.decode_int() catch err: wire.WireError {
+        print(err.message)
+        0 - 1
+    }
+    print(n)
+}
+"#);
+    assert_eq!(out, "expected bytes\nexpected int, got bytes\n-1\n");
 }

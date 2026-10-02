@@ -137,6 +137,117 @@ fn decode_with_alphabet(s: string, alpha: string) string {
     return result
 }
 
+// ── Binary-accurate bytes variants ────────────────────────────────────────────
+// The string-based encode/decode above are codepoint-based: decode rebuilds
+// characters via __pluto_codepoint_to_string, which UTF-8-encodes values >= 128
+// into multiple bytes. That is fine for text but corrupts opaque binary data.
+// These variants operate on `bytes` and are exact for all 256 byte values.
+
+// Encode a bytes buffer to standard base64
+pub fn encode_bytes(b: bytes) string {
+    let alpha = alphabet()
+    let input_len = b.len()
+    let mut result = ""
+    let mut i = 0
+
+    while i < input_len {
+        let b1 = b[i] as int
+        let mut b2 = 0
+        let mut b3 = 0
+        let mut has_b2 = 0
+        let mut has_b3 = 0
+
+        if i + 1 < input_len {
+            b2 = b[i + 1] as int
+            has_b2 = 1
+        }
+
+        if i + 2 < input_len {
+            b3 = b[i + 2] as int
+            has_b3 = 1
+        }
+
+        let c1 = (b1 >> 2) & 0x3F
+        let c2 = ((b1 & 0x03) << 4) | ((b2 >> 4) & 0x0F)
+        let c3 = ((b2 & 0x0F) << 2) | ((b3 >> 6) & 0x03)
+        let c4 = b3 & 0x3F
+
+        result = result + __pluto_codepoint_to_string(char_code_at(alpha, c1))
+        result = result + __pluto_codepoint_to_string(char_code_at(alpha, c2))
+
+        if has_b2 != 0 {
+            result = result + __pluto_codepoint_to_string(char_code_at(alpha, c3))
+        } else {
+            result = result + "="
+        }
+
+        if has_b3 != 0 {
+            result = result + __pluto_codepoint_to_string(char_code_at(alpha, c4))
+        } else {
+            result = result + "="
+        }
+
+        i = i + 3
+    }
+
+    return result
+}
+
+// Decode standard base64 into a bytes buffer (exact for all byte values)
+pub fn decode_bytes(s: string) bytes {
+    let alpha = alphabet()
+    let input_len = __pluto_string_len(s)
+    let result = bytes_new()
+    let mut i = 0
+
+    while i < input_len {
+        let c1_char = __pluto_string_byte_at(s, i)
+        let mut c2_char = 0
+        let mut c3_char = 0
+        let mut c4_char = 0
+
+        if i + 1 < input_len {
+            c2_char = __pluto_string_byte_at(s, i + 1)
+        }
+        if i + 2 < input_len {
+            c3_char = __pluto_string_byte_at(s, i + 2)
+        }
+        if i + 3 < input_len {
+            c4_char = __pluto_string_byte_at(s, i + 3)
+        }
+
+        let c1 = char_index_in(alpha, c1_char)
+        let c2 = char_index_in(alpha, c2_char)
+        let mut c3 = char_index_in(alpha, c3_char)
+        let mut c4 = char_index_in(alpha, c4_char)
+
+        // Handle padding
+        if c3_char == 61 {
+            c3 = 0
+        }
+        if c4_char == 61 {
+            c4 = 0
+        }
+
+        let b1 = ((c1 << 2) | (c2 >> 4)) & 0xFF
+        result.push(b1 as byte)
+
+        if c3_char != 61 {
+            let b2 = (((c2 & 0x0F) << 4) | (c3 >> 2)) & 0xFF
+            result.push(b2 as byte)
+        }
+
+        if c4_char != 61 {
+            let b3 = (((c3 & 0x03) << 6) | c4) & 0xFF
+            result.push(b3 as byte)
+        }
+
+        i = i + 4
+    }
+
+    return result
+}
+
 // Get character code at position in string
 fn char_code_at(s: string, idx: int) int {
     if idx < 0 {

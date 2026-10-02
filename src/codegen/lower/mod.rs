@@ -976,6 +976,7 @@ impl<'a> LowerContext<'a> {
             PlutoType::Float => Some("float".to_string()),
             PlutoType::Bool => Some("bool".to_string()),
             PlutoType::String => Some("string".to_string()),
+            PlutoType::Bytes => Some("bytes".to_string()),
             PlutoType::Class(n) | PlutoType::Enum(n) => Some(n.replace("$$", "__")),
             PlutoType::Array(e) => Some(format!("arr_{}", Self::wire_container_suffix(e)?)),
             PlutoType::Set(e) => Some(format!("set_{}", Self::wire_container_suffix(e)?)),
@@ -1006,6 +1007,12 @@ impl<'a> LowerContext<'a> {
                 self.builder.ins().select(is_true, one, zero_s)
             }
             PlutoType::String => self.call_runtime("__pluto_wire_escape", &[val]),
+            PlutoType::Bytes => {
+                // ONE blob: copy the buffer into a (binary-safe, length-
+                // prefixed) string and wire-escape it — never element-wise.
+                let s = self.call_runtime("__pluto_bytes_to_string", &[val]);
+                self.call_runtime("__pluto_wire_escape", &[s])
+            }
             PlutoType::Class(tn) if self.env.object_types.contains(tn) => {
                 // Entities cross as identity handles (rfc-objects.md phase 2)
                 let ty_s = self.make_string_literal(tn)?;
@@ -1093,6 +1100,12 @@ impl<'a> LowerContext<'a> {
                 self.builder.ins().icmp(IntCC::NotEqual, parsed, z)
             }
             PlutoType::String => self.call_runtime("__pluto_wire_unescape", &[val]),
+            PlutoType::Bytes => {
+                // Inverse of the encode arm: unescape, then copy into a
+                // fresh bytes buffer.
+                let s = self.call_runtime("__pluto_wire_unescape", &[val]);
+                self.call_runtime("__pluto_string_to_bytes", &[s])
+            }
             PlutoType::Class(tn) if self.env.object_types.contains(tn) => {
                 // Resolve the handle: live entity if home, stub otherwise
                 self.call_runtime("__pluto_entity_decode", &[val])
@@ -4329,7 +4342,7 @@ impl<'a> LowerContext<'a> {
                     if !crate::typeck::types::wire_supported(&aty) {
                         return Err(CompileError::codegen(format!(
                             "remote call '{}.{}': unsupported argument type {aty} \
-                             (supported: int, float, bool, string, nullables, \
+                             (supported: int, float, bool, string, bytes, nullables, \
                              and class/enum/array/map/set via std.wire)",
                             cname, method.node
                         )));
@@ -4341,7 +4354,7 @@ impl<'a> LowerContext<'a> {
                 if ret_type != PlutoType::Void && !crate::typeck::types::wire_supported(&ret_type) {
                     return Err(CompileError::codegen(format!(
                         "remote call '{}.{}': unsupported return type {ret_type} \
-                         (supported: int, float, bool, string, void, nullables, \
+                         (supported: int, float, bool, string, bytes, void, nullables, \
                          and class/enum/array/map/set via std.wire)",
                         cname, method.node
                     )));

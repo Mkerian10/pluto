@@ -2338,3 +2338,122 @@ fn rpc_response_deadline_fires_and_is_ambiguous() {
         start.elapsed()
     );
 }
+
+// ── Bytes across the served boundary (#375) ─────────────────────────────────────
+
+// A binary payload (all 256 byte values) crosses a served boundary intact, in
+// both positions: as a direct bytes parameter/return (one wire-escaped blob),
+// and nested as a bytes field inside a marshaled class (one base64 blob).
+const BYTES_SERVER_SRC: &str = "\
+import std.wire
+
+class Frame {
+    data: bytes
+    tag: int
+}
+
+class BlobEcho {
+    seed: int
+
+    fn roundtrip(self, data: bytes) bytes {
+        return data
+    }
+
+    fn wrap(self, f: Frame) Frame {
+        return Frame { data: f.data, tag: f.tag + 1 }
+    }
+}
+
+fn main() {
+    let e = BlobEcho { seed: 1 }
+    serve e on 0
+}";
+
+const BYTES_IFACE: &str = "\
+import std.wire
+
+pub class Frame {
+    data: bytes
+    tag: int
+}
+
+pub class BlobEcho {
+    fn roundtrip(self, data: bytes) bytes {
+        return data
+    }
+
+    fn wrap(self, f: Frame) Frame {
+        return f
+    }
+}";
+
+const BYTES_CLIENT_SRC: &str = "\
+import std.wire
+import blobecho
+
+app App[e: remote blobecho.BlobEcho] {
+    fn main(self) {
+        let buf = bytes_new()
+        let mut i = 0
+        while i < 256 {
+            buf.push(i as byte)
+            i = i + 1
+        }
+
+        let direct = self.e.roundtrip(buf) catch err {
+            print(\"direct err\")
+            return
+        }
+        let mut ok = direct.len() == 256
+        let mut j = 0
+        while j < direct.len() {
+            if (direct[j] as int) != j {
+                ok = false
+            }
+            j = j + 1
+        }
+        print(f\"direct:{ok}\")
+
+        let fallback = blobecho.Frame { data: bytes_new(), tag: -1 }
+        let wrapped = self.e.wrap(blobecho.Frame { data: buf, tag: 41 }) catch fallback
+        let mut ok2 = wrapped.data.len() == 256
+        let mut k = 0
+        while k < wrapped.data.len() {
+            if (wrapped.data[k] as int) != k {
+                ok2 = false
+            }
+            k = k + 1
+        }
+        print(f\"nested:{ok2} tag:{wrapped.tag}\")
+    }
+}";
+
+/// Binary payloads cross a real two-process serve/remote boundary intact —
+/// direct bytes param/return and bytes field nested in a marshaled class.
+#[test]
+fn bytes_payload_round_trips_over_rpc() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", BYTES_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("blobecho.pluto", BYTES_IFACE), ("main.pluto", BYTES_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+    assert!(!port.is_empty(), "serve did not report a port");
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_BLOBECHO", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "direct:true\nnested:true tag:42\n"
+    );
+}

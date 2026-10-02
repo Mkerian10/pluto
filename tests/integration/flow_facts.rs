@@ -1095,3 +1095,29 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn bytes_len_fact_narrows() {
+    // bytes len() is a first-class fact term: under b.len() >= 4, the nested
+    // b.len() >= 2 is decided.
+    assert_single_warning(
+        r#"
+fn f(b: bytes) int {
+    if b.len() >= 4 {
+        if b.len() >= 2 {
+            return 1
+        }
+        return 2
+    }
+    return 0
+}
+
+fn main() {
+    let b = bytes_new()
+    b.push(1 as byte)
+    print(f(b))
+}
+"#,
+        "condition is always true",
+    );
+}

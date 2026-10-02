@@ -788,7 +788,7 @@ fn collect_types_from_type_expr(ty: &TypeExpr, types: &mut HashSet<String>) {
     match ty {
         TypeExpr::Named(name) => {
             // Add if it's not a primitive
-            if !matches!(name.as_str(), "int" | "float" | "bool" | "string" | "byte" | "void") {
+            if !matches!(name.as_str(), "int" | "float" | "bool" | "string" | "byte" | "bytes" | "void") {
                 types.insert(name.clone());
             }
         }
@@ -1812,6 +1812,9 @@ fn mk_encode_value_at(ty: &TypeExpr, value_expr: Expr, depth: usize) -> Result<V
                         }
                     ])
                 }
+                // bytes → encode_bytes(value): one opaque blob on the wire,
+                // NEVER element-wise (a 1 MB payload is one value, not 10⁶ elements)
+                "bytes" => mk_method_call("enc", "encode_bytes", vec![value_expr]),
                 "void" => {
                     // void → no encoding needed
                     return Ok(vec![Spanned {
@@ -2202,6 +2205,8 @@ fn mk_let_decode_at(var_name: &str, ty: &TypeExpr, depth: usize) -> Result<Vec<S
                         },
                     }
                 }
+                // bytes → decode_bytes()!: one opaque blob, never element-wise
+                "bytes" => mk_propagate(mk_method_call("dec", "decode_bytes", vec![])),
                 "void" => {
                     // void → no decoding needed
                     return Ok(vec![Spanned {
@@ -2384,13 +2389,14 @@ fn mk_let_decode_at(var_name: &str, ty: &TypeExpr, depth: usize) -> Result<Vec<S
 
             // For simple types, just decode directly; for complex types, recursively call mk_let_decode
             match &inner_ty.node {
-                TypeExpr::Named(name) if matches!(name.as_str(), "int" | "float" | "bool" | "string" | "byte") => {
+                TypeExpr::Named(name) if matches!(name.as_str(), "int" | "float" | "bool" | "string" | "byte" | "bytes") => {
                     // Simple types - decode directly into __result
                     let decode_expr = match name.as_str() {
                         "int" => mk_propagate(mk_method_call("dec", "decode_int", vec![])),
                         "float" => mk_propagate(mk_method_call("dec", "decode_float", vec![])),
                         "bool" => mk_propagate(mk_method_call("dec", "decode_bool", vec![])),
                         "string" => mk_propagate(mk_method_call("dec", "decode_string", vec![])),
+                        "bytes" => mk_propagate(mk_method_call("dec", "decode_bytes", vec![])),
                         "byte" => Expr::Cast {
                             expr: Box::new(Spanned {
                                 node: mk_propagate(mk_method_call("dec", "decode_int", vec![])),
@@ -3141,7 +3147,7 @@ mod tests {
     #[test]
     fn test_collect_types_all_primitives() {
         let mut types = HashSet::new();
-        for prim in &["int", "float", "bool", "string", "byte", "void"] {
+        for prim in &["int", "float", "bool", "string", "byte", "bytes", "void"] {
             let ty = TypeExpr::Named(prim.to_string());
             collect_types_from_type_expr(&ty, &mut types);
         }

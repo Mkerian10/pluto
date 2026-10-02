@@ -976,10 +976,10 @@ pub(crate) fn register_extern_fns(program: &Program, env: &mut TypeEnv) -> Resul
         for p in &e.params {
             let ty = resolve_type(&p.ty, env)?;
             match &ty {
-                PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Void | PlutoType::Array(_) => {}
+                PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Bytes | PlutoType::Void | PlutoType::Array(_) => {}
                 _ => {
                     return Err(CompileError::type_err(
-                        format!("extern functions only support primitive types and arrays (int, float, bool, string, array), got '{}'", ty),
+                        format!("extern functions only support primitive types and arrays (int, float, bool, string, bytes, array), got '{}'", ty),
                         p.ty.span,
                     ));
                 }
@@ -991,10 +991,10 @@ pub(crate) fn register_extern_fns(program: &Program, env: &mut TypeEnv) -> Resul
             Some(t) => {
                 let ty = resolve_type(t, env)?;
                 match &ty {
-                    PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Void | PlutoType::Array(_) => {}
+                    PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Bytes | PlutoType::Void | PlutoType::Array(_) => {}
                     _ => {
                         return Err(CompileError::type_err(
-                            format!("extern functions only support primitive types and arrays (int, float, bool, string, array), got '{}'", ty),
+                            format!("extern functions only support primitive types and arrays (int, float, bool, string, bytes, array), got '{}'", ty),
                             t.span,
                         ));
                     }

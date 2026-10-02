@@ -709,6 +709,8 @@ pub(crate) fn wire_supported(t: &PlutoType) -> bool {
         | PlutoType::Float
         | PlutoType::Bool
         | PlutoType::String
+        // Opaque binary payload: crosses as ONE blob (see rfc-wire-format.md)
+        | PlutoType::Bytes
         | PlutoType::Class(_)
         | PlutoType::Enum(_) => true,
         PlutoType::Nullable(inner) => wire_supported(inner),
@@ -739,7 +741,8 @@ pub(crate) fn wire_transferable(t: &PlutoType, env: &crate::typeck::env::TypeEnv
             | PlutoType::String
             // Marshalable in FIELD position (encoded as int); top-level args
             // are still gated by wire_supported.
-            | PlutoType::Byte => true,
+            | PlutoType::Byte
+            | PlutoType::Bytes => true,
             PlutoType::Nullable(inner)
             | PlutoType::Array(inner)
             | PlutoType::Set(inner) => shape_ok(inner, env, visiting),
