@@ -1897,6 +1897,90 @@ fn single_direct_method_call(stmt: &Stmt, env: &TypeEnv) -> Option<Expr> {
     scan.first.filter(|f| matches!(f, Expr::MethodCall { .. }))
 }
 
+/// Could evaluating this argument yield a value that aliases an instance of
+/// class `cname` — and so hand the callee the call's own receiver (issue
+/// #417)? Conservative: anything whose type cannot be cheaply determined
+/// answers yes. Struct literals are fresh objects (the callee's parameter
+/// binds the fresh object, never the receiver), and primitive-typed results
+/// can never alias a class instance. Container arguments answer through
+/// their element types ([C] hands the callee aliases of every element).
+fn arg_may_alias_class(e: &Expr, env: &TypeEnv, cname: &str) -> bool {
+    use super::facts::type_reaches_class;
+    if let Some((_, t)) = typed_path(e, env) {
+        return type_reaches_class(&t, Some(cname), env);
+    }
+    if len_path(e, env).is_some() {
+        return false; // xs.len(): int
+    }
+    match e {
+        Expr::IntLit(_)
+        | Expr::FloatLit(_)
+        | Expr::BoolLit(_)
+        | Expr::StringLit(_)
+        | Expr::NoneLit
+        | Expr::EnumUnit { .. }
+        | Expr::Range { .. }
+        | Expr::Closure { .. }
+        | Expr::ClosureCreate { .. }
+        | Expr::StringInterp { .. } => false,
+        // A struct literal is a fresh object: it cannot BE the receiver
+        // (writes through the callee's parameter land on the fresh object).
+        Expr::StructLit { .. } => false,
+        // No operator overloading: operators yield primitives.
+        Expr::BinOp { .. } | Expr::UnaryOp { .. } => false,
+        Expr::NullCoalesce { lhs, rhs } => {
+            arg_may_alias_class(&lhs.node, env, cname)
+                || arg_may_alias_class(&rhs.node, env, cname)
+        }
+        Expr::Propagate { expr } | Expr::NullPropagate { expr } => {
+            arg_may_alias_class(&expr.node, env, cname)
+        }
+        Expr::Call { name, .. } => match env.functions.get(&name.node) {
+            Some(sig) => type_reaches_class(&sig.return_type, Some(cname), env),
+            None => true,
+        },
+        Expr::MethodCall { object, method, .. } => {
+            match typed_path(&object.node, env) {
+                Some((_, PlutoType::Class(c2))) => {
+                    match env.functions.get(&mangle_method(&c2, &method.node)) {
+                        Some(sig) => type_reaches_class(&sig.return_type, Some(cname), env),
+                        None => true,
+                    }
+                }
+                _ => true,
+            }
+        }
+        Expr::Index { object, .. } => match typed_path(&object.node, env) {
+            Some((_, PlutoType::Array(el))) => type_reaches_class(&el, Some(cname), env),
+            Some((_, PlutoType::Map(_, v))) => type_reaches_class(&v, Some(cname), env),
+            _ => true,
+        },
+        Expr::ArrayLit { elements, .. } | Expr::SetLit { elements, .. } => elements
+            .iter()
+            .any(|el| arg_may_alias_class(&el.node, env, cname)),
+        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| {
+            arg_may_alias_class(&k.node, env, cname)
+                || arg_may_alias_class(&v.node, env, cname)
+        }),
+        Expr::EnumData { fields, .. } => fields
+            .iter()
+            .any(|(_, v)| arg_may_alias_class(&v.node, env, cname)),
+        // Everything else (casts, trait calls, at/spawn, conditionals,
+        // catch, bare idents typed_path could not resolve — entities
+        // included): conservatively yes.
+        Expr::Cast { .. }
+        | Expr::StaticTraitCall { .. }
+        | Expr::At { .. }
+        | Expr::Spawn { .. }
+        | Expr::If { .. }
+        | Expr::Match { .. }
+        | Expr::Catch { .. }
+        | Expr::Ident(_)
+        | Expr::FieldAccess { .. }
+        | Expr::QualifiedAccess { .. } => true,
+    }
+}
+
 /// Stage the caller-side assumption of a callee's ensures relation (main
 /// fact environment — trackable non-entity receivers). Must run against the
 /// *pre-call* fact state, before `apply_stmt_kills`; `post_stmt` assumes the
@@ -1945,6 +2029,25 @@ fn stage_call_ensures(stmt: &Stmt, env: &mut TypeEnv) {
         Stmt::Let { name, .. } if name.node == root => return,
         Stmt::Assign { target, .. } if target.node == root => return,
         _ => {}
+    }
+    // Path-denotation stability (issue #417): the staged relation is about
+    // the OBJECT the receiver path denotes at call time, but the facts are
+    // phrased on the path. A dotted path (`a.f.owner`) can be re-pointed by
+    // the callee writing a class-typed field of an intermediate object it
+    // reaches — the post-call facts would then describe the wrong object.
+    // A bare binding cannot be rebound by any callee, so only those stage.
+    if rpath.contains('.') {
+        return;
+    }
+    // Receiver aliasing (issue #417): when any argument may carry a value
+    // of the receiver's class, the callee's `other` parameter may BE the
+    // receiver. Accepted contract bodies are proven alias-safe (same-class
+    // foreign writes are rejected above), so the declared relation still
+    // holds of the object — but the conservative skip costs only
+    // completeness and keeps the caller-side assumption independent of
+    // that argument, matching the engine's alias-coarse discipline.
+    if args.iter().any(|a| arg_may_alias_class(&a.node, env, &cname)) {
+        return;
     }
     let Some(specs) = env.fn_ensures.get(&mangle_method(&cname, &method.node)) else {
         return;
@@ -2082,11 +2185,21 @@ fn apply_self_call_ensures(stmt: &Stmt, env: &mut TypeEnv) {
     let Some(scope_ref) = env.invariant_scope.as_ref() else {
         return;
     };
-    let callee = mangle_method(&scope_ref.class_name, &method.node);
+    let receiver_class = scope_ref.class_name.clone();
+    let callee = mangle_method(&receiver_class, &method.node);
     let Some(specs) = env.fn_ensures.get(&callee).cloned() else {
         return;
     };
     if specs[0].params.len() != args.len() {
+        return;
+    }
+    // Receiver aliasing (issue #417): mirror of the stage_call_ensures
+    // skip — when an argument may carry another binding of the receiver's
+    // class, do not pin the callee's relation onto the ghost state.
+    if args
+        .iter()
+        .any(|a| arg_may_alias_class(&a.node, env, &receiver_class))
+    {
         return;
     }
     let mut scope = env.invariant_scope.take().expect("checked above");
@@ -2260,6 +2373,57 @@ fn pre_field_assign(
             // (non-mut method — reported by the mutability checks) or a
             // different class's method; nothing to prove here.
             return Ok(());
+        }
+    }
+
+    // Receiver aliasing (issue #417): inside a contract-carrying method,
+    // a write through any OTHER binding of the receiver's own class may go
+    // through an alias of `self` (classes alias freely within a task —
+    // `c.bump2(c)`, self-referential fields, containers). The ghost scope
+    // tracks `self`'s int fields as strong symbolic updates, so a foreign
+    // write that may actually land on the receiver would silently desync
+    // the symbolic state from the real state and certify false contracts
+    // (the entry-anchored `old()` relations included). The engine's alias
+    // discipline everywhere else (facts::call_severity, dominance's
+    // `kill_field_write`) is alias-coarse by class; the matching answer
+    // here is to reject the write outright — havocking instead would push
+    // the failure to the next boundary with a diagnostic that no longer
+    // names the aliasing binding.
+    if let Some(scope) = env.invariant_scope.as_ref() {
+        if scope.class_name == cls && scope.fields.iter().any(|f| f == &field.node) {
+            let target = opath
+                .clone()
+                .unwrap_or_else(|| "<expression>".to_string());
+            let root = target
+                .split('.')
+                .next()
+                .unwrap_or(target.as_str())
+                .to_string();
+            let mut clauses: Vec<String> = scope
+                .invariants
+                .iter()
+                .map(|s| format!("invariant '{}'{}", s.desc, s.blame()))
+                .collect();
+            clauses.extend(scope.ensures.iter().map(|s| {
+                format!(
+                    "ensures '{}'{}",
+                    s.desc,
+                    crate::parser::ast::provenance_blame(&s.provenance)
+                )
+            }));
+            let clause_list = clauses.join(", ");
+            return Err(CompileError::type_err(
+                format!(
+                    "cannot discharge the contracts of method '{}' of class '{cls}': \
+                     this write to '{target}.{}' goes through '{root}', another '{cls}' \
+                     binding that may alias 'self'. A write through an alias would \
+                     invalidate the symbolic tracking of 'self.{}' that the proof of \
+                     {clause_list} depends on. Perform the mutation through 'self', or \
+                     move the aliasing write out of this contract-carrying method",
+                    scope.method_name, field.node, field.node
+                ),
+                span,
+            ));
         }
     }
 
