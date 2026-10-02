@@ -624,3 +624,367 @@ fn main() { }
         "guarded_by predicate must be bool",
     );
 }
+
+// ── Collection aliasing ban (issue #418) ─────────────────────────────────────
+//
+// A collection-shaped guarded field's contents can be mutated through an
+// alias of the field's value, outside the assignment/index write-set the
+// dominance proof closes (`let d = self.data; d.push(99)`). Collection
+// guarded fields therefore carry the same whole-program aliasing ban as
+// idempotency's dedup sets: no bare-value use, mutating builtins only
+// through `self` under the dominance obligation, and construction/
+// assignment only from freshly-created values.
+
+#[test]
+fn guarded_collection_alias_binding_rejected() {
+    // The audit repro: bind the guarded array to a local and push — the
+    // write would escape the fence entirely.
+    compile_should_fail_with(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: [int] guarded_by (g: G) g.token == self.epoch
+
+    fn sneak(mut self) {
+        let d = self.data
+        d.push(99)
+    }
+}
+
+fn main() {
+    let mut a = Auth { epoch: 1, data: [] }
+    a.sneak()
+}
+"#,
+        "may not be used as a value",
+    );
+}
+
+#[test]
+fn guarded_collection_direct_push_requires_fence() {
+    // A mutating builtin through `self` is a write to the field: it carries
+    // the dominance obligation, exactly like `self.data = ...`.
+    compile_should_fail_with(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: [int] guarded_by (g: G) g.token == self.epoch
+
+    fn sneak(mut self) {
+        self.data.push(99)
+    }
+}
+
+fn main() { }
+"#,
+        "cannot prove guard",
+    );
+}
+
+#[test]
+fn guarded_collection_fenced_mutation_discharges() {
+    // The positive shape: fence, then push / fresh reassignment; reads
+    // (len, indexing) allowed from anywhere.
+    let out = compile_and_run_stdout(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: [int] guarded_by (g: G) g.token == self.epoch
+
+    fn add(mut self, g: G, v: int) {
+        if g.token != self.epoch {
+            raise MathError { message: "stale" }
+        }
+        self.data.push(v)
+    }
+
+    fn reset(mut self, g: G) {
+        if g.token != self.epoch {
+            raise MathError { message: "stale" }
+        }
+        self.data = []
+    }
+}
+
+fn main() {
+    let mut a = Auth { epoch: 1, data: [] }
+    let g = G { token: 1 }
+    a.add(g, 7) catch err { print("rejected") }
+    a.reset(g) catch err { print("rejected") }
+    a.add(g, 9) catch err { print("rejected") }
+    print(f"{a.data[a.data.len() - 1]} {a.data.len()}")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "9 1");
+}
+
+#[test]
+fn guarded_collection_assignment_from_shared_value_rejected() {
+    // Even under a correct fence, assigning a value another binding holds
+    // aliases the guarded contents in: the caller could mutate them after
+    // the fence.
+    compile_should_fail_with(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: [int] guarded_by (g: G) g.token == self.epoch
+
+    fn swap(mut self, g: G, d: [int]) {
+        if g.token != self.epoch {
+            raise MathError { message: "stale" }
+        }
+        self.data = d
+    }
+}
+
+fn main() { }
+"#,
+        "freshly-created collection",
+    );
+}
+
+#[test]
+fn guarded_collection_construction_from_shared_value_rejected() {
+    compile_should_fail_with(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: [int] guarded_by (g: G) g.token == self.epoch
+}
+
+fn main() {
+    let shared = [1, 2]
+    let mut a = Auth { epoch: 1, data: shared }
+    shared.push(99)
+}
+"#,
+        "freshly-created collection",
+    );
+}
+
+#[test]
+fn guarded_collection_passed_as_argument_rejected() {
+    compile_should_fail_with(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: [int] guarded_by (g: G) g.token == self.epoch
+
+    fn leak(self) {
+        audit(self.data)
+    }
+}
+
+fn audit(xs: [int]) {
+    xs.push(99)
+}
+
+fn main() { }
+"#,
+        "may not be used as a value",
+    );
+}
+
+#[test]
+fn guarded_collection_iteration_rejected() {
+    compile_should_fail_with(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: [int] guarded_by (g: G) g.token == self.epoch
+
+    fn total(self) int {
+        let mut sum = 0
+        for x in self.data {
+            sum = sum + x
+        }
+        return sum
+    }
+}
+
+fn main() { }
+"#,
+        "may not be used as a value",
+    );
+}
+
+#[test]
+fn guarded_collection_foreign_push_rejected() {
+    compile_should_fail_with(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: [int] guarded_by (g: G) g.token == self.epoch
+}
+
+fn main() {
+    let mut a = Auth { epoch: 1, data: [] }
+    a.data.push(1)
+}
+"#,
+        "may only be written through 'self' inside the class's own methods",
+    );
+}
+
+#[test]
+fn guarded_collection_reads_allowed_from_anywhere() {
+    let out = compile_and_run_stdout(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: [int] guarded_by (g: G) g.token == self.epoch
+
+    fn add(mut self, g: G, v: int) {
+        if g.token != self.epoch {
+            raise MathError { message: "stale" }
+        }
+        self.data.push(v)
+    }
+}
+
+fn main() {
+    let mut a = Auth { epoch: 1, data: [] }
+    a.add(G { token: 1 }, 5) catch err { print("rejected") }
+    print(f"{a.data.len()} {a.data[0]} {a.data.contains(5)}")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1 5 true");
+}
+
+#[test]
+fn guarded_bytes_alias_binding_rejected() {
+    // bytes has a mutating push: the alias ban covers it too.
+    compile_should_fail_with(
+        r#"
+class WriteGrant {
+    token: int
+}
+
+object Store {
+    data: bytes guarded_by (g: WriteGrant) g.token == self.epoch
+    epoch: int
+
+    fn leak(mut self) {
+        let d = self.data
+        print(d.len())
+    }
+}
+
+fn main() { }
+"#,
+        "may not be used as a value",
+    );
+}
+
+#[test]
+fn guarded_class_typed_field_rejected_at_declaration() {
+    // A class-typed guarded field's contents could be mutated through
+    // aliases by field writes the guard's write-set cannot see.
+    compile_should_fail_with(
+        r#"
+class G {
+    token: int
+}
+
+class Cfg {
+    x: int
+}
+
+class Auth {
+    epoch: int
+    data: Cfg guarded_by (g: G) g.token == self.epoch
+}
+
+fn main() { }
+"#,
+        "guarded_by is not supported on field",
+    );
+}
+
+#[test]
+fn guarded_collection_mutable_elements_rejected_at_declaration() {
+    compile_should_fail_with(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: [[int]] guarded_by (g: G) g.token == self.epoch
+}
+
+fn main() { }
+"#,
+        "element type",
+    );
+}
+
+// ── Same-class alias kill (the attack dominance already rejected) ────────────
+
+#[test]
+fn fence_killed_by_same_class_alias_write_stays_rejected() {
+    // Audit probe p14: fence, then bump the epoch through another binding
+    // of the same class (a potential alias of self), then write. The alias
+    // kill must keep refusing the proof.
+    compile_should_fail_with(
+        r#"
+class G {
+    token: int
+}
+
+class Auth {
+    epoch: int
+    data: string guarded_by (g: G) g.token == self.epoch
+
+    fn apply(mut self, mut other: Auth, g: G, d: string) {
+        if g.token == self.epoch {
+            other.epoch = other.epoch + 1
+            self.data = d
+        }
+    }
+}
+
+fn main() { }
+"#,
+        "cannot prove guard",
+    );
+}
