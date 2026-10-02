@@ -494,6 +494,63 @@ fn blob_violating_variant_fails_with_two_sided_blame() {
     );
 }
 
+#[test]
+fn blob_unfenced_write_path_rejected() {
+    // The stale-grant failure mode cannot be compiled away: an apply()
+    // whose write path drops the fence (inline restatement of the std.blob
+    // authority — compile_to_object has no stdlib root) is rejected by the
+    // fenced instantiation's dominance proof, with two-sided blame.
+    compile_should_fail_with_all(
+        "property monotonic(f: field<int>) {\n    invariant f >= old(f)\n}\n\nproperty fenced(f: field, authority: field<int>, grant: type) {\n    f guarded_by (g: grant) g.token == authority\n}\n\nclass WriteGrant {\n    token: int\n}\n\nobject BlobAuthority satisfies monotonic(self.epoch), fenced(self.data, self.epoch, WriteGrant) {\n    data: string\n    epoch: int\n\n    fn grant_write(mut self) WriteGrant {\n        self.epoch = self.epoch + 1\n        return WriteGrant { token: self.epoch }\n    }\n\n    fn apply(mut self, grant: WriteGrant, d: string) {\n        self.data = d\n    }\n}\n\nfn main() {\n    let mut store = BlobAuthority { data: \"genesis\", epoch: 0 }\n    let g = store.grant_write()\n    store.apply(g, \"unfenced\")\n}\n",
+        &[
+            // The failing site: the write is not dominated by any grant check.
+            "cannot prove guard 'data' guarded_by (g: WriteGrant) g.token == self.epoch of class 'BlobAuthority'",
+            // The property-body side.
+            "required by property 'fenced'",
+            "instantiated with f = self.data, authority = self.epoch, grant = WriteGrant",
+        ],
+    );
+}
+
+/// std.blob's authority exports its safety theorem by name: the satisfies
+/// clauses survive library-ification and module flattening, and surface as
+/// the type's provided properties in analyze/DerivedInfo — assumable
+/// downstream without reading the implementation.
+#[test]
+fn std_blob_authority_exports_its_theorem() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let stdlib = manifest_dir.join("stdlib");
+    let dir = tempfile::tempdir().unwrap();
+    let entry = dir.path().join("main.pt");
+    std::fs::write(
+        &entry,
+        "import std.blob\n\nfn main() {\n    let b = blob.create(\"x\")\n    print(b.epoch_now())\n}\n",
+    )
+    .unwrap();
+    let (program, _source, derived) =
+        pluto::analyze_file(&entry, Some(&stdlib)).expect("analyze succeeds");
+    let class = program
+        .classes
+        .iter()
+        .find(|c| c.node.name.node == "blob.BlobAuthority")
+        .expect("blob.BlobAuthority present in flattened program");
+    let info = derived
+        .class_infos
+        .get(&class.node.id)
+        .expect("class info present");
+    // The names carry the flattened module path: std.verify arrived through
+    // std.blob's own import, so the properties read blob.verify.* and the
+    // grant argument is the library's blob.WriteGrant.
+    assert_eq!(
+        info.provided_properties,
+        vec![
+            "blob.verify.monotonic(self.epoch)".to_string(),
+            "blob.verify.fenced(self.data, self.epoch, blob.WriteGrant)".to_string(),
+        ],
+        "the property names are the authority's exported facts"
+    );
+}
+
 // ============================================================
 // Phase 5: provides / assume / fn-type requirements
 // ============================================================
