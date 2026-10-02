@@ -61,6 +61,37 @@ fn main() {
     let missing = fs.read_all("/does_not_exist.txt") catch "file not found!"
     print(f"caught: {missing}")
 
+    // Binary I/O (issue #368): bytes is the honest type for binary data.
+    // A payload holding every byte value 0..256 round-trips exactly
+    // through the one-shots, and read_at/write_at (pread/pwrite) address
+    // the file positionally without touching the descriptor's cursor.
+    let bin = tmp + "/payload.bin"
+    let payload = bytes_new()
+    let mut i = 0
+    while i < 256 {
+        payload.push(i as byte)
+        i = i + 1
+    }
+    fs.write_all_bytes(bin, payload)!
+    let back = fs.read_all_bytes(bin)!
+    let mut intact = back.len() == 256
+    let mut j = 0
+    while j < back.len() {
+        if (back[j] as int) != j {
+            intact = false
+        }
+        j = j + 1
+    }
+    print(f"binary round-trip intact: {intact}")
+
+    let b = fs.open_read(bin)!
+    let head = b.read_bytes(2)!            // sequential: cursor now at 2
+    let at16 = b.read_at(16, 2)!           // positional: cursor untouched
+    let next = b.read_bytes(2)!            // continues from 2, proving it
+    print(f"head {head[0] as int},{head[1] as int}  at16 {at16[0] as int},{at16[1] as int}  next {next[0] as int},{next[1] as int}")
+    b.close()!
+    fs.remove(bin)!
+
     // Cleanup
     fs.remove(sub + "/a.txt")!
     fs.remove(sub + "/b.txt")!

@@ -826,7 +826,11 @@ Import: `import std.fs`
 ```
 class File<M, S> {
     fn read(self, max_bytes: int) string   // where M == Read, S == Open; "" = EOF; raises FileError
+    fn read_bytes(self, max_bytes: int) bytes          // where M == Read, S == Open; empty = EOF; raises FileError
+    fn read_at(self, offset: int, max_bytes: int) bytes // where M == Read, S == Open; pread — never moves the cursor
     fn write(self, data: string)           // where M == Write, S == Open; loops to completion; raises Degraded
+    fn write_bytes(self, data: bytes)      // where M == Write, S == Open; loops to completion; raises Degraded
+    fn write_at(self, offset: int, data: bytes) // where M == Write, S == Open; pwrite — never moves the cursor; raises Degraded
     fn sync(self)                          // where M == Write, S == Open; full durability (fsync / F_FULLFSYNC); raises Degraded
     fn sync_data(self)                     // where M == Write, S == Open; fdatasync (F_FULLFSYNC on Darwin); raises Degraded
     fn seek(self, to: Seek) int            // where S == Open; raises FileError
@@ -859,6 +863,9 @@ enum Seek {
 | `read_all` | `(path: string) string` | Read entire file (raises NotFound \| FileError) |
 | `write_all` | `(path: string, content: string)` | Write, overwriting; close errors surfaced (fallible) |
 | `append_all` | `(path: string, content: string)` | Append; close errors surfaced (fallible) |
+| `read_all_bytes` | `(path: string) bytes` | Read entire file as binary (raises NotFound \| FileError) |
+| `write_all_bytes` | `(path: string, data: bytes)` | Write binary, overwriting; close errors surfaced (fallible) |
+| `append_all_bytes` | `(path: string, data: bytes)` | Append binary; close errors surfaced (fallible) |
 | `replace_all` | `(path: string, content: string)` | Atomic durable replace: temp + sync + rename + dir fsync. FileError ⇒ old file intact; SyncError ⇒ rename landed, durability unwarranted |
 | `sync_dir` | `(path: string)` | fsync a directory (crash-safe rename/create/remove); raises SyncError |
 | `stat` | `(path: string) Metadata` | File metadata (raises NotFound \| FileError) |

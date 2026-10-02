@@ -96,7 +96,11 @@ extern fn __pluto_fs_open_write(path: string) int
 extern fn __pluto_fs_open_append(path: string) int
 extern fn __pluto_fs_close(fd: int) int
 extern fn __pluto_fs_read(fd: int, max_bytes: int) string
+extern fn __pluto_fs_read_bytes(fd: int, max_bytes: int) bytes
+extern fn __pluto_fs_read_at(fd: int, offset: int, max_bytes: int) bytes
 extern fn __pluto_fs_write(fd: int, data: string) int
+extern fn __pluto_fs_write_bytes(fd: int, data: bytes) int
+extern fn __pluto_fs_write_at(fd: int, offset: int, data: bytes) int
 extern fn __pluto_fs_seek(fd: int, offset: int, whence_tag: int) int
 extern fn __pluto_fs_sync(fd: int) int
 extern fn __pluto_fs_sync_data(fd: int) int
@@ -106,6 +110,9 @@ extern fn __pluto_fs_replace_phase() int
 extern fn __pluto_fs_read_all(path: string) string
 extern fn __pluto_fs_write_all(path: string, data: string) int
 extern fn __pluto_fs_append_all(path: string, data: string) int
+extern fn __pluto_fs_read_all_bytes(path: string) bytes
+extern fn __pluto_fs_write_all_bytes(path: string, data: bytes) int
+extern fn __pluto_fs_append_all_bytes(path: string, data: bytes) int
 extern fn __pluto_fs_exists(path: string) int
 extern fn __pluto_fs_file_size(path: string) int
 extern fn __pluto_fs_stat(path: string) [int]
@@ -176,6 +183,39 @@ pub class File<M, S> {
         return s
     }
 
+    // Binary read (issue #368): same contract as read, with bytes as the
+    // honest type for binary data — no encoding, no interpolation, just
+    // octets. Empty bytes means EOF; failures raise FileError.
+    fn read_bytes(self, max_bytes: int) bytes
+        where M == Read, S == Open
+        requires max_bytes > 0
+    {
+        let b = __pluto_fs_read_bytes(self.fd, max_bytes)
+        let e = __pluto_fs_last_errno()
+        if e != 0 {
+            raise FileError { path: "", code: e, message: __pluto_fs_errstr(e) }
+        }
+        return b
+    }
+
+    // Positioned read (pread): reads at an absolute offset WITHOUT touching
+    // the descriptor's seek cursor — correct under any sharing with no
+    // locks, and the honest answer to the seek+read two-call race (the
+    // #368 investigation: entity serialization never made that pair
+    // atomic). Empty bytes means EOF at that offset.
+    fn read_at(self, offset: int, max_bytes: int) bytes
+        where M == Read, S == Open
+        requires offset >= 0
+        requires max_bytes > 0
+    {
+        let b = __pluto_fs_read_at(self.fd, offset, max_bytes)
+        let e = __pluto_fs_last_errno()
+        if e != 0 {
+            raise FileError { path: "", code: e, message: __pluto_fs_errstr(e) }
+        }
+        return b
+    }
+
     // Write all of data: loops to completion, so success means every
     // byte reached the OS (short writes are never silently dropped). A
     // failed write leaves the prefix state unknown — the same destroyed
@@ -185,6 +225,43 @@ pub class File<M, S> {
         where M == Write, S == Open
     {
         let n = __pluto_fs_write(self.fd, data)
+        if n < 0 {
+            let code = 0 - n
+            raise Degraded {
+                file: File<Write, Poisoned> { fd: self.fd },
+                code: code,
+                message: __pluto_fs_errstr(code)
+            }
+        }
+    }
+
+    // Binary write (issue #368): write-all loop and degradation contract
+    // identical to write — a failed write leaves the prefix state unknown,
+    // so the handle poisons (owner decision D3).
+    fn write_bytes(self, data: bytes)
+        where M == Write, S == Open
+    {
+        let n = __pluto_fs_write_bytes(self.fd, data)
+        if n < 0 {
+            let code = 0 - n
+            raise Degraded {
+                file: File<Write, Poisoned> { fd: self.fd },
+                code: code,
+                message: __pluto_fs_errstr(code)
+            }
+        }
+    }
+
+    // Positioned write (pwrite): writes all of data at an absolute offset
+    // WITHOUT touching the descriptor's seek cursor. Loops on short
+    // writes; a failure degrades the handle like write. Note: on an
+    // O_APPEND fd (open_append) Linux appends regardless of the offset —
+    // documented, as everywhere else.
+    fn write_at(self, offset: int, data: bytes)
+        where M == Write, S == Open
+        requires offset >= 0
+    {
+        let n = __pluto_fs_write_at(self.fd, offset, data)
         if n < 0 {
             let code = 0 - n
             raise Degraded {
@@ -291,22 +368,6 @@ pub class File<M, S> {
         __pluto_fs_close(self.fd)
         return File<M, Closed> { fd: self.fd }
     }
-
-    // Reserved for issue #368 (bytes I/O), blocked on extern support
-    // for the bytes type. The RFC fixes their shapes so that work drops
-    // in without touching this design:
-    //   fn read_at(self, offset: int, max_bytes: int) bytes
-    //       where M == Read, S == Open
-    //       requires offset >= 0
-    //       requires max_bytes > 0
-    //   fn read_bytes(self, max_bytes: int) bytes
-    //       where M == Read, S == Open
-    //       requires max_bytes > 0
-    //   fn write_at(self, offset: int, data: bytes)
-    //       where M == Write, S == Open
-    //       requires offset >= 0
-    //   fn write_bytes(self, data: bytes)
-    //       where M == Write, S == Open
 }
 
 // ── Constructors: the authority mints evidence ───────────────────────
@@ -398,6 +459,34 @@ pub fn write_all(path: string, data: string) {
 
 pub fn append_all(path: string, data: string) {
     let r = __pluto_fs_append_all(path, data)
+    if r < 0 {
+        raise_path_error(path, 0 - r)!
+    }
+}
+
+// ── Binary one-shots (issue #368) ────────────────────────────────────
+// Same close-error-surfacing and short-write-loop discipline as the
+// string forms; bytes is the honest type for binary data.
+
+// Raises NotFound | FileError.
+pub fn read_all_bytes(path: string) bytes {
+    let b = __pluto_fs_read_all_bytes(path)
+    let e = __pluto_fs_last_errno()
+    if e != 0 {
+        raise_path_error(path, e)!
+    }
+    return b
+}
+
+pub fn write_all_bytes(path: string, data: bytes) {
+    let r = __pluto_fs_write_all_bytes(path, data)
+    if r < 0 {
+        raise_path_error(path, 0 - r)!
+    }
+}
+
+pub fn append_all_bytes(path: string, data: bytes) {
+    let r = __pluto_fs_append_all_bytes(path, data)
     if r < 0 {
         raise_path_error(path, 0 - r)!
     }
@@ -525,12 +614,6 @@ pub fn list_dir(path: string) [string] {
 pub fn temp_dir() string {
     return __pluto_fs_temp_dir()
 }
-
-// Reserved for issue #368 (bytes I/O), blocked on extern support for
-// the bytes type:
-//   pub fn read_all_bytes(path: string) bytes
-//   pub fn write_all_bytes(path: string, data: bytes)
-//   pub fn append_all_bytes(path: string, data: bytes)
 
 // ── Internal ─────────────────────────────────────────────────────────
 
