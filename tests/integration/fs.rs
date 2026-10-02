@@ -993,3 +993,365 @@ fn main() {
         "cannot be captured by a closure",
     );
 }
+
+// ============================================================
+// Bytes I/O (issue #368): binary safety is the point — the string
+// paths are byte-exact too (strings carry no UTF-8 invariant), but
+// bytes is the honest type at the boundary. Every test round-trips
+// all 256 byte values or pins the typestate contract.
+// ============================================================
+
+#[test]
+fn fs_handle_bytes_round_trip_all_256_values() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/handle.bin"
+
+    let payload = bytes_new()
+    let mut i = 0
+    while i < 256 {
+        payload.push(i as byte)
+        i = i + 1
+    }
+
+    let w = fs.open_write(path)!
+    w.write_bytes(payload)!
+    w.close()!
+
+    let r = fs.open_read(path)!
+    let got = bytes_new()
+    while true {
+        let chunk = r.read_bytes(64)!
+        if chunk.len() == 0 {
+            break
+        }
+        let mut c = 0
+        while c < chunk.len() {
+            got.push(chunk[c])
+            c = c + 1
+        }
+    }
+    r.close()!
+
+    let mut ok = got.len() == 256
+    let mut j = 0
+    while j < got.len() {
+        if (got[j] as int) != j {
+            ok = false
+        }
+        j = j + 1
+    }
+    print(ok)
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "true\n");
+}
+
+#[test]
+fn fs_one_shot_bytes_round_trip_all_256_values() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/oneshot.bin"
+
+    let payload = bytes_new()
+    let mut i = 0
+    while i < 256 {
+        payload.push(i as byte)
+        i = i + 1
+    }
+
+    fs.write_all_bytes(path, payload)!
+    let back = fs.read_all_bytes(path)!
+    let mut ok = back.len() == 256
+    let mut j = 0
+    while j < back.len() {
+        if (back[j] as int) != j {
+            ok = false
+        }
+        j = j + 1
+    }
+    print(ok)
+
+    // append_all_bytes: the same 256 values again — the file now holds
+    // two exact copies.
+    fs.append_all_bytes(path, payload)!
+    let both = fs.read_all_bytes(path)!
+    let mut ok2 = both.len() == 512
+    let mut k = 0
+    while k < both.len() {
+        if (both[k] as int) != k % 256 {
+            ok2 = false
+        }
+        k = k + 1
+    }
+    print(ok2)
+
+    // write_all_bytes truncates like write_all.
+    let two = bytes_new()
+    two.push(0 as byte)
+    two.push(255 as byte)
+    fs.write_all_bytes(path, two)!
+    let small = fs.read_all_bytes(path)!
+    print(small.len())
+    print(small[0] as int)
+    print(small[1] as int)
+
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "true\ntrue\n2\n0\n255\n");
+}
+
+// read_at/write_at are offset-stateless (pread/pwrite): interleaving
+// them with sequential read/write proves the descriptor's seek cursor
+// is untouched.
+#[test]
+fn fs_read_at_write_at_positional_independence() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/positional.bin"
+
+    // Sequential write, then a positional patch, then more sequential:
+    // if write_at left the cursor alone, the tail lands at offset 8.
+    let w = fs.open_write(path)!
+    w.write_bytes("abcdefgh".to_bytes())!
+    w.write_at(2, "XY".to_bytes())!
+    w.write_bytes("ij".to_bytes())!
+    w.close()!
+    print(fs.read_all(path)!)
+
+    // Sequential read, a positional read, sequential again: the second
+    // sequential read continues from offset 2 — read_at never moved it.
+    let r = fs.open_read(path)!
+    let first = r.read_bytes(2)!
+    print(first.to_string())
+    let at4 = r.read_at(4, 2)!
+    print(at4.to_string())
+    let second = r.read_bytes(2)!
+    print(second.to_string())
+
+    // read_at composes with seek, and leaves the seeked cursor alone too.
+    r.seek(fs.Seek.Start { offset: 8 })!
+    let at0 = r.read_at(0, 2)!
+    print(at0.to_string())
+    let tail = r.read_bytes(2)!
+    print(tail.to_string())
+    r.close()!
+
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "abXYefghij\nab\nef\nXY\nab\nij\n");
+}
+
+// EOF is empty bytes with no error — for read_bytes at the end of the
+// file and for read_at past it.
+#[test]
+fn fs_read_bytes_eof_yields_empty() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/eof.bin"
+    fs.write_all_bytes(path, "abc".to_bytes())!
+
+    let r = fs.open_read(path)!
+    let all = r.read_bytes(16)!
+    print(all.len())
+    let eof = r.read_bytes(16)!
+    print(eof.len())
+    let past = r.read_at(100, 16)!
+    print(past.len())
+    r.close()!
+
+    // One-shot on an empty file: empty bytes, not an error.
+    fs.write_all_bytes(tmp + "/empty.bin", bytes_new())!
+    print(fs.read_all_bytes(tmp + "/empty.bin")!.len())
+
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "3\n0\n0\n0\n");
+}
+
+#[test]
+fn fs_read_all_bytes_not_found() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let b = fs.read_all_bytes("/definitely_not_here.bin") catch e: fs.NotFound {
+        print(f"not found: {e.path}")
+        return
+    } catch e: fs.FileError {
+        print("other")
+        return
+    }
+    print(b.len())
+}
+"#,
+    )]);
+    assert_eq!(out, "not found: /definitely_not_here.bin\n");
+}
+
+// ============================================================
+// Bytes typestate pins: the mode/state/poisoning contract is identical
+// to the string methods — compile errors, not runtime behaviors. (No
+// write-failure injection hook exists, so Degraded-on-write_bytes is
+// pinned at the type level: the poisoned payload cannot be swallowed
+// and the write methods do not exist on Poisoned or Closed.)
+// ============================================================
+
+#[test]
+fn fs_reject_read_bytes_on_write_handle() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_write("/tmp/reject_probe.txt")!
+    let b = f.read_bytes(10)!
+    print(b.len())
+    f.close()!
+}
+"#,
+        "method 'read_bytes' does not exist on 'fs.File<fs.Write, fs.Open>'",
+    );
+}
+
+#[test]
+fn fs_reject_read_at_on_write_handle() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_write("/tmp/reject_probe.txt")!
+    let b = f.read_at(0, 10)!
+    print(b.len())
+    f.close()!
+}
+"#,
+        "method 'read_at' does not exist on 'fs.File<fs.Write, fs.Open>'",
+    );
+}
+
+#[test]
+fn fs_reject_write_bytes_on_read_handle() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_read("/etc/hosts")!
+    f.write_bytes("nope".to_bytes())!
+    f.close()!
+}
+"#,
+        "method 'write_bytes' does not exist on 'fs.File<fs.Read, fs.Open>'",
+    );
+}
+
+#[test]
+fn fs_reject_write_at_on_read_handle() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_read("/etc/hosts")!
+    f.write_at(0, "nope".to_bytes())!
+    f.close()!
+}
+"#,
+        "method 'write_at' does not exist on 'fs.File<fs.Read, fs.Open>'",
+    );
+}
+
+#[test]
+fn fs_reject_read_bytes_after_close() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_read("/etc/hosts")!
+    f.close()!
+    let b = f.read_bytes(10)!
+    print(b.len())
+}
+"#,
+        "'f' was consumed by the transition '.close()'",
+    );
+}
+
+#[test]
+fn fs_reject_write_bytes_after_close() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_write("/tmp/reject_probe.txt")!
+    f.close()!
+    f.write_bytes("late".to_bytes())!
+}
+"#,
+        "'f' was consumed by the transition '.close()'",
+    );
+}
+
+#[test]
+fn fs_reject_wildcard_catch_of_write_bytes_degraded() {
+    // write_bytes degrades like write (owner decision D3): the Poisoned
+    // payload is must_release, so a wildcard catch cannot swallow it.
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_write("/tmp/reject_probe.txt")!
+    f.write_bytes("data".to_bytes()) catch e {
+        print("swallowed")
+    }
+    f.close()!
+}
+"#,
+        "carries fs.File<fs.Write, fs.Poisoned> in field 'file' — a must_release state",
+    );
+}
+
+#[test]
+fn fs_reject_write_bytes_on_poisoned_payload() {
+    // The degradation rule as a type error: the method to retry does not
+    // exist on the state the failure hands you.
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_write("/tmp/reject_probe.txt")!
+    f.sync() catch e: fs.Degraded {
+        let p = e.file
+        p.write_bytes("retry".to_bytes())!
+        p.discard()
+        return
+    }
+    f.close()!
+}
+"#,
+        "method 'write_bytes' does not exist on 'fs.File<fs.Write, fs.Poisoned>'",
+    );
+}
