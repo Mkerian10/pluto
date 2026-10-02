@@ -1,6 +1,6 @@
 # RFC: Native Library Modules
 
-**Status:** Draft — direction from design discussion (2026-10-02, the #371 pivot); awaiting owner review
+**Status:** Accepted (2026-10-02) — all five owner decisions resolved as recommended: in-language `native` block, system linking allowed with marking, `-O2` fix folded into phase 1, available to user modules from day one, C only
 **Author:** Design discussion
 **Date:** 2026-10-02
 **Related:** [epistemics.md](epistemics.md) (trust boundaries, the assumption surface), [rfc-properties.md](rfc-properties.md) (`assume` on externs — phase 5, shipped), [rfc-distributed-safety.md](rfc-distributed-safety.md) (third-party services open question), issue #371 (compression — the motivating client), issue #372 (the pure-Pluto throughput data)
