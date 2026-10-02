@@ -21,6 +21,50 @@
 
 #include "builtins.h"
 
+// ── Defects ──────────────────────────────────────────────────────────────────
+//
+// A defect is a bug in the program, not a condition the program can handle:
+// integer overflow, division by zero. Defects never become typed errors and
+// never enter error inference — they print a uniform message to stderr and
+// abort the process (conditions raise, defects trap; issue #416). Same
+// reporting path as the other runtime aborts (array OOB, requires
+// violations): message on stderr, exit(1).
+//
+// The kind codes match the DEFECT_* constants in src/codegen/lower/mod.rs.
+void __pluto_defect_binop(long kind, long a, long b) {
+    switch (kind) {
+    case 0:
+        fprintf(stderr, "pluto: defect: integer overflow in '+': %ld + %ld\n", a, b);
+        break;
+    case 1:
+        fprintf(stderr, "pluto: defect: integer overflow in '-': %ld - %ld\n", a, b);
+        break;
+    case 2:
+        fprintf(stderr, "pluto: defect: integer overflow in '*': %ld * %ld\n", a, b);
+        break;
+    case 3:
+        fprintf(stderr, "pluto: defect: integer overflow in unary '-': -(%ld)\n", a);
+        break;
+    case 4:
+        fprintf(stderr, "pluto: defect: integer overflow in '/': %ld / %ld\n", a, b);
+        break;
+    case 5:
+        fprintf(stderr, "pluto: defect: division by zero: %ld / 0\n", a);
+        break;
+    case 6:
+        fprintf(stderr, "pluto: defect: modulo by zero: %ld %% 0\n", a);
+        break;
+    case 7:
+        // Raised from __pluto_pow_int, not from codegen.
+        fprintf(stderr, "pluto: defect: integer overflow in pow(): pow(%ld, %ld)\n", a, b);
+        break;
+    default:
+        fprintf(stderr, "pluto: defect: unknown defect kind %ld (%ld, %ld)\n", kind, a, b);
+        break;
+    }
+    exit(1);
+}
+
 // ── Print functions ───────────────────────────────────────────────────────────
 
 // Line-buffer stdout (once) so output is flushed on each newline even when
@@ -822,7 +866,13 @@ void *__pluto_string_repeat(void *s, long count) {
         return obj;
     }
 
-    long new_len = slen * count;
+    long new_len;
+    if (__builtin_mul_overflow(slen, count, &new_len)) {
+        // Previously wrapped silently: a huge count made a small allocation
+        // followed by memcpy past its end (heap corruption).
+        fprintf(stderr, "pluto: defect: integer overflow in string repeat: %ld * %ld\n", slen, count);
+        exit(1);
+    }
     void *obj = gc_alloc(8 + new_len + 1, GC_TAG_STRING, 0);
     *(long *)obj = new_len;
     char *result = (char *)obj + 8;
@@ -3373,13 +3423,21 @@ long __pluto_pow_int(long base, long exp) {
         __pluto_raise_error(err_obj);
         return 0;
     }
+    // Overflow is a defect and traps (issue #416) — previously this wrapped
+    // silently. The square is only computed while more bits remain, so a
+    // final large square can't cause a spurious trap.
     long result = 1;
     long b = base;
     long e = exp;
-    while (e > 0) {
-        if (e & 1) result *= b;
-        b *= b;
+    while (e > 1) {
+        if (e & 1) {
+            if (__builtin_mul_overflow(result, b, &result)) __pluto_defect_binop(7, base, exp);
+        }
+        if (__builtin_mul_overflow(b, b, &b)) __pluto_defect_binop(7, base, exp);
         e >>= 1;
+    }
+    if (e == 1) {
+        if (__builtin_mul_overflow(result, b, &result)) __pluto_defect_binop(7, base, exp);
     }
     return result;
 }
