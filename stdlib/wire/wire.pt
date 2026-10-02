@@ -480,6 +480,13 @@ pub class WireValueDecoder impl Decoder {
     fn decode_record_start(mut self, type_name: string, num_fields: int) {
         match self.current {
             WireValue.Record { keys, values } {
+                // The record is self-describing: a field-count mismatch means
+                // the peer's shape of this type has extra or missing fields.
+                // Refuse it here rather than decode garbage.
+                let got = keys.len()
+                if got != num_fields {
+                    raise WireError { message: f"record {type_name}: expected {num_fields} fields, got {got}" }
+                }
                 let frame = DecoderFrame.RecordCursor { keys: keys, values: values, index: 0 }
                 self.stack.push(frame)
                 return
@@ -500,9 +507,31 @@ pub class WireValueDecoder impl Decoder {
         let frame = self.stack[stack_len - 1]
         match frame {
             DecoderFrame.RecordCursor { keys, values, index } {
-                self.current = values[index]
-                let new_frame = DecoderFrame.RecordCursor { keys: keys, values: values, index: index + 1 }
-                self.stack[stack_len - 1] = new_frame
+                // Key-aware field selection: the record's keys are
+                // transmitted precisely so decode does not depend on field
+                // order. Fast path first — keys almost always arrive in
+                // declaration order, so the cursor position matches.
+                if index < keys.len() {
+                    if keys[index] == name {
+                        self.current = values[index]
+                        let new_frame = DecoderFrame.RecordCursor { keys: keys, values: values, index: index + 1 }
+                        self.stack[stack_len - 1] = new_frame
+                        return
+                    }
+                }
+                // Reordered record: match by name over the parsed key list
+                // (never over the raw wire text).
+                let mut j = 0
+                while j < keys.len() {
+                    if keys[j] == name {
+                        self.current = values[j]
+                        let new_frame = DecoderFrame.RecordCursor { keys: keys, values: values, index: index + 1 }
+                        self.stack[stack_len - 1] = new_frame
+                        return
+                    }
+                    j = j + 1
+                }
+                raise WireError { message: f"missing field '{name}' in record" }
             }
             DecoderFrame.ArrayCursor { elements, index } {
                 raise WireError { message: "decode_field called on array cursor" }

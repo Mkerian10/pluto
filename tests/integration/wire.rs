@@ -703,6 +703,123 @@ fn main() {
     assert_eq!(out, "123\n2\n");
 }
 
+// ── Key-aware record decoding (issue #424) ─────────────────────────────────────
+//
+// The record format is self-describing — keys travel on the wire — and decode
+// must USE them: a peer that declares the same fields in a different order
+// still decodes correctly by name, and a missing/unknown field is a typed
+// WireError, never a silent mis-assignment.
+
+/// Fields encoded in a different order than they are decoded still land in the
+/// right slots: decode_field matches by key name, not by cursor position.
+#[test]
+fn decoder_matches_reordered_fields_by_name() {
+    let out = run_wire_test(r#"
+import std.wire
+
+fn main() {
+    let mut enc = wire.wire_value_encoder()
+    enc.encode_record_start("Person", 2)
+    enc.encode_field("last", 0)
+    enc.encode_string("Lovelace")
+    enc.encode_field("first", 1)
+    enc.encode_string("Ada")
+    enc.encode_record_end()
+    let wv = enc.result()
+
+    let mut dec = wire.wire_value_decoder(wv)
+    dec.decode_record_start("Person", 2)!
+    dec.decode_field("first", 0)!
+    let first = dec.decode_string()!
+    dec.decode_field("last", 1)!
+    let last = dec.decode_string()!
+    dec.decode_record_end()
+    print(f"first={first} last={last}")
+}
+"#);
+    assert_eq!(out, "first=Ada last=Lovelace\n");
+}
+
+/// The same property through the real wire path: a JSON payload whose keys
+/// arrive in reversed order deserializes and decodes by name.
+#[test]
+fn decoder_reordered_json_keys_decode_by_name() {
+    let out = run_wire_test(r#"
+import std.wire
+
+fn main() {
+    let fmt = wire.json_wire_format()
+    let wv = fmt.deserialize("{\"last\": \"Lovelace\", \"first\": \"Ada\"}")!
+    let mut dec = wire.wire_value_decoder(wv)
+    dec.decode_record_start("Person", 2)!
+    dec.decode_field("first", 0)!
+    let first = dec.decode_string()!
+    dec.decode_field("last", 1)!
+    let last = dec.decode_string()!
+    dec.decode_record_end()
+    print(f"first={first} last={last}")
+}
+"#);
+    assert_eq!(out, "first=Ada last=Lovelace\n");
+}
+
+/// A field the decoder expects but the record does not carry is a typed
+/// WireError naming the field — not garbage from a neighboring slot.
+#[test]
+fn decoder_missing_field_raises_typed_error() {
+    let out = run_wire_test(r#"
+import std.wire
+
+fn main() {
+    let mut enc = wire.wire_value_encoder()
+    enc.encode_record_start("Person", 2)
+    enc.encode_field("name", 0)
+    enc.encode_string("Alice")
+    enc.encode_field("age", 1)
+    enc.encode_int(30)
+    enc.encode_record_end()
+    let wv = enc.result()
+
+    let mut dec = wire.wire_value_decoder(wv)
+    dec.decode_record_start("Person", 2)!
+    dec.decode_field("nickname", 0) catch err: wire.WireError {
+        print(err.message)
+        return
+    }
+    print("decoded garbage")
+}
+"#);
+    assert_eq!(out, "missing field 'nickname' in record\n");
+}
+
+/// A record whose field count disagrees with the decoder's expectation (an
+/// unknown extra field, or a missing one) is refused at record start.
+#[test]
+fn decoder_field_count_mismatch_raises_typed_error() {
+    let out = run_wire_test(r#"
+import std.wire
+
+fn main() {
+    let mut enc = wire.wire_value_encoder()
+    enc.encode_record_start("Person", 2)
+    enc.encode_field("name", 0)
+    enc.encode_string("Alice")
+    enc.encode_field("nickname", 1)
+    enc.encode_string("Al")
+    enc.encode_record_end()
+    let wv = enc.result()
+
+    let mut dec = wire.wire_value_decoder(wv)
+    dec.decode_record_start("Person", 1) catch err: wire.WireError {
+        print(err.message)
+        return
+    }
+    print("decoded garbage")
+}
+"#);
+    assert_eq!(out, "record Person: expected 1 fields, got 2\n");
+}
+
 // ── Serializable type validation ────────────────────────────────────────────
 
 #[test]

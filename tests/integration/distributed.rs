@@ -742,6 +742,193 @@ fn remote_call_round_trips_with_mirrored_contract() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "result:42\n");
 }
 
+// ── Layout-aware interface hashing (issue #424) ────────────────────────────────
+//
+// The field shape of a wire-crossing value type is interface surface. Two
+// peers whose only difference is the ORDER of same-typed fields are
+// positionally compatible on the wire — before #424 they paired hash-equal
+// and silently swapped field values. The layout now folds into the interface
+// hash, so the pairing is refused pre-dispatch.
+
+const REORDER_SERVER_SRC: &str = "\
+import std.wire
+
+class Person {
+    first: string
+    last: string
+}
+
+class Registry {
+    pad: int
+    fn whois(self, key: int) Person {
+        return Person { first: \"Ada\", last: \"Lovelace\" }
+    }
+}
+
+fn main() {
+    let r = Registry { pad: 0 }
+    serve r on 0
+}";
+
+// Identical to the server's declarations except `last` before `first`.
+const REORDER_IFACE: &str = "\
+pub class Person {
+    last: string
+    first: string
+}
+pub class Registry {
+    fn whois(self, key: int) Person {
+        return Person { last: \"x\", first: \"y\" }
+    }
+}";
+
+// The same-layout stub: pairs cleanly.
+const ALIGNED_IFACE: &str = "\
+pub class Person {
+    first: string
+    last: string
+}
+pub class Registry {
+    fn whois(self, key: int) Person {
+        return Person { first: \"x\", last: \"y\" }
+    }
+}";
+
+const REORDER_CLIENT_SRC: &str = "\
+import std.wire
+import registry
+
+app Client[r: remote registry.Registry] {
+    fn main(self) {
+        let p = self.r.whois(1) catch err {
+            print(\"refused\")
+            return
+        }
+        print(f\"first={p.first} last={p.last}\")
+    }
+}";
+
+/// The #424 repro: a client compiled with Person's fields reordered must be
+/// REFUSED by the interface-hash check — not served a value whose fields it
+/// will silently swap (the original failure printed `first=Lovelace`).
+#[test]
+fn remote_call_rejected_on_field_reorder_skew() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", REORDER_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("registry.pluto", REORDER_IFACE), ("main.pluto", REORDER_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_REGISTRY", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "refused\n");
+}
+
+/// The control: the same pairing with the layouts aligned round-trips, and the
+/// values land in the right fields.
+#[test]
+fn remote_call_round_trips_with_same_layout() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", REORDER_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("registry.pluto", ALIGNED_IFACE), ("main.pluto", REORDER_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_REGISTRY", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "first=Ada last=Lovelace\n");
+}
+
+// A nullable flip on a wire-crossing field used to be LATENT: it only failed
+// at decode time, and only when a none actually flowed. It is a layout
+// change, so the pairing is now refused pre-dispatch.
+
+const NULLABLE_SERVER_SRC: &str = "\
+import std.wire
+
+class Rec {
+    nick: string?
+    age: int
+}
+
+class Svc {
+    pad: int
+    fn get(self, k: int) Rec {
+        return Rec { nick: none, age: 30 }
+    }
+}
+
+fn main() {
+    let s = Svc { pad: 0 }
+    serve s on 0
+}";
+
+// The stub drops the `?`: same field names, same order, skewed nullability.
+const NULLABLE_FLIP_IFACE: &str = "\
+pub class Rec {
+    nick: string
+    age: int
+}
+pub class Svc {
+    fn get(self, k: int) Rec {
+        return Rec { nick: \"x\", age: 0 }
+    }
+}";
+
+const NULLABLE_CLIENT_SRC: &str = "\
+import std.wire
+import svc
+
+app Client[s: remote svc.Svc] {
+    fn main(self) {
+        let r = self.s.get(1) catch err {
+            print(\"refused\")
+            return
+        }
+        print(f\"nick={r.nick} age={r.age}\")
+    }
+}";
+
+/// A client whose stub flips a field's nullability is refused by the
+/// interface-hash check before dispatch — not left to fail (or not) depending
+/// on whether a none happens to flow.
+#[test]
+fn remote_call_rejected_on_nullable_flip_skew() {
+    let (_sd, server_bin) = build_binary(&[("main.pluto", NULLABLE_SERVER_SRC)]);
+    let (_cd, client_bin) =
+        build_binary(&[("svc.pluto", NULLABLE_FLIP_IFACE), ("main.pluto", NULLABLE_CLIENT_SRC)]);
+
+    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).unwrap();
+    let port = port_line.trim();
+
+    let out = Command::new(&client_bin)
+        .env("PLUTO_REMOTE_SVC", format!("127.0.0.1:{port}"))
+        .output()
+        .unwrap();
+    let _ = server.kill();
+
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "refused\n");
+}
+
 // ── Failure classification: Definite vs Ambiguous (epistemics.md) ───────────────
 //
 // Every failed boundary call carries an epistemic classification in
