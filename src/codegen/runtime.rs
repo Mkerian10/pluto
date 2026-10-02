@@ -178,7 +178,7 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_set_to_array", &[types::I64], &[types::I64])?;
 
         // GC
-        reg.declare(module, "__pluto_gc_init", &[], &[])?;
+        reg.declare(module, "__pluto_gc_init", &[types::I64], &[])?;
         reg.declare(module, "__pluto_gc_heap_size", &[], &[types::I64])?;
         reg.declare(module, "__pluto_safepoint", &[], &[])?;
 

@@ -977,6 +977,10 @@ void __pluto_gc_collect(void) {
 }
 
 void __pluto_gc_init(void *stack_bottom) {
+    // stack_bottom is the address of a slot in the entry function's frame,
+    // approximating the highest address of the program stack. Besides serving
+    // as the test-mode scan bound, a non-NULL value is what arms the
+    // collection trigger in gc_alloc.
     gc_stack_bottom = stack_bottom;
     __pluto_register_exit_check();
 #ifndef PLUTO_TEST_MODE
@@ -998,6 +1002,9 @@ void __pluto_gc_init(void *stack_bottom) {
         pthread_attr_destroy(&pattr);
 #endif
         __pluto_gc_register_thread_stack(stack_lo, stack_hi);
+        // The pthread-derived bound is exact and independent of codegen;
+        // prefer it over the entry-frame anchor.
+        if (stack_hi) gc_stack_bottom = stack_hi;
         (void)self;
     }
 #endif
