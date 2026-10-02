@@ -622,6 +622,7 @@ pub(crate) fn register_ensures(program: &Program, env: &mut TypeEnv) -> Result<(
                         desc,
                         span: cl.node.expr.span,
                         params: params.clone(),
+                        provenance: None,
                     });
                 }
                 env.generic_class_ensures
