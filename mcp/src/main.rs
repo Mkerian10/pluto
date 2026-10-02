@@ -1,4 +1,3 @@
-mod docs;
 mod serialize;
 mod server;
 mod supervisor;
