@@ -401,8 +401,8 @@ let math = "1 + 2 = {1 + 2}"
 - `.contains(s)` — returns bool
 - `.starts_with(s)` — returns bool
 - `.ends_with(s)` — returns bool
-- `.to_int()` — returns `int?` (nullable, none if parse fails)
-- `.to_float()` — returns `float?` (nullable, none if parse fails)
+- `.to_int()` — returns `int?` (nullable, none if parse fails or overflows; surrounding whitespace allowed). For a typed error instead, use `strings.parse_int`
+- `.to_float()` — returns `float?` (nullable, none if parse fails). For a typed error instead, use `strings.parse_float`
 - `.substring(start, end)` — returns substring
 - `.index_of(s)` — returns int (-1 if not found)
 - `.replace(old, new)` — returns new string
@@ -738,14 +738,14 @@ Compile with `--stdlib <path-to-stdlib-dir>`.
 
 | Module | Description |
 |--------|-------------|
-| `std.strings` | String manipulation: substring, split, join, trim, case conversion |
+| `std.strings` | String manipulation: substring, split, join, trim, case conversion, compare, parse_int/parse_float |
 | `std.math` | Math utilities: abs, clamp, gcd, lcm, factorial, trig, constants |
 | `std.fs` | File system: read/write files, directories, File class for streaming |
 | `std.json` | JSON parsing and construction: Json class with typed accessors |
 | `std.http` | HTTP server: request handling, response builders, `listen()` |
 | `std.net` | TCP networking: TcpListener and TcpConnection classes |
 | `std.socket` | Low-level BSD sockets: create, bind, listen, accept, read, write |
-| `std.collections` | Functional array operations: map, filter, fold, zip, enumerate |
+| `std.collections` | Functional array operations: map, filter, fold, zip, enumerate, stable sort |
 | `std.io` | Console I/O: println, print, read_line |
 | `std.random` | Random number generation: seed, next, between, decimal |
 | `std.time` | Time utilities: now, sleep, elapsed, monotonic clock |
@@ -778,6 +778,35 @@ Import: `import std.strings`
 | `byte_at` | `(s: string, index: int) int` | Get byte value at index |
 | `format_float` | `(value: float, decimals: int) string` | Format float with N decimal places |
 | `join` | `(arr: [string], separator: string) string` | Join string array with separator |
+| `compare` | `(a: string, b: string) int` | Lexicographic byte order: -1, 0, or 1 |
+| `parse_int` | `(s: string) int` | Parse base-10 int; raises `ParseError` |
+| `parse_float` | `(s: string) float` | Parse base-10 float; raises `ParseError` |
+
+## Errors
+
+```
+pub error ParseError {
+    input: string    // the string that failed to parse
+    message: string  // what was wrong ("empty string", "out of range for int", ...)
+}
+```
+
+`parse_int` accepts an optional leading `-`/`+` followed by one or more ASCII
+digits; leading zeros are fine. It raises `ParseError` for the empty string, a
+bare sign, any other character (whitespace included; `trim` first to accept
+padded input), and values outside the int range. Overflow is detected, never
+wrapped or trapped.
+
+`parse_float` accepts `[+-]? DIGITS ('.' DIGITS)? ([eE] [+-]? DIGITS)?`, and
+raises `ParseError` otherwise (`.5`, `5.`, `inf`, `nan`, whitespace) or when
+the value overflows to infinity (`1e999`).
+
+```
+let port = strings.parse_int(raw) catch err: strings.ParseError {
+    log.warn(f"bad port {err.input}: {err.message}")
+    8080
+}
+```
 
 Note: Many of these overlap with built-in string methods (`.len()`, `.contains()`, etc.). The stdlib versions take the string as a first argument."#
         .to_string()
@@ -1081,7 +1110,27 @@ Used by `zip` and `enumerate`.
 | `enumerate` | `<T>(arr: [T]) [Pair<int, T>]` | Pair each element with its index |
 | `flatten` | `<T>(arr: [[T]]) [T]` | Flatten nested array |
 | `sum` | `(arr: [int]) int` | Sum int array |
-| `sum_float` | `(arr: [float]) float` | Sum float array |"#
+| `sum_float` | `(arr: [float]) float` | Sum float array |
+| `sort_by` | `<T>(arr: [T], less: fn(T, T) bool) [T]` | Stable sort by a strict less-than comparator |
+| `sort` | `(arr: [int]) [int]` | Stable ascending sort of ints |
+| `sort_floats` | `(arr: [float]) [float]` | Stable ascending sort of floats |
+| `sort_strings` | `(arr: [string]) [string]` | Stable lexicographic sort (`strings.compare` order) |
+
+## Sorting
+
+All sorts return a new array and leave the input untouched. They are
+**stable**: elements that compare equal keep their original relative order, so
+sorting by a secondary key and then a primary key orders by primary key with
+ties broken by the secondary key. Implementation is a bottom-up merge sort
+(O(n log n) comparisons, O(n) extra space).
+
+`less(a, b)` must return true only when `a` belongs strictly before `b`
+(`(a, b) => a < b` ascending, `(a, b) => a > b` descending). Returning true for
+equal elements breaks the stability guarantee.
+
+```
+let ordered = collections.sort_by(segments, (a: Segment, b: Segment) => a.offset < b.offset)
+```"#
         .to_string()
 }
 

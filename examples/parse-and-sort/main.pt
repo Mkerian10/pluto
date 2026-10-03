@@ -1,0 +1,89 @@
+// Parsing numbers and sorting with std.strings + std.collections.
+//
+// Scenario: a log directory holds segment files named by their base offset
+// ("1024.seg"). To open the log we parse each name into an offset, skip
+// anything that is not a segment, and visit the segments in offset order.
+
+import std.strings
+import std.collections
+
+class Segment {
+    offset: int
+    name: string
+}
+
+fn print_ints(label: string, xs: [int]) {
+    let mut s = label
+    let mut i = 0
+    while i < xs.len() {
+        if i > 0 {
+            s = s + ", "
+        }
+        s = s + f"{xs[i]}"
+        i = i + 1
+    }
+    print(s)
+}
+
+fn describe_int(s: string) string {
+    let v = strings.parse_int(s) catch err: strings.ParseError {
+        return f"  '{s}' -> error: {err.message}"
+    }
+    return f"  '{s}' -> {v}"
+}
+
+fn describe_float(s: string) string {
+    let v = strings.parse_float(s) catch err: strings.ParseError {
+        return f"  '{s}' -> error: {err.message}"
+    }
+    return f"  '{s}' -> {v}"
+}
+
+fn main() {
+    // ─── parse_int: typed errors, no sentinels ───────────────────────
+    print("--- parse_int ---")
+    let inputs = ["42", "-17", "+8", "007", "", "12a", " 5", "9223372036854775808"]
+    for s in inputs {
+        print(describe_int(s))
+    }
+
+    // ─── parse_float ─────────────────────────────────────────────────
+    print("--- parse_float ---")
+    for s in ["3.25", "-1e3", ".5", "1e999"] {
+        print(describe_float(s))
+    }
+
+    // ─── Discover segments: parse names, skip junk ───────────────────
+    print("--- segments ---")
+    let listing = ["4096.seg", "0.seg", "README", "1024.seg", "2048.seg", "tmp.seg"]
+    let segments: [Segment] = []
+    for name in listing {
+        if !strings.ends_with(name, ".seg") {
+            continue
+        }
+        let base = strings.substring(name, 0, strings.len(name) - 4)
+        let mut valid = true
+        let offset = strings.parse_int(base) catch err: strings.ParseError {
+            print(f"  skipping {name}: {err.message}")
+            valid = false
+            0
+        }
+        if valid {
+            segments.push(Segment { offset: offset, name: name })
+        }
+    }
+
+    // sort_by takes a strict "less than" comparator and is stable.
+    let ordered = collections.sort_by(segments, (a: Segment, b: Segment) => a.offset < b.offset)
+    for seg in ordered {
+        print(f"  {seg.offset}: {seg.name}")
+    }
+
+    // ─── Convenience sorts ───────────────────────────────────────────
+    print("--- convenience sorts ---")
+    print_ints("ints: ", collections.sort([5, -2, 9, 0, 3]))
+    let words = collections.sort_strings(["pear", "apple", "fig", "Banana"])
+    print("strings: " + strings.join(words, ", "))
+    let desc = collections.sort_by([5, -2, 9, 0, 3], (a: int, b: int) => a > b)
+    print_ints("descending: ", desc)
+}
