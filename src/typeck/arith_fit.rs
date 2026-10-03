@@ -39,6 +39,17 @@
 //! so they are neither counted as candidates nor checked — deliberate
 //! modular arithmetic is invisible to this pass by construction.
 //!
+//! Shift-amount checks (issue #441) ride the same mechanism: a `<<`/`>>`
+//! whose amount is outside 0..63 is a defect, so codegen range-checks every
+//! non-constant amount. When the live facts bound the amount operand inside
+//! `[0, 63]`, the site's span key (same `(file_id, lhs start, rhs end)`
+//! shape) is recorded in `proven_shift_spans` and the check is elided;
+//! `shift_check_candidates` holds every examined site, and `pluto analyze`
+//! reports the residue separately from the overflow checks. Constant amounts are decided by typeck (out-of-range constants
+//! are a type error) and never checked at runtime, so they are not counted
+//! as candidates. Bits shifted out of the value are NOT a defect — `<<`
+//! never gets an overflow check.
+//!
 //! The residue is surfaced: `arith_fit_candidates` minus `proven_fit_spans`
 //! is the count of checks that remain at runtime, reported by
 //! `pluto analyze` next to the assumption surface (DerivedInfo).
@@ -90,19 +101,29 @@ pub(crate) fn record_arith_fit(stmt: &Stmt, env: &mut TypeEnv) {
     if exprs.iter().any(|e| contains_impure_call(e, env)) {
         return;
     }
-    let mut scan = FitScan { env, candidates: Vec::new(), proven: Vec::new() };
+    let mut scan = FitScan {
+        env,
+        candidates: Vec::new(),
+        proven: Vec::new(),
+        shift_candidates: Vec::new(),
+        shift_proven: Vec::new(),
+    };
     for e in exprs {
         scan.visit_expr(e);
     }
-    let FitScan { candidates, proven, .. } = scan;
+    let FitScan { candidates, proven, shift_candidates, shift_proven, .. } = scan;
     env.arith_fit_candidates.extend(candidates);
     env.proven_fit_spans.extend(proven);
+    env.shift_check_candidates.extend(shift_candidates);
+    env.proven_shift_spans.extend(shift_proven);
 }
 
 struct FitScan<'a> {
     env: &'a TypeEnv,
     candidates: Vec<(u32, usize, usize)>,
     proven: Vec<(u32, usize, usize)>,
+    shift_candidates: Vec<(u32, usize, usize)>,
+    shift_proven: Vec<(u32, usize, usize)>,
 }
 
 impl<'a> Visitor for FitScan<'a> {
@@ -122,6 +143,17 @@ impl<'a> Visitor for FitScan<'a> {
                     self.candidates.push(key);
                     if self.result_fits(op, &lhs.node, &rhs.node) {
                         self.proven.push(key);
+                    }
+                }
+                crate::visit::walk_expr(self, expr);
+            }
+            Expr::BinOp { op: BinOp::Shl | BinOp::Shr, lhs, rhs } => {
+                // Constant amounts are typeck-decided and never checked.
+                if const_shift_amount(&rhs.node).is_none() && self.is_int_operand(&rhs.node) {
+                    let key = (lhs.span.file_id, lhs.span.start, rhs.span.end);
+                    self.shift_candidates.push(key);
+                    if self.shift_amount_in_range(&rhs.node) {
+                        self.shift_proven.push(key);
                     }
                 }
                 crate::visit::walk_expr(self, expr);
@@ -197,6 +229,14 @@ impl<'a> FitScan<'a> {
         Ok((lo, hi))
     }
 
+    /// Do the live facts prove a shift amount lies in `[0, 63]`?
+    fn shift_amount_in_range(&self, amount: &Expr) -> bool {
+        match self.operand_interval(amount) {
+            Ok((lo, hi)) => 0 <= lo && hi <= 63,
+            Err(()) => false,
+        }
+    }
+
     fn result_fits(&self, op: &BinOp, lhs: &Expr, rhs: &Expr) -> bool {
         let (Ok((la, ha)), Ok((lb, hb))) = (self.operand_interval(lhs), self.operand_interval(rhs))
         else {
@@ -215,5 +255,19 @@ impl<'a> FitScan<'a> {
             _ => return false,
         };
         I64_MIN <= lo && hi <= I64_MAX
+    }
+}
+
+/// The value of a constant shift amount: an integer literal, or unary minus
+/// applied to one (possibly nested). Anything else is non-constant and is
+/// range-checked at runtime. Shared with codegen, which skips the runtime
+/// check for these (typeck has already rejected out-of-range constants).
+pub(crate) fn const_shift_amount(e: &Expr) -> Option<i128> {
+    match e {
+        Expr::IntLit(n) => Some(*n as i128),
+        Expr::UnaryOp { op: UnaryOp::Neg, operand } => {
+            const_shift_amount(&operand.node).map(|n| -n)
+        }
+        _ => None,
     }
 }

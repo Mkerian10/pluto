@@ -26,6 +26,8 @@ const DEFECT_NEG_OVERFLOW: i64 = 3;
 const DEFECT_DIV_OVERFLOW: i64 = 4;
 const DEFECT_DIV_ZERO: i64 = 5;
 const DEFECT_MOD_ZERO: i64 = 6;
+// 7 is pow() overflow, raised from the runtime (__pluto_pow_int).
+const DEFECT_SHIFT_RANGE: i64 = 8;
 
 /// Precondition contracts for a function.
 pub struct FnContracts {
@@ -138,6 +140,18 @@ impl<'a> LowerContext<'a> {
     ) -> bool {
         self.env
             .proven_fit_spans
+            .contains(&(lhs.span.file_id, lhs.span.start, rhs.span.end))
+    }
+
+    /// Did typeck prove this shift site's amount lies in 0..63? Same key
+    /// discipline as `arith_fit_proven` (issue #441).
+    fn shift_range_proven(
+        &self,
+        lhs: &crate::span::Spanned<Expr>,
+        rhs: &crate::span::Spanned<Expr>,
+    ) -> bool {
+        self.env
+            .proven_shift_spans
             .contains(&(lhs.span.file_id, lhs.span.start, rhs.span.end))
     }
 
@@ -3703,8 +3717,26 @@ impl<'a> LowerContext<'a> {
             BinOp::BitAnd => self.builder.ins().band(l, r),
             BinOp::BitOr => self.builder.ins().bor(l, r),
             BinOp::BitXor => self.builder.ins().bxor(l, r),
-            BinOp::Shl => self.builder.ins().ishl(l, r),
-            BinOp::Shr => self.builder.ins().sshr(l, r),
+            // Shift amounts outside 0..63 are a defect (issue #441):
+            // Cranelift's ishl/sshr would silently mask the amount to `& 63`.
+            // Bits shifted out of the value are NOT a defect — `<<` gets no
+            // overflow check. Constant amounts were range-checked by typeck;
+            // non-constant ones are checked here unless facts proved them in
+            // range (arith_fit.rs). One unsigned compare covers both negative
+            // and too-large amounts.
+            BinOp::Shl | BinOp::Shr => {
+                if crate::typeck::arith_fit::const_shift_amount(&rhs.node).is_none()
+                    && !self.shift_range_proven(lhs, rhs)
+                {
+                    let bad = self.builder.ins().icmp_imm(IntCC::UnsignedGreaterThan, r, 63);
+                    self.emit_defect_check(bad, DEFECT_SHIFT_RANGE, l, r);
+                }
+                if matches!(op, BinOp::Shl) {
+                    self.builder.ins().ishl(l, r)
+                } else {
+                    self.builder.ins().sshr(l, r)
+                }
+            }
         };
         Ok(result)
     }

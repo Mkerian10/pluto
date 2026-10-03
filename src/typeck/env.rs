@@ -255,6 +255,13 @@ pub struct TypeEnv {
     /// raw op — the overflow check is elided ONLY on a proof, never a
     /// heuristic (issue #416 phase 2).
     pub proven_fit_spans: HashSet<(u32, usize, usize)>,
+    /// Every non-constant-amount `<<`/`>>` site the fit-recording pass
+    /// examined (same key shape as `arith_fit_candidates`). Codegen
+    /// range-checks the amount at these sites (issue #441).
+    pub shift_check_candidates: HashSet<(u32, usize, usize)>,
+    /// The subset of `shift_check_candidates` whose amount the flow facts
+    /// prove lies in 0..63 — codegen elides the range check, on a proof only.
+    pub proven_shift_spans: HashSet<(u32, usize, usize)>,
     /// Per-node union of edge-carried (propagated) errors, computed after the
     /// inference fixed point. A variant that can arrive via propagation
     /// never shrinks (slice 1: only direct raises shrink).
@@ -543,6 +550,8 @@ impl TypeEnv {
             proven_requires_sites: HashMap::new(),
             arith_fit_candidates: HashSet::new(),
             proven_fit_spans: HashSet::new(),
+            shift_check_candidates: HashSet::new(),
+            proven_shift_spans: HashSet::new(),
             fn_propagated_errors: HashMap::new(),
             fn_value_boundaries: Vec::new(),
             fn_value_provenance: ScopeTracker::new(),
