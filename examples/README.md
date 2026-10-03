@@ -205,6 +205,14 @@ Demonstrates the `std.collections` functional collections library: `map`, `filte
 cargo run -- run examples/collections-lib/main.pt --stdlib stdlib
 ```
 
+## parse-and-sort
+
+Parsing numbers and sorting arrays. `strings.parse_int` / `strings.parse_float` raise a typed `strings.ParseError` (with `input` and `message`) for empty strings, stray characters, whitespace, and out-of-range values, instead of returning sentinels. `collections.sort_by` takes a strict less-than comparator and is stable; `sort`, `sort_floats`, and `sort_strings` cover the common cases. The example discovers log segment files by parsing their names and visits them in offset order.
+
+```bash
+cargo run -- run examples/parse-and-sort/main.pt --stdlib stdlib
+```
+
 ## stdin
 
 Demonstrates interactive I/O with `std.io`: reading input with `io.read_line()`, parsing strings to numbers with `.to_int()` and `.to_float()` (both return nullable types — use `?` to propagate none on invalid input), and string interpolation for output.

@@ -735,10 +735,14 @@ void *__pluto_string_to_int(void *s) {
     char *start = tmp;
     while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r') start++;
     char *end_ptr;
+    errno = 0;
     long result = strtol(start, &end_ptr, 10);
+    // strtol saturates to LONG_MIN/LONG_MAX on overflow; treat that as
+    // invalid rather than silently returning a clamped value.
+    int overflowed = (errno == ERANGE);
     // Skip trailing whitespace
     while (*end_ptr == ' ' || *end_ptr == '\t' || *end_ptr == '\n' || *end_ptr == '\r') end_ptr++;
-    if (start == end_ptr || *end_ptr != '\0') {
+    if (overflowed || start == end_ptr || *end_ptr != '\0') {
         free(tmp);
         // Return none (null pointer)
         return (void *)0;
