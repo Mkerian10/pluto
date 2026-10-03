@@ -120,3 +120,128 @@ test "join space separator" {
 test "join longer array" {
     expect(strings.join(["a", "b", "c", "d", "e"], "-")).to_equal("a-b-c-d-e")
 }
+
+// -- compare --
+
+test "compare orders lexicographically" {
+    expect(strings.compare("a", "b")).to_equal(-1)
+    expect(strings.compare("b", "a")).to_equal(1)
+    expect(strings.compare("abc", "abc")).to_equal(0)
+    expect(strings.compare("ab", "abc")).to_equal(-1)
+    expect(strings.compare("abc", "ab")).to_equal(1)
+    expect(strings.compare("", "")).to_equal(0)
+    expect(strings.compare("", "a")).to_equal(-1)
+    expect(strings.compare("Z", "a")).to_equal(-1)
+    expect(strings.compare("10", "9")).to_equal(-1)
+}
+
+// -- parse_int --
+
+// Returns the ParseError message, or "ok:<value>" on success.
+fn try_int(s: string) string {
+    let v = strings.parse_int(s) catch err: strings.ParseError {
+        return err.message
+    }
+    return f"ok:{v}"
+}
+
+fn try_float(s: string) string {
+    let v = strings.parse_float(s) catch err: strings.ParseError {
+        return err.message
+    }
+    return "ok"
+}
+
+test "parse_int basic values" {
+    expect(try_int("0")).to_equal("ok:0")
+    expect(try_int("42")).to_equal("ok:42")
+    expect(try_int("1024")).to_equal("ok:1024")
+    expect(try_int("-7")).to_equal("ok:-7")
+    expect(try_int("+15")).to_equal("ok:15")
+    expect(try_int("-0")).to_equal("ok:0")
+}
+
+test "parse_int accepts leading zeros" {
+    expect(try_int("007")).to_equal("ok:7")
+    expect(try_int("-0010")).to_equal("ok:-10")
+    expect(try_int("0000")).to_equal("ok:0")
+}
+
+test "parse_int full int range" {
+    expect(try_int("9223372036854775807")).to_equal("ok:9223372036854775807")
+    expect(try_int("-9223372036854775808")).to_equal("ok:-9223372036854775808")
+    expect(try_int("000009223372036854775807")).to_equal("ok:9223372036854775807")
+}
+
+test "parse_int overflow raises instead of wrapping" {
+    expect(try_int("9223372036854775808")).to_equal("out of range for int")
+    expect(try_int("-9223372036854775809")).to_equal("out of range for int")
+    expect(try_int("99999999999999999999")).to_equal("out of range for int")
+    expect(try_int("-99999999999999999999")).to_equal("out of range for int")
+    expect(try_int("10000000000000000000")).to_equal("out of range for int")
+}
+
+test "parse_int rejects empty and bare signs" {
+    expect(try_int("")).to_equal("empty string")
+    expect(try_int("-")).to_equal("no digits after sign")
+    expect(try_int("+")).to_equal("no digits after sign")
+}
+
+test "parse_int rejects non-digits and whitespace" {
+    expect(try_int("abc")).to_equal("invalid character at index 0")
+    expect(try_int("12a")).to_equal("invalid character at index 2")
+    expect(try_int(" 12")).to_equal("invalid character at index 0")
+    expect(try_int("12 ")).to_equal("invalid character at index 2")
+    expect(try_int("1 2")).to_equal("invalid character at index 1")
+    expect(try_int("--1")).to_equal("invalid character at index 1")
+    expect(try_int("+-1")).to_equal("invalid character at index 1")
+    expect(try_int("1.5")).to_equal("invalid character at index 1")
+    expect(try_int("0x10")).to_equal("invalid character at index 1")
+}
+
+test "parse_int error carries the input" {
+    let mut seen = ""
+    let v = strings.parse_int("nope") catch err: strings.ParseError {
+        seen = err.input
+        99
+    }
+    expect(v).to_equal(99)
+    expect(seen).to_equal("nope")
+}
+
+test "parse_int propagates with bang" {
+    let v = strings.parse_int("123")!
+    expect(v).to_equal(123)
+}
+
+// -- parse_float --
+
+test "parse_float valid values" {
+    expect(strings.parse_float("3")!).to_equal(3.0)
+    expect(strings.parse_float("-0.5")!).to_equal(-0.5)
+    expect(strings.parse_float("+2.25")!).to_equal(2.25)
+    expect(strings.parse_float("1e3")!).to_equal(1000.0)
+    expect(strings.parse_float("2.5E-1")!).to_equal(0.25)
+    expect(strings.parse_float("1e+2")!).to_equal(100.0)
+    expect(strings.parse_float("007.5")!).to_equal(7.5)
+}
+
+test "parse_float rejects malformed input" {
+    expect(try_float("")).to_equal("empty string")
+    expect(try_float("-")).to_equal("expected digit at index 1")
+    expect(try_float(".5")).to_equal("expected digit at index 0")
+    expect(try_float("5.")).to_equal("expected digit at index 2")
+    expect(try_float("1e")).to_equal("expected digit at index 2")
+    expect(try_float("1e+")).to_equal("expected digit at index 3")
+    expect(try_float(" 1.0")).to_equal("expected digit at index 0")
+    expect(try_float("1.0 ")).to_equal("invalid character at index 3")
+    expect(try_float("inf")).to_equal("expected digit at index 0")
+    expect(try_float("nan")).to_equal("expected digit at index 0")
+    expect(try_float("1.2.3")).to_equal("invalid character at index 3")
+}
+
+test "parse_float overflow raises" {
+    expect(try_float("1e999")).to_equal("out of range for float")
+    expect(try_float("-1e999")).to_equal("out of range for float")
+    expect(try_float("1e308")).to_equal("ok")
+}

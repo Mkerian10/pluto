@@ -510,6 +510,20 @@ fn main() {
 }
 
 #[test]
+fn string_to_int_overflow_is_none() {
+    // strtol saturates on overflow; to_int must report none instead of a
+    // clamped value.
+    let out = compile_and_run_stdout(
+        r#"fn main() {
+    print("99999999999999999999".to_int() ?? 7)
+    print("-99999999999999999999".to_int() ?? 8)
+    print("9223372036854775807".to_int() ?? 9)
+}"#,
+    );
+    assert_eq!(out, "7\n8\n9223372036854775807\n");
+}
+
+#[test]
 fn string_to_int_empty() {
     let out = compile_and_run_stdout(
         r#"fn try_parse() int? {
