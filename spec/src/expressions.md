@@ -99,9 +99,11 @@ All logical operators require `bool` operands and produce `bool` results.
 | `<<` | `int`, `int` | `int` |
 | `>>` | `int`, `int` | `int` (arithmetic shift, sign-extending) |
 
-Bitwise operators only accept `int` operands.
+Bitwise operators only accept `int` operands. In particular there are no `byte` shifts: convert to `int` first, shift, and convert back.
 
 Right shift (`>>`) is an arithmetic shift that preserves the sign bit. It is parsed as two consecutive `>` tokens to avoid ambiguity with nested generic type arguments.
+
+The shift amount (right operand of `<<` and `>>`) must lie in `0..63`. An amount outside that range — negative, or 64 and above — is a defect: a constant amount (an integer literal, optionally negated) is rejected at compile time (`shift amount 64 is out of range 0..63`), and a non-constant amount aborts the program at runtime with `pluto: defect: shift amount 70 out of range 0..63`. The amount is never silently masked. The runtime check is omitted when the compiler can prove from flow facts that the amount is in range (for example inside `if n >= 0 && n < 64 { ... 1 << n ... }`). Bits shifted out of the value are *not* a defect: `1 << 63` is `int.min`, `255 << 60` keeps only the low four bits of `255` in the top nibble, and `<<` never reports overflow.
 
 ## Comparison Operators
 

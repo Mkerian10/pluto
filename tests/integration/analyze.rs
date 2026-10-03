@@ -594,3 +594,31 @@ fn test_analyze_arith_residue_variable_bound_counter_elides() {
         "stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn test_analyze_reports_shift_check_residue() {
+    // #441: shift amounts outside 0..63 trap. A guard proving the amount in
+    // range elides the check; an unbounded amount stays checked; a constant
+    // amount is typeck-decided and never counted.
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("shiftres.pt");
+    std::fs::write(
+        &pt_file,
+        "fn amount() int {\n    return 5\n}\n\nfn main() {\n    let k = amount()\n    let mut v = 0\n    if k >= 0 && k < 64 {\n        v = 1 << k\n    }\n    let w = 1 << k\n    let c = 1 << 63\n    print(v)\n    print(w)\n    print(c)\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("shift range checks: 1 elided, 1 checked"),
+        "stdout:\n{stdout}"
+    );
+}

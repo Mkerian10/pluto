@@ -82,6 +82,14 @@ pub struct DerivedInfo {
     /// proof (src/typeck/arith_fit.rs) — codegen emits the raw op.
     #[serde(default)]
     pub arith_sites_elided: usize,
+    /// Runtime residue of #441: `<<`/`>>` sites with a non-constant amount
+    /// whose 0..63 range check remains at runtime.
+    #[serde(default)]
+    pub shift_sites_checked: usize,
+    /// Non-constant-amount shift sites whose range check was elided on an
+    /// interval proof (src/typeck/arith_fit.rs).
+    #[serde(default)]
+    pub shift_sites_elided: usize,
 }
 
 /// One checked claim: the providing method, the property, its
@@ -659,6 +667,11 @@ impl DerivedInfo {
             .arith_fit_candidates
             .len()
             .saturating_sub(arith_sites_elided);
+        let shift_sites_elided = env.proven_shift_spans.len();
+        let shift_sites_checked = env
+            .shift_check_candidates
+            .len()
+            .saturating_sub(shift_sites_elided);
 
         DerivedInfo {
             fn_error_sets,
@@ -676,6 +689,8 @@ impl DerivedInfo {
             proven_requires_sites,
             arith_sites_checked,
             arith_sites_elided,
+            shift_sites_checked,
+            shift_sites_elided,
         }
     }
 

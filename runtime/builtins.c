@@ -24,9 +24,10 @@
 // ── Defects ──────────────────────────────────────────────────────────────────
 //
 // A defect is a bug in the program, not a condition the program can handle:
-// integer overflow, division by zero. Defects never become typed errors and
-// never enter error inference — they print a uniform message to stderr and
-// abort the process (conditions raise, defects trap; issue #416). Same
+// integer overflow, division by zero, shift amounts outside 0..63. Defects
+// never become typed errors and never enter error inference — they print a
+// uniform message to stderr and abort the process (conditions raise, defects
+// trap; issues #416, #441). Same
 // reporting path as the other runtime aborts (array OOB, requires
 // violations): message on stderr, exit(1).
 //
@@ -57,6 +58,9 @@ void __pluto_defect_binop(long kind, long a, long b) {
     case 7:
         // Raised from __pluto_pow_int, not from codegen.
         fprintf(stderr, "pluto: defect: integer overflow in pow(): pow(%ld, %ld)\n", a, b);
+        break;
+    case 8:
+        fprintf(stderr, "pluto: defect: shift amount %ld out of range 0..63\n", b);
         break;
     default:
         fprintf(stderr, "pluto: defect: unknown defect kind %ld (%ld, %ld)\n", kind, a, b);

@@ -466,6 +466,162 @@ fn main() {
     );
 }
 
+// ── Shift amounts (issue #441) ───────────────────────────────────────────────
+//
+// A shift amount outside 0..63 is a defect: constant amounts are a compile
+// error, non-constant amounts trap at runtime. Bits shifted out of the value
+// are NOT a defect (Rust's model) — `<<` never reports overflow.
+
+#[test]
+fn shift_constant_amount_64_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = 1 << 64\n    print(x)\n}",
+        "shift amount 64 is out of range 0..63",
+    );
+}
+
+#[test]
+fn shift_constant_amount_negative_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = 1 << -1\n    print(x)\n}",
+        "shift amount -1 is out of range 0..63",
+    );
+}
+
+#[test]
+fn shr_constant_amount_out_of_range_rejected() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = 1024 >> 100\n    print(x)\n}",
+        "shift amount 100 is out of range 0..63",
+    );
+}
+
+#[test]
+fn shift_variable_amount_64_traps() {
+    assert_defect(
+        r#"
+fn amount() int {
+    return 64
+}
+
+fn main() {
+    print(1 << amount())
+}
+"#,
+        "pluto: defect: shift amount 64 out of range 0..63",
+    );
+}
+
+#[test]
+fn shift_variable_amount_negative_traps() {
+    assert_defect(
+        r#"
+fn main() {
+    let n = -1
+    print(1 << n)
+}
+"#,
+        "pluto: defect: shift amount -1 out of range 0..63",
+    );
+}
+
+#[test]
+fn shr_variable_amount_70_traps() {
+    assert_defect(
+        r#"
+fn main() {
+    let n = 70
+    let x = 1024 >> n
+    print(x)
+}
+"#,
+        "pluto: defect: shift amount 70 out of range 0..63",
+    );
+}
+
+#[test]
+fn shift_rotate_shape_amount_traps() {
+    // The `x >> n | x << (32 - n)` rotate shape with n = 40: the right
+    // shift is fine, the left shift amount is 32 - 40 = -8.
+    assert_defect(
+        r#"
+fn rot(x: int, n: int) int {
+    return x >> n | x << (32 - n)
+}
+
+fn main() {
+    print(rot(5, 40))
+}
+"#,
+        "pluto: defect: shift amount -8 out of range 0..63",
+    );
+}
+
+#[test]
+fn shift_boundary_amounts_are_fine() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    print(5 << 0)
+    print(5 >> 0)
+    print(1 << 63)
+    print(-1 >> 63)
+    let z = 0
+    let t = 63
+    print(7 << z)
+    print(1 << t)
+    print(-9223372036854775808 >> t)
+}
+"#,
+    );
+    assert_eq!(
+        out.trim(),
+        "5\n5\n-9223372036854775808\n-1\n7\n-9223372036854775808\n-1"
+    );
+}
+
+#[test]
+fn shifting_bits_out_is_not_a_defect() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    print(255 << 60)
+    print(3 << 63)
+    let n = 62
+    print(7 << n)
+    print(-1 << 63)
+}
+"#,
+    );
+    assert_eq!(
+        out.trim(),
+        "-1152921504606846976\n-9223372036854775808\n-4611686018427387904\n-9223372036854775808"
+    );
+}
+
+#[test]
+fn shift_fact_proven_amount_runs() {
+    // The guard proves 0 <= k <= 63, so the range check is elided; the
+    // result must still be correct.
+    let out = compile_and_run_stdout(
+        r#"
+fn amount() int {
+    return 10
+}
+
+fn main() {
+    let k = amount()
+    let mut v = 0
+    if k >= 0 && k < 64 {
+        v = 1 << k
+    }
+    print(v)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1024");
+}
+
 // The i64::MIN literal: the lexer accepts i64::MAX + 1 after unary minus and
 // the parser folds the sign into the literal — no runtime negation, no trap.
 #[test]

@@ -1081,6 +1081,19 @@ fn infer_binop(
                     span,
                 ));
             }
+            // Shift amounts outside 0..63 are a defect (issue #441). A
+            // constant amount is decided here; a non-constant one gets a
+            // runtime check in codegen (elided when facts prove the range).
+            if matches!(op, BinOp::Shl | BinOp::Shr) {
+                if let Some(amount) = super::arith_fit::const_shift_amount(&rhs.node) {
+                    if !(0..=63).contains(&amount) {
+                        return Err(CompileError::type_err(
+                            format!("shift amount {amount} is out of range 0..63"),
+                            rhs.span,
+                        ));
+                    }
+                }
+            }
             Ok(PlutoType::Int)
         }
     }

@@ -20,6 +20,8 @@ The `int` type represents a signed 64-bit integer with a range of −9,223,372,0
 
 Integer overflow is a defect: `+`, `-`, `*`, unary negation, and `int.min / -1` abort the program with a defect message when the result does not fit in 64 bits. Deliberate modular arithmetic uses the `wrapping_add`/`wrapping_sub`/`wrapping_mul` builtins, which wrap two's complement and never trap.
 
+A shift amount outside `0..63` is also a defect (a compile error when the amount is a constant). Bits shifted out of the value by `<<` are not: shifts never report overflow.
+
 ### float
 
 The `float` type represents a 64-bit IEEE 754 double-precision floating-point number.
@@ -293,7 +295,7 @@ Integer division truncates toward zero. Division by zero is a contract violation
 
 The remainder operator `%` follows the same sign convention as the dividend: `-7 % 3 == -1`.
 
-Integer overflow is a defect and aborts the program; use `wrapping_add`/`wrapping_sub`/`wrapping_mul` for deliberate two's-complement wraparound.
+Integer overflow is a defect and aborts the program; use `wrapping_add`/`wrapping_sub`/`wrapping_mul` for deliberate two's-complement wraparound. A shift amount outside `0..63` is likewise a defect (see Bitwise Operators in the expressions chapter).
 
 ### Floating-Point Arithmetic
 

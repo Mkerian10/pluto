@@ -577,6 +577,11 @@ fn main() {
                         "arithmetic overflow checks: {} elided, {} checked",
                         derived.arith_sites_elided, derived.arith_sites_checked
                     );
+                    // Shift-amount range checks (#441), same shape.
+                    println!(
+                        "shift range checks: {} elided, {} checked",
+                        derived.shift_sites_elided, derived.shift_sites_checked
+                    );
                 }
                 Err(e) => {
                     eprintln!("error: {e}");

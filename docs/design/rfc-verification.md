@@ -379,6 +379,11 @@ then a stdlib import, not a language feature.
    outside the affine fragment — no interval fact ever derives from them.
    Phase 2 of #416 closes the loop: interval-proven arithmetic sites elide
    their overflow checks, so contracts literally delete the checks.
+   Shift amounts outside `0..63` are a defect too (#441): constant amounts
+   are a compile error, non-constant ones trap at runtime unless the facts
+   prove the amount in range (same elision mechanism). Bits shifted out of
+   the value are not a defect; shift results are outside the affine
+   fragment, so no interval fact derives from them.
 
 ## Open questions
 

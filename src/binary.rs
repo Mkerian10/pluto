@@ -37,7 +37,9 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// v17: the dedup-guard proof shape and contract-aware interface hashing
 /// (rfc-properties.md phase 5.5): PropertyAtomKind::Dedup,
 /// DerivedInfo.checked_claims, DerivedInfo.proven_requires_sites.
-const SCHEMA_VERSION: u32 = 18;
+/// v18: DerivedInfo.arith_sites_checked / arith_sites_elided (#416 phase 2).
+/// v19: DerivedInfo.shift_sites_checked / shift_sites_elided (#441).
+const SCHEMA_VERSION: u32 = 19;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;
