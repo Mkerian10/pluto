@@ -1912,7 +1912,8 @@ fn infer_catch(
                 Some(infer_expr(&fallback.node, fallback.span, env, None)?)
             }
         };
-        // A diverging handler (ends in `return`) imposes no type constraint.
+        // A diverging handler (always returns/raises/breaks/continues) imposes
+        // no type constraint.
         if let Some(t) = handler_type
             && !types_compatible(&t, &success_type, env)
         {
@@ -1926,7 +1927,8 @@ fn infer_catch(
 }
 
 /// Type-check a catch handler body with `var` bound to `var_type`. Returns the
-/// body's result type, or None if it diverges (ends in `return`).
+/// body's result type, or None if it diverges (always returns, raises,
+/// breaks, or continues).
 fn infer_catch_body(
     var: &Spanned<String>,
     var_type: PlutoType,
@@ -1944,16 +1946,18 @@ fn infer_catch_body(
             super::check::check_block_stmt(&stmt.node, stmt.span, env, &return_type)?;
         }
     }
+    // A body that always terminates (`return`, `raise`, `break`, `continue`,
+    // or an if/else or match whose every arm does) never produces a value.
+    let diverges = super::block_always_terminates(&body.node);
     let result = if let Some(last) = stmts.last() {
         match &last.node {
-            Stmt::Expr(e) => Some(infer_expr(&e.node, e.span, env, None)?),
-            Stmt::Return(_) => {
-                super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
-                None
+            Stmt::Expr(e) => {
+                let t = infer_expr(&e.node, e.span, env, None)?;
+                if diverges { None } else { Some(t) }
             }
             _ => {
                 super::check::check_block_stmt(&last.node, last.span, env, &return_type)?;
-                Some(PlutoType::Void)
+                if diverges { None } else { Some(PlutoType::Void) }
             }
         }
     } else {
