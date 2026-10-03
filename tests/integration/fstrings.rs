@@ -200,3 +200,94 @@ fn fstring_null_escape() {
     );
     assert_eq!(output.trim(), "3");
 }
+
+// ===== Nested string literals inside interpolations (#430) =====
+
+#[test]
+fn fstring_map_index_by_string_key() {
+    let output = compile_and_run_stdout(
+        r##"fn main() {
+            let m = Map<string, int> { "a": 1, "b": 2 }
+            print(f"a={m["a"]} b={m["b"]}")
+        }"##,
+    );
+    assert_eq!(output.trim(), "a=1 b=2");
+}
+
+#[test]
+fn fstring_method_call_with_string_arg() {
+    let output = compile_and_run_stdout(
+        r##"fn main() {
+            let s = "pluto"
+            print(f"{s.contains("lut")} {s.contains("x")}")
+        }"##,
+    );
+    assert_eq!(output.trim(), "true false");
+}
+
+#[test]
+fn fstring_nested_fstring() {
+    let output = compile_and_run_stdout(
+        r##"fn main() {
+            let name = "World"
+            let n = 3
+            print(f"<{f"hello {name}"} x{f"{n * 2}"}>")
+        }"##,
+    );
+    assert_eq!(output.trim(), "<hello World x6>");
+}
+
+#[test]
+fn fstring_braces_inside_nested_string() {
+    let output = compile_and_run_stdout(
+        r##"fn main() {
+            let m = Map<string, int> { "}": 7, "{": 8 }
+            print(f"{m["}"]} {m["{"]} {"{}"}")
+        }"##,
+    );
+    assert_eq!(output.trim(), "7 8 {}");
+}
+
+#[test]
+fn fstring_escapes_inside_nested_string() {
+    let output = compile_and_run_stdout(
+        r##"fn main() {
+            let m = Map<string, int> { "say \"hi\"": 5 }
+            print(f"{m["say \"hi\""]}|{"a\\b"}|{"tab\there".len()}")
+        }"##,
+    );
+    assert_eq!(output.trim(), "5|a\\b|8");
+}
+
+#[test]
+fn fstring_literal_escapes_alongside_nested_strings() {
+    let output = compile_and_run_stdout(
+        r##"fn main() {
+            let m = Map<string, string> { "k": "v" }
+            print(f"\"{m["k"]}\" \x7B{{}}")
+        }"##,
+    );
+    assert_eq!(output.trim(), "\"v\" {{}");
+}
+
+#[test]
+fn fstring_backslash_escaped_quotes_in_interpolation_rejected() {
+    compile_should_fail_with(
+        r##"fn main() {
+            let m = Map<string, int> { "a": 1 }
+            print(f"{m[\"a\"]}")
+        }"##,
+        "backslash not allowed inside an f-string interpolation",
+    );
+}
+
+#[test]
+fn fstring_invalid_escape_in_literal_part_rejected() {
+    compile_should_fail_with(
+        r##"fn main() {
+            let x = 1
+            print(f"{x}\k")
+        }"##,
+        "unknown escape sequence",
+    );
+}

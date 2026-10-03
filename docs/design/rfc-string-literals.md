@@ -62,6 +62,14 @@ let json = f"{{\"name\": \"{name}\"}}"  // Escape braces with {{ and }}
 **Interpolation rules:**
 - `{expr}` — any expression (variable, method call, arithmetic, etc.)
 - Nested braces count depth: `{obj.method()}`
+- String literals inside `{...}` are written as normal, unescaped literals —
+  plain or nested f-strings: `f"{m["key"]}"`, `f"{s.contains("x")}"`,
+  `f"<{f"{n}"}>"`. Braces and quotes inside a nested literal don't affect
+  depth tracking, and escapes inside it are the nested literal's own
+  (`f"{m["say \"hi\""]}"`).
+- Backslashes are not allowed in the expression part outside a nested
+  literal, so the escaped spelling `f"{m[\"key\"]}"` is an error with a hint
+  to drop the backslashes. An interpolation can't span a newline.
 - Empty `{}` is an error
 
 ### Triple Strings `"""..."""`
