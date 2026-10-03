@@ -3571,6 +3571,9 @@ impl<'a> LowerContext<'a> {
         lhs: &crate::span::Spanned<Expr>,
         rhs: &crate::span::Spanned<Expr>,
     ) -> Result<Value, CompileError> {
+        if matches!(op, BinOp::And | BinOp::Or) {
+            return self.lower_short_circuit(op, lhs, rhs);
+        }
         let l = self.lower_expr(&lhs.node)?;
         let r = self.lower_expr(&rhs.node)?;
 
@@ -3696,8 +3699,7 @@ impl<'a> LowerContext<'a> {
             BinOp::GtEq if is_float => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
             BinOp::GtEq if is_byte => self.builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, l, r),
             BinOp::GtEq => self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r),
-            BinOp::And => self.builder.ins().band(l, r),
-            BinOp::Or => self.builder.ins().bor(l, r),
+            BinOp::And | BinOp::Or => unreachable!("short-circuit ops lowered above"),
             BinOp::BitAnd => self.builder.ins().band(l, r),
             BinOp::BitOr => self.builder.ins().bor(l, r),
             BinOp::BitXor => self.builder.ins().bxor(l, r),
@@ -3705,6 +3707,38 @@ impl<'a> LowerContext<'a> {
             BinOp::Shr => self.builder.ins().sshr(l, r),
         };
         Ok(result)
+    }
+
+    /// `a && b` / `a || b`: the right operand runs only when the left one
+    /// doesn't already decide the result, so guards like
+    /// `j >= 0 && xs[j] > v` protect their right side (issue #388).
+    fn lower_short_circuit(
+        &mut self,
+        op: &BinOp,
+        lhs: &crate::span::Spanned<Expr>,
+        rhs: &crate::span::Spanned<Expr>,
+    ) -> Result<Value, CompileError> {
+        let l = self.lower_expr(&lhs.node)?;
+
+        let rhs_bb = self.builder.create_block();
+        let merge_bb = self.builder.create_block();
+        self.builder.append_block_param(merge_bb, types::I8);
+
+        // The left value is the result whenever it decides it: false for
+        // &&, true for ||.
+        match op {
+            BinOp::And => self.builder.ins().brif(l, rhs_bb, &[], merge_bb, &[l]),
+            _ => self.builder.ins().brif(l, merge_bb, &[l], rhs_bb, &[]),
+        };
+
+        self.builder.switch_to_block(rhs_bb);
+        self.builder.seal_block(rhs_bb);
+        let r = self.lower_expr(&rhs.node)?;
+        self.builder.ins().jump(merge_bb, &[r]);
+
+        self.builder.switch_to_block(merge_bb);
+        self.builder.seal_block(merge_bb);
+        Ok(self.builder.block_params(merge_bb)[0])
     }
 
     fn lower_call(
