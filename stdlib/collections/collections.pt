@@ -1,3 +1,5 @@
+import std.strings
+
 pub class Pair<A, B> {
     first: A
     second: B
@@ -170,6 +172,96 @@ pub fn sum_float(arr: [float]) float {
         total = total + x
     }
     return total
+}
+
+// ── Sorting ──────────────────────────────────────────────────────────────────
+// All sorts return a NEW sorted array and leave the input untouched.
+//
+// Stability guarantee: every sort here is STABLE. Elements that compare
+// equal (neither less(a, b) nor less(b, a)) keep their original relative
+// order. Sorting by a secondary key and then by a primary key therefore
+// yields records ordered by primary key, ties broken by the secondary key.
+//
+// Implementation: bottom-up merge sort, O(n log n) comparisons in the worst
+// case, O(n) extra space.
+
+// Sort `arr` using `less(a, b)`, which must return true when a should come
+// strictly before b. `less` must be a strict weak ordering (returning true
+// for equal elements breaks the stability guarantee). Use `(a, b) => a < b`
+// for ascending order, `(a, b) => a > b` for descending.
+pub fn sort_by<T>(arr: [T], less: fn(T, T) bool) [T] {
+    let n = arr.len()
+    let mut src: [T] = []
+    let mut dst: [T] = []
+    for item in arr {
+        src.push(item)
+        dst.push(item)
+    }
+    let mut width = 1
+    while width < n {
+        let mut lo = 0
+        while lo < n {
+            let mut mid = n
+            if width < n - lo {
+                mid = lo + width
+            }
+            let mut hi = n
+            if width < n - mid {
+                hi = mid + width
+            }
+            let mut i = lo
+            let mut j = mid
+            let mut k = lo
+            while k < hi {
+                // Take from the right run only when its head is strictly
+                // less than the left head; ties go left, which is what
+                // keeps the sort stable.
+                let mut take_left = true
+                if i >= mid {
+                    take_left = false
+                } else if j < hi {
+                    if less(src[j], src[i]) {
+                        take_left = false
+                    }
+                }
+                if take_left {
+                    dst[k] = src[i]
+                    i = i + 1
+                } else {
+                    dst[k] = src[j]
+                    j = j + 1
+                }
+                k = k + 1
+            }
+            lo = hi
+        }
+        let tmp = src
+        src = dst
+        dst = tmp
+        if width > n - width {
+            width = n
+        } else {
+            width = width * 2
+        }
+    }
+    return src
+}
+
+// Sort ints in ascending order (stable).
+pub fn sort(arr: [int]) [int] {
+    return sort_by(arr, (a: int, b: int) => a < b)
+}
+
+// Sort floats in ascending order (stable). NaN is never less than anything,
+// so NaNs keep their relative position among the elements they tie with.
+pub fn sort_floats(arr: [float]) [float] {
+    return sort_by(arr, (a: float, b: float) => a < b)
+}
+
+// Sort strings in ascending lexicographic byte order (stable); see
+// strings.compare for the ordering.
+pub fn sort_strings(arr: [string]) [string] {
+    return sort_by(arr, (a: string, b: string) => strings.compare(a, b) < 0)
 }
 
 // ── Fallible-callback variants ───────────────────────────────────────────────

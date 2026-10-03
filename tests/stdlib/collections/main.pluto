@@ -1,4 +1,5 @@
 import std.collections
+import std.strings
 
 // -- map --
 
@@ -424,4 +425,122 @@ test "try_for_each propagates callback error" {
     }) catch err {
         expect(true).to_be_true()
     }
+}
+
+// -- sort --
+
+fn ints_to_string(xs: [int]) string {
+    let mut out = ""
+    for x in xs {
+        out = out + f"{x},"
+    }
+    return out
+}
+
+test "sort ints ascending" {
+    expect(ints_to_string(collections.sort([5, 3, 9, 1, 4]))).to_equal("1,3,4,5,9,")
+    expect(ints_to_string(collections.sort([2, -7, 0, -1, 8]))).to_equal("-7,-1,0,2,8,")
+}
+
+test "sort edge sizes" {
+    let empty: [int] = []
+    expect(collections.sort(empty).len()).to_equal(0)
+    expect(ints_to_string(collections.sort([42]))).to_equal("42,")
+    expect(ints_to_string(collections.sort([2, 1]))).to_equal("1,2,")
+    expect(ints_to_string(collections.sort([1, 2, 3]))).to_equal("1,2,3,")
+    expect(ints_to_string(collections.sort([3, 2, 1]))).to_equal("1,2,3,")
+}
+
+test "sort with duplicates" {
+    expect(ints_to_string(collections.sort([3, 1, 3, 2, 1, 3]))).to_equal("1,1,2,3,3,3,")
+}
+
+test "sort extreme values" {
+    let xs = [9223372036854775807, 0, -9223372036854775807 - 1, 5]
+    expect(ints_to_string(collections.sort(xs))).to_equal("-9223372036854775808,0,5,9223372036854775807,")
+}
+
+test "sort leaves the input untouched" {
+    let xs = [3, 1, 2]
+    let sorted = collections.sort(xs)
+    expect(ints_to_string(xs)).to_equal("3,1,2,")
+    expect(ints_to_string(sorted)).to_equal("1,2,3,")
+}
+
+test "sort larger non-power-of-two input" {
+    // 0..37 scrambled deterministically.
+    let xs: [int] = []
+    for i in 0..37 {
+        xs.push((i * 17) % 37)
+    }
+    let sorted = collections.sort(xs)
+    expect(sorted.len()).to_equal(37)
+    let mut ok = true
+    for i in 0..37 {
+        if sorted[i] != i {
+            ok = false
+        }
+    }
+    expect(ok).to_be_true()
+}
+
+test "sort_by descending" {
+    let sorted = collections.sort_by([5, 3, 9, 1], (a: int, b: int) => a > b)
+    expect(ints_to_string(sorted)).to_equal("9,5,3,1,")
+}
+
+test "sort_floats ascending" {
+    let sorted = collections.sort_floats([2.5, -1.0, 0.25, 10.0])
+    expect(sorted[0]).to_equal(-1.0)
+    expect(sorted[1]).to_equal(0.25)
+    expect(sorted[2]).to_equal(2.5)
+    expect(sorted[3]).to_equal(10.0)
+}
+
+test "sort_strings lexicographic" {
+    let sorted = collections.sort_strings(["pear", "apple", "fig", "app", "Banana"])
+    expect(sorted[0]).to_equal("Banana")
+    expect(sorted[1]).to_equal("app")
+    expect(sorted[2]).to_equal("apple")
+    expect(sorted[3]).to_equal("fig")
+    expect(sorted[4]).to_equal("pear")
+}
+
+class Rec {
+    key: int
+    tag: string
+}
+
+test "sort_by is stable" {
+    let recs = [
+        Rec { key: 2, tag: "a" },
+        Rec { key: 1, tag: "b" },
+        Rec { key: 2, tag: "c" },
+        Rec { key: 1, tag: "d" },
+        Rec { key: 0, tag: "e" },
+        Rec { key: 2, tag: "f" },
+        Rec { key: 1, tag: "g" }
+    ]
+    let sorted = collections.sort_by(recs, (a: Rec, b: Rec) => a.key < b.key)
+    let mut out = ""
+    for r in sorted {
+        out = out + f"{r.key}{r.tag} "
+    }
+    expect(out).to_equal("0e 1b 1d 1g 2a 2c 2f ")
+}
+
+test "sort_by stable across a secondary then primary pass" {
+    let recs = [
+        Rec { key: 1, tag: "z" },
+        Rec { key: 0, tag: "y" },
+        Rec { key: 1, tag: "x" },
+        Rec { key: 0, tag: "w" }
+    ]
+    let by_tag = collections.sort_by(recs, (a: Rec, b: Rec) => strings.compare(a.tag, b.tag) < 0)
+    let by_key = collections.sort_by(by_tag, (a: Rec, b: Rec) => a.key < b.key)
+    let mut out = ""
+    for r in by_key {
+        out = out + f"{r.key}{r.tag} "
+    }
+    expect(out).to_equal("0w 0y 1x 1z ")
 }
