@@ -4078,7 +4078,7 @@ impl<'a> LowerContext<'a> {
 
     /// Bind `var` to the current error (cleared) and lower a catch handler body,
     /// jumping to `merge_bb` with the body's value — unless the body diverges
-    /// (ends in `return`), in which case it does not jump.
+    /// (always returns, raises, breaks, or continues), in which case it does not jump.
     fn emit_catch_body(
         &mut self,
         var: &crate::span::Spanned<String>,

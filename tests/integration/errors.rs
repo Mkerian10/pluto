@@ -961,3 +961,260 @@ fn degradation_propagate_keeps_success_binding() {
     ));
     assert_eq!(out.trim(), "4");
 }
+
+// ── Divergent catch handlers in value position (#392) ───────────────
+
+#[test]
+fn catch_handler_raise_diverges_and_propagates_to_caller() {
+    let out = compile_and_run_stdout(r#"error ParseError {
+    code: int
+}
+
+error SegmentError {
+    message: string
+}
+
+fn decode(x: int) int {
+    if x < 0 {
+        raise ParseError { code: x }
+    }
+    return x * 10
+}
+
+fn load(x: int) int {
+    let d = decode(x) catch err {
+        raise SegmentError { message: "rejected frame" }
+    }
+    return d + 1
+}
+
+fn main() {
+    let ok = load(4) catch err { -1 }
+    print(ok)
+    let bad = load(-3) catch e: SegmentError {
+        print(e.message)
+        99
+    }
+    print(bad)
+}
+"#);
+    assert_eq!(out, "41\nrejected frame\n99\n");
+}
+
+#[test]
+fn catch_typed_handler_raise_diverges() {
+    let out = compile_and_run_stdout(r#"error ParseError {
+    code: int
+}
+
+error Wrapped {
+    code: int
+}
+
+fn decode(x: int) string {
+    if x < 0 {
+        raise ParseError { code: x }
+    }
+    return "ok"
+}
+
+fn load(x: int) string {
+    let s = decode(x) catch e: ParseError {
+        raise Wrapped { code: e.code * 2 }
+    }
+    return s
+}
+
+fn main() {
+    print(load(1) catch err { "fallback" })
+    let r = load(-4) catch w: Wrapped {
+        print(w.code)
+        "wrapped"
+    }
+    print(r)
+}
+"#);
+    assert_eq!(out, "ok\n-8\nwrapped\n");
+}
+
+#[test]
+fn catch_handler_break_exits_while_loop() {
+    let out = compile_and_run_stdout(r#"error Invalid {
+    pos: int
+}
+
+fn decode_at(buf: [int], pos: int) int {
+    if buf[pos] < 0 {
+        raise Invalid { pos: pos }
+    }
+    return buf[pos]
+}
+
+fn main() {
+    let buf = [3, 5, 7, -1, 9, 11]
+    let mut pos = 0
+    let mut total = 0
+    while pos < buf.len() {
+        let d = decode_at(buf, pos) catch err {
+            break
+        }
+        total = total + d
+        pos = pos + 1
+    }
+    print(total)
+    print(pos)
+}
+"#);
+    assert_eq!(out, "15\n3\n");
+}
+
+#[test]
+fn catch_handler_continue_skips_iteration() {
+    let out = compile_and_run_stdout(r#"error Invalid {
+    pos: int
+}
+
+fn decode_at(buf: [int], pos: int) int {
+    if buf[pos] < 0 {
+        raise Invalid { pos: pos }
+    }
+    return buf[pos]
+}
+
+fn main() {
+    let buf = [3, -5, 7, -1, 9]
+    let mut total = 0
+    let mut skipped = 0
+    for i in 0..buf.len() {
+        let d = decode_at(buf, i) catch err {
+            skipped = skipped + 1
+            continue
+        }
+        total = total + d
+    }
+    print(total)
+    print(skipped)
+}
+"#);
+    assert_eq!(out, "19\n2\n");
+}
+
+#[test]
+fn catch_handler_continue_in_while_loop_float_value() {
+    let out = compile_and_run_stdout(r#"error Invalid {
+    pos: int
+}
+
+fn half(x: int) float {
+    if x % 2 == 1 {
+        raise Invalid { pos: x }
+    }
+    return x.to_float() / 2.0
+}
+
+fn main() {
+    let mut i = 0
+    let mut total = 0.0
+    while i < 6 {
+        i = i + 1
+        let h = half(i) catch err {
+            continue
+        }
+        total = total + h
+    }
+    print(total)
+}
+"#);
+    assert_eq!(out, "6\n");
+}
+
+#[test]
+fn catch_handler_if_else_all_branches_diverge() {
+    let out = compile_and_run_stdout(r#"error Invalid {
+    pos: int
+}
+
+error Fatal {
+    pos: int
+}
+
+fn decode_at(buf: [int], pos: int) int {
+    if buf[pos] < 0 {
+        raise Invalid { pos: pos }
+    }
+    return buf[pos]
+}
+
+fn scan(buf: [int]) int {
+    let mut total = 0
+    for i in 0..buf.len() {
+        let d = decode_at(buf, i) catch e: Invalid {
+            if e.pos == 0 {
+                raise Fatal { pos: e.pos }
+            } else {
+                continue
+            }
+        }
+        total = total + d
+    }
+    return total
+}
+
+fn main() {
+    print(scan([1, -2, 3]) catch err { -1 })
+    let r = scan([-1, 2]) catch err { -100 }
+    print(r)
+}
+"#);
+    assert_eq!(out, "4\n-100\n");
+}
+
+#[test]
+fn catch_handler_non_divergent_void_still_rejected() {
+    compile_should_fail_with(
+        r#"error Invalid {
+    pos: int
+}
+
+fn decode(x: int) int {
+    if x < 0 {
+        raise Invalid { pos: x }
+    }
+    return x
+}
+
+fn main() {
+    let d = decode(-1) catch err {
+        print("oops")
+    }
+    print(d)
+}
+"#,
+        "catch handler type mismatch",
+    );
+}
+
+#[test]
+fn catch_handler_break_outside_loop_rejected() {
+    compile_should_fail_with(
+        r#"error Invalid {
+    pos: int
+}
+
+fn decode(x: int) int {
+    if x < 0 {
+        raise Invalid { pos: x }
+    }
+    return x
+}
+
+fn main() {
+    let d = decode(-1) catch err {
+        break
+    }
+    print(d)
+}
+"#,
+        "break",
+    );
+}
