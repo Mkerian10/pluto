@@ -338,3 +338,104 @@ fn increment_field() {
     );
     assert_eq!(out, "3\n");
 }
+
+// Issue #388: && and || must not evaluate their right operand when the left
+// one already decides the result.
+
+#[test]
+fn and_guard_protects_right_operand() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let xs = [10, 20]
+    let j = 0 - 1
+    if j >= 0 && xs[j] > 5 {
+        print("entered")
+    } else {
+        print("guarded")
+    }
+}
+"#);
+    assert_eq!(out, "guarded\n");
+}
+
+#[test]
+fn or_guard_protects_right_operand() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let xs = [10, 20]
+    let j = 5
+    if j >= xs.len() || xs[j] > 5 {
+        print("guarded")
+    }
+}
+"#);
+    assert_eq!(out, "guarded\n");
+}
+
+#[test]
+fn while_guard_insertion_sort() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let mut xs = [5, 2, 9, 1]
+    let mut i = 1
+    while i < xs.len() {
+        let v = xs[i]
+        let mut j = i - 1
+        while j >= 0 && xs[j] > v {
+            xs[j + 1] = xs[j]
+            j = j - 1
+        }
+        xs[j + 1] = v
+        i = i + 1
+    }
+    print(f"{xs[0]} {xs[1]} {xs[2]} {xs[3]}")
+}
+"#);
+    assert_eq!(out, "1 2 5 9\n");
+}
+
+#[test]
+fn logical_ops_evaluate_right_operand_only_when_needed() {
+    let out = compile_and_run_stdout(r#"
+fn side(tag: string, v: bool) bool {
+    print(tag)
+    return v
+}
+
+fn main() {
+    let a = side("A", false) && side("B", true)
+    let b = side("C", true) || side("D", true)
+    let c = side("E", true) && side("F", false) || side("G", true)
+    let d = side("H", false) || side("I", false)
+    print(f"{a} {b} {c} {d}")
+}
+"#);
+    assert_eq!(out, "A\nC\nE\nF\nG\nH\nI\nfalse true true false\n");
+}
+
+#[test]
+fn and_skips_fallible_right_operand() {
+    let out = compile_and_run_stdout(r#"
+error Bad {}
+
+fn check(x: int) bool {
+    print(f"check {x}")
+    if x < 0 {
+        raise Bad {}
+    }
+    return x > 1
+}
+
+fn guarded(x: int) bool {
+    return x >= 0 && check(x)!
+}
+
+fn main() {
+    let r = guarded(0 - 1) catch false
+    print(r)
+    let r2 = guarded(3) catch false
+    print(r2)
+}
+"#);
+    assert_eq!(out, "false\ncheck 3\ntrue\n");
+}
