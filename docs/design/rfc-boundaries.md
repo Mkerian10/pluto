@@ -30,6 +30,46 @@ testimony; it is presumption.
 `assume` is a compile-time posture about a runtime relationship. This RFC
 replaces the posture.
 
+### The whole-program objection
+
+Doesn't whole-program compilation dissolve this? When one compile produces
+both sides, the "server's" ensures was proven by the same invocation that
+compiled the client — the client consumes its own theorem, not a foreign
+assertion. Conceded: within the compilation, that is proof, not testimony.
+But the theorem is about the *code*, and the claim acted on at a call site
+is about a *process* — and three gaps survive single-compile deployment,
+none of them about authorship:
+
+1. **Deployment identity does not survive time.** The compile proves facts
+   about deployment D; the wire never guarantees you are in D. Rolling
+   restarts, stale binaries, misrouted ports: two binaries from two honest
+   whole-program compiles meet on one socket. The runtime hash handshake is
+   the confession — if compilation made peer identity a compile-time fact,
+   no handshake would exist, and what the handshake checks is the peer
+   *testifying* about its own hash. Binding "this socket, now" to "that
+   proof's subject" is not a property of code.
+2. **Proofs quantify over executions; conversations span them.** A
+   two-state ensures describes one execution of the server. Across a crash
+   and restart, `old(...)` is not the old of any execution the proof
+   mentioned.
+3. **A remote state fact is stale at receipt — always.** Locally,
+   ensures-facts stay alive because the facts engine kills them at every
+   mutation point it can see. Remotely, the serialized authority keeps
+   serving other clients, so every instant is an invisible mutation point:
+   the honest severity is sever-always. Even a perfectly warranted claim
+   about the authority's state has zero shelf life. This gap holds with
+   certified identity and no restarts, and no compilation scheme closes it.
+
+Refined thesis: whole-program compilation upgrades cross-boundary claims
+from testimony to **proof about the composition's code**. What remains
+unprovable is the binding of this conversation to that composition and of
+this instant to that proof. The gap is identity-and-time, not authorship —
+which is why mechanism 3 (the deployment plan as composition certificate)
+is the honest form of the whole-program intuition, and why the demotion in
+mechanism 1 distinguishes ensures over *returned values* (values in hand —
+checkable at decode, legitimately kept) from ensures over the *authority's
+persistent state* (dead on arrival from staleness, whoever proved them).
+
 ## First principles: closure, not trust
 
 What makes the local machinery work is not that local code is trustworthy —
