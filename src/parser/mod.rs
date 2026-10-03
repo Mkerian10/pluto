@@ -3886,12 +3886,8 @@ impl<'a> Parser<'a> {
                 let Token::FStringLit(s) = &tok.node else { unreachable!() };
                 let s = s.clone();
                 let span = tok.span;
-                if s.contains('{') || s.contains('}') {
-                    self.parse_string_interp(&s, span)
-                } else {
-                    // Even without braces, it's still a valid f-string (just no interpolation)
-                    Ok(Spanned::new(Expr::StringLit(s), span))
-                }
+                // The token holds the raw body; escapes are processed per literal part.
+                self.parse_string_interp(&s, span)
             }
             Token::StringLit(_) => {
                 let tok = self.advance().expect("token should exist after peek");
@@ -4236,52 +4232,42 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_string_interp(&self, raw: &str, span: crate::span::Span) -> Result<Spanned<Expr>, CompileError> {
+        use crate::lexer::FStringPart;
         let mut parts: Vec<StringInterpPart> = Vec::new();
         let mut lit_buf = String::new();
-        let mut chars = raw.char_indices().peekable();
 
-        while let Some(&(_, ch)) = chars.peek() {
-            if ch == '{' {
-                chars.next();
-                // Check for escaped {{
-                if chars.peek().is_some_and(|&(_, c)| c == '{') {
-                    chars.next();
-                    lit_buf.push('{');
-                } else {
-                    // Flush literal buffer
+        let Ok((_, pieces)) = crate::lexer::scan_fstring(raw, false) else {
+            return Err(CompileError::syntax("unterminated interpolation expression", span));
+        };
+
+        for piece in pieces {
+            match piece {
+                FStringPart::Lit(range) => {
+                    // Offset the token span so escape errors point at the right bytes.
+                    let lit_span = crate::span::Span::new(span.start + range.start, span.end);
+                    lit_buf.push_str(&crate::lexer::process_escapes(&raw[range], lit_span, 2)?);
+                }
+                FStringPart::Brace(c) => lit_buf.push(c),
+                FStringPart::StrayClose(_) => {
+                    return Err(CompileError::syntax(
+                        "unexpected '}' in string literal (use '}}' for literal brace)",
+                        span,
+                    ));
+                }
+                FStringPart::Expr { range, has_backslash } => {
+                    if has_backslash {
+                        return Err(CompileError::syntax(
+                            r#"backslash not allowed inside an f-string interpolation; string literals inside `{...}` need no escaping (write f"{m["key"]}", not f"{m[\"key\"]}")"#,
+                            span,
+                        ));
+                    }
                     if !lit_buf.is_empty() {
                         parts.push(StringInterpPart::Lit(std::mem::take(&mut lit_buf)));
                     }
-                    // Collect expression chars until matching }
-                    let mut expr_str = String::new();
-                    let mut depth = 1;
-                    loop {
-                        match chars.next() {
-                            None => {
-                                return Err(CompileError::syntax(
-                                    "unterminated interpolation expression",
-                                    span,
-                                ));
-                            }
-                            Some((_, '{')) => {
-                                depth += 1;
-                                expr_str.push('{');
-                            }
-                            Some((_, '}')) => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
-                                expr_str.push('}');
-                            }
-                            Some((_, c)) => {
-                                expr_str.push(c);
-                            }
-                        }
-                    }
+                    let expr_str = &raw[range];
                     // Sub-parse the expression
-                    let tokens = crate::lexer::lex(&expr_str)?;
-                    let mut sub_parser = Parser::new(&tokens, &expr_str);
+                    let tokens = crate::lexer::lex(expr_str)?;
+                    let mut sub_parser = Parser::new(&tokens, expr_str);
                     let expr = sub_parser.parse_expr(0)?;
                     if !sub_parser.is_at_end() {
                         return Err(CompileError::syntax(
@@ -4291,27 +4277,16 @@ impl<'a> Parser<'a> {
                     }
                     parts.push(StringInterpPart::Expr(expr));
                 }
-            } else if ch == '}' {
-                chars.next();
-                // Check for escaped }}
-                if chars.peek().is_some_and(|&(_, c)| c == '}') {
-                    chars.next();
-                    lit_buf.push('}');
-                } else {
-                    return Err(CompileError::syntax(
-                        "unexpected '}' in string literal (use '}}' for literal brace)",
-                        span,
-                    ));
-                }
-            } else {
-                chars.next();
-                lit_buf.push(ch);
             }
         }
 
         // Flush remaining literal
         if !lit_buf.is_empty() {
             parts.push(StringInterpPart::Lit(std::mem::take(&mut lit_buf)));
+        }
+
+        if parts.is_empty() {
+            return Ok(Spanned::new(Expr::StringLit(String::new()), span));
         }
 
         // Optimization: single literal → plain StringLit

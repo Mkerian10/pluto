@@ -1175,7 +1175,7 @@ mod tests {
 
     #[test]
     fn string_interp_type_mismatch_in_expr() {
-        let result = check("fn main() {\n    let s = f\"sum: {1 + \\\"str\\\"}\"\n}");
+        let result = check("fn main() {\n    let s = f\"sum: {1 + \"str\"}\"\n}");
         assert!(result.is_err());
     }
 

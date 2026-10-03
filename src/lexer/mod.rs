@@ -6,12 +6,171 @@ use crate::span::{Span, Spanned};
 use crate::diagnostics::CompileError;
 use token::Token;
 
+/// One piece of an f-string body, as byte ranges into the raw (unescaped) content.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum FStringPart {
+    /// Literal text; escape sequences still need processing.
+    Lit(std::ops::Range<usize>),
+    /// A doubled brace (`{{` or `}}`) standing for one literal brace.
+    Brace(char),
+    /// The source text of an interpolated expression (between `{` and `}`).
+    /// `has_backslash` is set when a `\` appears outside a nested string literal.
+    Expr { range: std::ops::Range<usize>, has_backslash: bool },
+    /// A lone `}` in literal text at this offset.
+    StrayClose(usize),
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Scan the body of an f-string (the text after the opening `f"`).
+///
+/// Inside an interpolation `{...}` the scanner tracks brace depth and skips
+/// over nested string literals — plain (`"a"`) and f-strings (`f"{x}"`) — so a
+/// quote or brace inside a nested literal neither ends the f-string nor
+/// confuses depth tracking. This is what makes `f"{m["key"]}"` work.
+///
+/// With `terminated = true` (lexer mode) scanning stops at the closing `"` and
+/// returns its offset; `Err(())` means no well-formed end was found (EOF, or a
+/// newline inside an interpolation). With `terminated = false` (parser mode) the
+/// whole input is the body, and `Err(())` means an interpolation was left open.
+pub(crate) fn scan_fstring(s: &str, terminated: bool) -> Result<(usize, Vec<FStringPart>), ()> {
+    let b = s.as_bytes();
+    let mut parts = Vec::new();
+    let mut i = 0;
+    let mut lit_start = 0;
+
+    let flush = |parts: &mut Vec<FStringPart>, start: usize, end: usize| {
+        if end > start {
+            parts.push(FStringPart::Lit(start..end));
+        }
+    };
+
+    while i < b.len() {
+        match b[i] {
+            b'"' if terminated => {
+                flush(&mut parts, lit_start, i);
+                return Ok((i, parts));
+            }
+            b'\\' => {
+                // Escape sequence: skip the escaped char. `\u{...}` contains a
+                // brace that must not start an interpolation.
+                if b.get(i + 1) == Some(&b'u') && b.get(i + 2) == Some(&b'{') {
+                    i += 3;
+                    while i < b.len() && b[i] != b'}' && b[i] != b'"' && b[i] != b'\n' {
+                        i += 1;
+                    }
+                    if b.get(i) == Some(&b'}') {
+                        i += 1;
+                    }
+                } else {
+                    // Step over the backslash plus one full (possibly multibyte) char.
+                    i += 1;
+                    if let Some(c) = s[i..].chars().next() {
+                        i += c.len_utf8();
+                    }
+                }
+            }
+            b'{' if b.get(i + 1) == Some(&b'{') => {
+                flush(&mut parts, lit_start, i);
+                parts.push(FStringPart::Brace('{'));
+                i += 2;
+                lit_start = i;
+            }
+            b'}' if b.get(i + 1) == Some(&b'}') => {
+                flush(&mut parts, lit_start, i);
+                parts.push(FStringPart::Brace('}'));
+                i += 2;
+                lit_start = i;
+            }
+            b'}' => {
+                flush(&mut parts, lit_start, i);
+                parts.push(FStringPart::StrayClose(i));
+                i += 1;
+                lit_start = i;
+            }
+            b'{' => {
+                flush(&mut parts, lit_start, i);
+                let expr_start = i + 1;
+                let (expr_end, has_backslash) = scan_interpolation(s, expr_start)?;
+                parts.push(FStringPart::Expr { range: expr_start..expr_end, has_backslash });
+                i = expr_end + 1; // past the closing '}'
+                lit_start = i;
+            }
+            _ => i += 1,
+        }
+    }
+
+    if terminated {
+        Err(())
+    } else {
+        flush(&mut parts, lit_start, b.len());
+        Ok((b.len(), parts))
+    }
+}
+
+/// Scan an interpolated expression starting at `start` (just after `{`).
+/// Returns the offset of the matching `}` and whether a backslash appeared
+/// outside a nested string literal.
+fn scan_interpolation(s: &str, start: usize) -> Result<(usize, bool), ()> {
+    let b = s.as_bytes();
+    let mut i = start;
+    let mut depth = 1usize;
+    let mut has_backslash = false;
+    while i < b.len() {
+        match b[i] {
+            b'\n' => return Err(()),
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok((i, has_backslash));
+                }
+                i += 1;
+            }
+            b'f' if b.get(i + 1) == Some(&b'"') && (i == 0 || !is_ident_byte(b[i - 1])) => {
+                // Nested f-string: recurse on its body.
+                let body = i + 2;
+                let (end, _) = scan_fstring(&s[body..], true)?;
+                i = body + end + 1;
+            }
+            b'"' => {
+                // Nested plain string literal.
+                i += 1;
+                loop {
+                    match b.get(i) {
+                        None | Some(b'\n') => return Err(()),
+                        Some(b'"') => {
+                            i += 1;
+                            break;
+                        }
+                        Some(b'\\') => i += 2,
+                        Some(_) => i += 1,
+                    }
+                }
+            }
+            b'\\' => {
+                // Not valid in an expression; step over the pair so the extent
+                // matches the escaped spelling and the parser can explain.
+                has_backslash = true;
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    Err(())
+}
+
 /// Process escape sequences in a raw string literal.
 ///
 /// `raw` is the string content between quotes (no escape processing yet).
 /// `string_span` is the span of the full token in source (for error messages).
 /// `quote_prefix_len` is 1 for `"..."`, 2 for `f"..."` — used to compute byte offsets.
-fn process_escapes(raw: &str, string_span: Span, quote_prefix_len: usize) -> Result<String, CompileError> {
+pub(crate) fn process_escapes(raw: &str, string_span: Span, quote_prefix_len: usize) -> Result<String, CompileError> {
     let mut result = String::with_capacity(raw.len());
     let mut chars = raw.char_indices().peekable();
 
@@ -258,10 +417,9 @@ pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, CompileError> {
                 let processed = process_escapes(raw, token.span, 1)?;
                 token.node = Token::StringLit(processed);
             }
-            Token::FStringLit(raw) => {
-                let processed = process_escapes(raw, token.span, 2)?;
-                token.node = Token::FStringLit(processed);
-            }
+            // F-strings stay raw: escapes apply only to their literal parts,
+            // which the parser splits out (nested string literals inside an
+            // interpolation are escape-processed when that expression is lexed).
             _ => {}
         }
     }
@@ -633,13 +791,97 @@ mod tests {
     }
 
     #[test]
-    fn lex_fstring_escape_hex() {
+    fn lex_fstring_keeps_raw_body() {
+        // F-string bodies stay raw; the parser escape-processes literal parts.
         let tokens = lex(r#"f"\x48ello""#).unwrap();
-        assert!(matches!(&tokens[0].node, Token::FStringLit(s) if s == "Hello"));
+        assert!(matches!(&tokens[0].node, Token::FStringLit(s) if s == r"\x48ello"));
     }
 
     #[test]
     fn lex_string_unknown_escape_error() {
         assert!(lex(r#""\k""#).is_err());
+    }
+
+    fn single_fstring(src: &str) -> String {
+        let tokens = lex(src).unwrap();
+        assert_eq!(tokens.len(), 1, "expected one token for {src}, got {tokens:?}");
+        match &tokens[0].node {
+            Token::FStringLit(s) => s.clone(),
+            other => panic!("expected FStringLit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lex_fstring_nested_string_in_interpolation() {
+        assert_eq!(single_fstring(r#"f"{m["a"]}""#), r#"{m["a"]}"#);
+        assert_eq!(single_fstring(r#"f"x={s.contains("x")}!""#), r#"x={s.contains("x")}!"#);
+    }
+
+    #[test]
+    fn lex_fstring_braces_inside_nested_string() {
+        // Braces inside a nested literal must not affect depth tracking.
+        assert_eq!(single_fstring(r#"f"{m["}"]}""#), r#"{m["}"]}"#);
+        assert_eq!(single_fstring(r#"f"{m["{"]}""#), r#"{m["{"]}"#);
+    }
+
+    #[test]
+    fn lex_fstring_escaped_quote_inside_nested_string() {
+        assert_eq!(single_fstring(r#"f"{m["a\"b"]}""#), r#"{m["a\"b"]}"#);
+    }
+
+    #[test]
+    fn lex_fstring_nested_fstring() {
+        assert_eq!(single_fstring(r#"f"<{f"{x}-{"y"}"}>""#), r#"<{f"{x}-{"y"}"}>"#);
+    }
+
+    #[test]
+    fn lex_fstring_unicode_escape_not_interpolation() {
+        assert_eq!(single_fstring(r#"f"\u{41}{x}""#), r#"\u{41}{x}"#);
+    }
+
+    #[test]
+    fn lex_fstring_followed_by_tokens() {
+        let tokens = lex(r#"f"{m["a"]}" + "b""#).unwrap();
+        assert_eq!(tokens.len(), 3);
+        assert!(matches!(&tokens[2].node, Token::StringLit(s) if s == "b"));
+    }
+
+    #[test]
+    fn lex_fstring_open_interpolation_falls_back_to_first_quote() {
+        // `{x` never closes: the token ends at the first quote so the parser
+        // can report "unterminated interpolation expression".
+        let tokens = lex("f\"Value: {x\"\nlet y = 1").unwrap();
+        assert!(matches!(&tokens[0].node, Token::FStringLit(s) if s == "Value: {x"));
+    }
+
+    #[test]
+    fn lex_fstring_unterminated_is_error() {
+        assert!(lex(r#"f"abc"#).is_err());
+    }
+
+    #[test]
+    fn scan_fstring_parts() {
+        let (_, parts) = scan_fstring(r#"a{{{m["}"]}}}b"#, false).unwrap();
+        assert_eq!(
+            parts,
+            vec![
+                FStringPart::Lit(0..1),
+                FStringPart::Brace('{'),
+                FStringPart::Expr { range: 4..10, has_backslash: false },
+                FStringPart::Brace('}'),
+                FStringPart::Lit(13..14),
+            ]
+        );
+    }
+
+    #[test]
+    fn scan_fstring_flags_backslash_in_expression() {
+        let (_, parts) = scan_fstring(r#"{m[\"a\"]}"#, false).unwrap();
+        assert!(matches!(parts[0], FStringPart::Expr { has_backslash: true, .. }));
+    }
+
+    #[test]
+    fn scan_fstring_open_interpolation_is_error() {
+        assert!(scan_fstring("{x", false).is_err());
     }
 }

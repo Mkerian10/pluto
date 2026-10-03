@@ -1,4 +1,33 @@
-use logos::Logos;
+use logos::{Lexer, Logos};
+
+/// Find the end of an f-string whose opening `f"` was just matched, and return
+/// its raw body. Interpolations may contain nested string literals
+/// (`f"{m["key"]}"`), so the end is found by `scan_fstring`. If that fails
+/// (e.g. an interpolation left open, as in `f"{x"`), fall back to the first
+/// unescaped quote so the parser can report a precise interpolation error.
+fn lex_fstring(lex: &mut Lexer<Token>) -> Option<String> {
+    let rest = lex.remainder();
+    if let Ok((end, _)) = super::scan_fstring(rest, true) {
+        let body = rest[..end].to_string();
+        lex.bump(end + 1);
+        return Some(body);
+    }
+    let mut chars = rest.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '"' => {
+                let body = rest[..i].to_string();
+                lex.bump(i + 1);
+                return Some(body);
+            }
+            _ => {}
+        }
+    }
+    None
+}
 
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t]+")]
@@ -192,10 +221,9 @@ pub enum Token {
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?|[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*", priority = 3, callback = |lex| lex.slice().replace('_', "").parse::<f64>().ok())]
     FloatLit(f64),
 
-    #[regex(r#"f"([^"\\]|\\.)*""#, |lex| {
-        let s = lex.slice();
-        Some(s[2..s.len()-1].to_string())  // Strip f" and ", return raw content
-    })]
+    /// Raw f-string body (no escape processing). The extent is found by
+    /// `lex_fstring`, which skips nested string literals inside `{...}`.
+    #[token("f\"", lex_fstring)]
     FStringLit(String),
 
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
