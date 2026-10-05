@@ -3808,6 +3808,12 @@ impl<'a> LowerContext<'a> {
         if let Some((_, rt_fn)) = ZERO_ARG_BUILTINS.iter().find(|(n, _)| *n == name.node.as_str()) {
             return Ok(self.call_runtime(rt_fn, &[]));
         }
+        if name.node == "bytes_filled" {
+            let n = self.lower_expr(&args[0].node)?;
+            let value = self.lower_expr(&args[1].node)?;
+            let widened = self.builder.ins().uextend(types::I64, value);
+            return Ok(self.call_runtime("__pluto_bytes_filled", &[n, widened]));
+        }
 
         // Table-driven type-dispatched unary builtins (int/float)
         const TYPED_UNARY: &[(&str, &str, &str)] = &[
@@ -4848,6 +4854,54 @@ impl<'a> LowerContext<'a> {
                     Ok(self.builder.ins().iconst(types::I64, 0))
                 }
                 "to_string" => Ok(self.call_runtime("__pluto_bytes_to_string", &[obj_ptr])),
+                "slice" => {
+                    let start = self.lower_expr(&args[0].node)?;
+                    let end = self.lower_expr(&args[1].node)?;
+                    Ok(self.call_runtime("__pluto_bytes_slice", &[obj_ptr, start, end]))
+                }
+                "extend" => {
+                    let other = self.lower_expr(&args[0].node)?;
+                    self.call_runtime_void("__pluto_bytes_extend", &[obj_ptr, other]);
+                    Ok(self.builder.ins().iconst(types::I64, 0))
+                }
+                "fill" => {
+                    let val = self.lower_expr(&args[0].node)?;
+                    let widened = self.builder.ins().uextend(types::I64, val);
+                    self.call_runtime_void("__pluto_bytes_fill", &[obj_ptr, widened]);
+                    Ok(self.builder.ins().iconst(types::I64, 0))
+                }
+                "copy_from" => {
+                    let src = self.lower_expr(&args[0].node)?;
+                    let src_off = self.lower_expr(&args[1].node)?;
+                    let dst_off = self.lower_expr(&args[2].node)?;
+                    let n = self.lower_expr(&args[3].node)?;
+                    self.call_runtime_void("__pluto_bytes_copy_from", &[obj_ptr, src, src_off, dst_off, n]);
+                    Ok(self.builder.ins().iconst(types::I64, 0))
+                }
+                "find" => {
+                    let needle = self.lower_expr(&args[0].node)?;
+                    let widened = self.builder.ins().uextend(types::I64, needle);
+                    let from = self.lower_expr(&args[1].node)?;
+                    Ok(self.call_runtime("__pluto_bytes_find", &[obj_ptr, widened, from]))
+                }
+                "compare" => {
+                    let other = self.lower_expr(&args[0].node)?;
+                    Ok(self.call_runtime("__pluto_bytes_compare", &[obj_ptr, other]))
+                }
+                "read_u8" | "read_u16_le" | "read_u16_be" | "read_u32_le" | "read_u32_be"
+                | "read_i64_le" | "read_i64_be" => {
+                    let off = self.lower_expr(&args[0].node)?;
+                    let rt_fn = format!("__pluto_bytes_{}", method.node);
+                    Ok(self.call_runtime(&rt_fn, &[obj_ptr, off]))
+                }
+                "write_u8" | "write_u16_le" | "write_u16_be" | "write_u32_le" | "write_u32_be"
+                | "write_i64_le" | "write_i64_be" => {
+                    let off = self.lower_expr(&args[0].node)?;
+                    let val = self.lower_expr(&args[1].node)?;
+                    let rt_fn = format!("__pluto_bytes_{}", method.node);
+                    self.call_runtime_void(&rt_fn, &[obj_ptr, off, val]);
+                    Ok(self.builder.ins().iconst(types::I64, 0))
+                }
                 _ => Err(CompileError::codegen(format!("bytes has no method '{}'", method.node))),
             };
         }
@@ -6790,7 +6844,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             if matches!(name.node.as_str(), "wrapping_add" | "wrapping_sub" | "wrapping_mul") {
                 return PlutoType::Int;
             }
-            if name.node == "bytes_new" {
+            if name.node == "bytes_new" || name.node == "bytes_filled" {
                 return PlutoType::Bytes;
             }
             env.functions.get(&name.node).map(|s| s.return_type.clone()).unwrap_or(PlutoType::Void)
@@ -6904,9 +6958,12 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
             }
             if obj_type == PlutoType::Bytes {
                 return match method.node.as_str() {
-                    "len" => PlutoType::Int,
+                    "len" | "find" | "compare" => PlutoType::Int,
+                    "read_u8" | "read_u16_le" | "read_u16_be" | "read_u32_le" | "read_u32_be"
+                    | "read_i64_le" | "read_i64_be" => PlutoType::Int,
                     "to_string" => PlutoType::String,
-                    _ => PlutoType::Void, // push
+                    "slice" => PlutoType::Bytes,
+                    _ => PlutoType::Void, // push, extend, fill, copy_from, write_*
                 };
             }
             if let PlutoType::Sender(_) = &obj_type {
