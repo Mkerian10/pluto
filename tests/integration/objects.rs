@@ -1141,3 +1141,79 @@ fn object_self_writes_and_external_reads_still_work() {
     );
     assert_eq!(out.trim(), "2");
 }
+
+/// Channels SHARE entities (#429): where channel send deep-copies value
+/// payloads, an object crosses as a shared identity handle — mutation through
+/// the received handle is visible to the sender, and `==` identity holds.
+#[test]
+fn object_channel_send_shares_entity() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Counter {
+            value: int
+
+            fn increment(mut self) {
+                self.value = self.value + 1
+            }
+
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        fn main() {
+            let (tx, rx) = chan<Counter>(1)
+            let mut c = Counter { value: 10 }
+            tx.send(c)!
+            let mut got = rx.recv()!
+            print(got == c)
+            got.increment()
+            print(c.get())
+            c.increment()
+            print(got.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "true\n11\n12");
+}
+
+/// A VALUE sent over a channel is deep-copied, but an entity nested inside it
+/// stays shared (__pluto_deep_copy shares GC_TAG_ENTITY): the copy is a fresh
+/// class shell whose entity field is the same identity as the original's.
+#[test]
+fn object_nested_in_sent_value_stays_shared() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Counter {
+            value: int
+
+            fn increment(mut self) {
+                self.value = self.value + 1
+            }
+
+            fn get(self) int {
+                return self.value
+            }
+        }
+
+        class Wrapper {
+            label: int
+            counter: Counter
+        }
+
+        fn main() {
+            let (tx, rx) = chan<Wrapper>(1)
+            let c = Counter { value: 0 }
+            let mut w = Wrapper { label: 1, counter: c }
+            tx.send(w)!
+            w.label = 100
+            let mut got = rx.recv()!
+            print(got.label)
+            print(got.counter == c)
+            got.counter.increment()
+            print(c.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "1\ntrue\n1");
+}
