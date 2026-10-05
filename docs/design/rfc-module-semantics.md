@@ -1,6 +1,6 @@
 # RFC: Module Semantics — Privacy, Provenance, and the Library Path
 
-**Status:** Draft — awaiting owner review; field-privacy default and the entity-access resolution were ratified in design discussion (2026-10-04)
+**Status:** Accepted (2026-10-04) — decisions 1, 2, 3, 5 ratified (string is scalar-readable; cycle-error fix folded into the wave); decision 4 (re-exports) deferred pending further discussion — phase 5 does not block phases 1–4
 **Author:** Design discussion
 **Date:** 2026-10-04
 **Related:** [rfc-boundaries.md](rfc-boundaries.md) (protocols are modules — the thesis this RFC makes true), [rfc-verification.md](rfc-verification.md) (STRICT discharge — the solver this RFC leans on), [epistemics.md](epistemics.md), [rfc-objects.md](rfc-objects.md) (entities), issues #421, #413, #437, #440
