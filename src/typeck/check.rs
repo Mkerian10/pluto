@@ -712,6 +712,18 @@ fn check_stmt(
                     expr.span,
                 ));
             }
+            // Flow facts: a passed assert establishes its condition for the
+            // rest of the enclosing block — the failure path aborts the
+            // process, so this is exactly the terminating-guard rule, with
+            // the same extraction path and the same impure-call exclusion
+            // (a call in the condition could mutate state between
+            // evaluation and use, so it contributes nothing). The ghost
+            // mirror for invariant discharge lives in discharge::post_stmt.
+            if !super::facts::contains_impure_call(expr, env) {
+                for f in super::facts::condition_facts(&expr.node, env).then_facts {
+                    env.facts.assume(f);
+                }
+            }
         }
         Stmt::Serve { service, port } => {
             let svc_ty = infer_expr(&service.node, service.span, env, None)?;

@@ -622,3 +622,150 @@ fn test_analyze_reports_shift_check_residue() {
         "stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn test_analyze_assert_elides_shift_and_overflow_checks() {
+    // `assert` is a flow-fact source: the asserted range bounds `k`, so
+    // the shift-amount check AND the multiply's overflow check elide. The
+    // facts are exactly a terminating guard's — no new surface, no
+    // heuristics.
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("assertres.pt");
+    std::fs::write(
+        &pt_file,
+        "fn amount() int {\n    return 70\n}\n\nfn main() {\n    let k = amount()\n    assert k >= 0 && k < 64\n    let v = 1 << k\n    let s = k * k\n    print(v)\n    print(s)\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("shift range checks: 1 elided, 0 checked"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("arithmetic overflow checks: 1 elided, 0 checked"),
+        "stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_analyze_assert_with_call_elides_nothing() {
+    // Soundness pin: an assert whose condition contains a call contributes
+    // NO facts (the call could mutate state between evaluation and use),
+    // so the shift check stays — even though one conjunct is pure.
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("assertcall.pt");
+    std::fs::write(
+        &pt_file,
+        "fn amount() int {\n    return 70\n}\n\nfn limit() int {\n    return 64\n}\n\nfn main() {\n    let k = amount()\n    assert k >= 0 && k < limit()\n    let v = 1 << k\n    print(v)\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("shift range checks: 0 elided, 1 checked"),
+        "stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_analyze_mask_arithmetic_elides() {
+    // Interval rule `x & c ∈ [0, c]` (constant c >= 0): the two-byte pack
+    // is provably in range at both the multiply and the add.
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("maskres.pt");
+    std::fs::write(
+        &pt_file,
+        "fn pack(x: int, y: int) int {\n    return (x & 255) * 256 + (y & 255)\n}\n\nfn main() {\n    print(pack(300, 7))\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("arithmetic overflow checks: 2 elided, 0 checked"),
+        "stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_analyze_mask_and_mod_rules_are_exact() {
+    // No false facts: a negative mask (`x & -1 == x`) and a non-constant
+    // divisor contribute nothing and stay checked; `x % 10 ∈ [-9, 9]`
+    // (truncated remainder — the sign follows the dividend) proves the
+    // scaled multiply. Residue: 1 elided (the `(x % 10) * 100000000`),
+    // 4 checked (both `*` on unknown values and both `+`).
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("maskmod.pt");
+    std::fs::write(
+        &pt_file,
+        "fn f(x: int, y: int) int {\n    let a = (x & -1) * 2\n    let b = (x % 10) * 100000000\n    let c = (x % y) * 2\n    return a + b + c\n}\n\nfn main() {\n    print(f(300, 7))\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("arithmetic overflow checks: 1 elided, 4 checked"),
+        "stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_analyze_bytes_read_loop_elides() {
+    // Byte-typed values carry [0, 255] by construction — a type fact, not
+    // a flow fact, so it survives loop havoc. All three sites elide: the
+    // widened byte read times 256, the add of the masked accumulator, and
+    // the counter increment (strict relation to `data.len()`).
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("bytesloop.pt");
+    std::fs::write(
+        &pt_file,
+        "fn decode(data: bytes) int {\n    let mut acc = 0\n    let mut i = 0\n    while i < data.len() {\n        acc = (data[i] as int) * 256 + (acc & 255)\n        i = i + 1\n    }\n    return acc\n}\n\nfn main() {\n    let mut buf = bytes_new()\n    buf.push(7 as byte)\n    buf.push(9 as byte)\n    print(decode(buf))\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("arithmetic overflow checks: 3 elided, 0 checked"),
+        "stdout:\n{stdout}"
+    );
+}

@@ -1745,11 +1745,11 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
         Stmt::Assert { expr } => {
             // A passed assert establishes its condition for the rest of the
             // block — the documented escape hatch when proof falls short.
+            // The main fact env already assumed the condition's facts
+            // unconditionally (check.rs's Assert arm — asserts feed flow
+            // facts in every function, invariants or not); only the ghost
+            // mirror for invariant discharge lives here.
             if !contains_impure_call(expr, env) {
-                let cf = condition_facts(&expr.node, env);
-                for f in cf.then_facts {
-                    env.facts.assume(f);
-                }
                 if let Some(scope) = env.invariant_scope.take() {
                     let ghost = condition_facts_with(&expr.node, &|e| scope.resolve(env, e));
                     let mut scope = scope;

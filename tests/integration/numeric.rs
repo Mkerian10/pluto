@@ -638,6 +638,29 @@ fn main() {
     assert_eq!(out.trim(), "-9223372036854775808\n-9223372036854775807");
 }
 
+// Pluto `%` is truncated (C-style) remainder — codegen lowers int `%` to
+// Cranelift `srem`, so the result's sign follows the DIVIDEND. The fact
+// engine's `x % c` interval rule (facts.rs `expr_bounds`) is derived from
+// exactly this: for constant c > 0 the result lies in [-(c-1), c-1], and in
+// [0, c-1] only when the dividend is provably non-negative. If this test
+// ever changes, that rule is wrong.
+#[test]
+fn mod_truncated_sign_follows_dividend() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let a = -7
+    let b = 7
+    print(a % 3)
+    print(b % 3)
+    print(a % -3)
+    print(b % -3)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "-1\n1\n-1\n1");
+}
+
 // MIN % -1 is mathematically 0 (representable) — defined, not a defect.
 #[test]
 fn min_mod_neg_one_is_zero() {

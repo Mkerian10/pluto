@@ -1213,3 +1213,204 @@ fn main() {
 "#,
     );
 }
+
+// ── Assert as a fact source ──────────────────────────────────────────────────
+// `assert <cond>` aborts the process when false, so the condition holds for
+// the rest of the enclosing block — the terminating-guard rule, with the
+// same extraction path and impure-call exclusion.
+
+#[test]
+fn assert_fact_proves_later_condition() {
+    assert_single_warning(
+        r#"
+fn f(x: int) int {
+    assert x >= 5
+    if x >= 5 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f(7))
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn assert_conjunction_decomposes() {
+    assert_single_warning(
+        r#"
+fn f(x: int) int {
+    assert x >= 0 && x < 64
+    if x > 100 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f(7))
+}
+"#,
+        "condition is always false",
+    );
+}
+
+#[test]
+fn assert_equality_decides_comparison() {
+    assert_single_warning(
+        r#"
+fn f(x: int) int {
+    assert x == 7
+    if x > 3 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f(7))
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn assert_containing_call_contributes_nothing() {
+    // The call could mutate state between evaluation and use — the whole
+    // condition is excluded, including its pure conjunct.
+    assert_no_warnings(
+        r#"
+fn limit() int {
+    return 64
+}
+
+fn f(x: int) int {
+    assert x >= 0 && x < limit()
+    if x >= 0 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f(7))
+}
+"#,
+    );
+}
+
+#[test]
+fn assert_fact_killed_by_reassignment() {
+    assert_no_warnings(
+        r#"
+fn f(n: int) int {
+    let mut x = n
+    assert x >= 5
+    x = n
+    if x >= 5 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f(7))
+}
+"#,
+    );
+}
+
+#[test]
+fn assert_fact_pops_with_enclosing_branch() {
+    assert_no_warnings(
+        r#"
+fn f(x: int, n: int) int {
+    if n > 0 {
+        assert x >= 5
+    }
+    if x >= 5 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f(7, 1))
+}
+"#,
+    );
+}
+
+#[test]
+fn assert_fact_dropped_at_loop_entry() {
+    // Loop havoc applies to assert facts like any other: the fact does not
+    // survive into the body (phase 1 conservatism).
+    assert_no_warnings(
+        r#"
+fn f(x: int) int {
+    assert x >= 5
+    let mut i = 0
+    while i < 3 {
+        if x >= 5 {
+            i = i + 1
+        }
+        i = i + 1
+    }
+    return i
+}
+
+fn main() {
+    print(f(7))
+}
+"#,
+    );
+}
+
+// ── Byte widening: `let x = b as int` starts bounded 0..255 ─────────────────
+
+#[test]
+fn byte_cast_binding_carries_byte_range() {
+    assert_single_warning(
+        r#"
+fn f(b: byte) int {
+    let x = b as int
+    if x < 256 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f(7 as byte))
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn int_cast_binding_of_nonbyte_carries_nothing() {
+    // `bool as int` is NOT a byte widening — no [0, 255] fact may appear
+    // (it happens to be 0..1, but only the byte rule is implemented, and a
+    // wrong-source fact would be a soundness hole for future rules).
+    assert_no_warnings(
+        r#"
+fn f(flag: bool) int {
+    let x = flag as int
+    if x < 256 {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f(true))
+}
+"#,
+    );
+}
