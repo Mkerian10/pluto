@@ -38,6 +38,7 @@ void __pluto_gc_enter_safe_region(void) {}
 void __pluto_gc_leave_safe_region(void) {}
 void __pluto_gc_add_pending_root(void *p) { (void)p; }
 void __pluto_gc_remove_pending_root(void *p) { (void)p; }
+void __pluto_gc_register_global_root(void *slot) { (void)slot; }
 void __pluto_gc_prepare_fork(void) {}
 void __pluto_gc_after_fork(int is_child) { (void)is_child; }
 

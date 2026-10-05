@@ -480,3 +480,50 @@ app MyApp[svc: Service] {
 "#);
     assert_eq!(output.trim(), "9");
 }
+
+#[test]
+fn singleton_shared_between_app_and_scope_survives_gc() {
+    // DI + GC interaction (issue #434): the app writes through its injected
+    // singleton field, allocation churn forces collections, and a scope
+    // block — which reaches the same singleton through its module global —
+    // must observe the write. The global is a registered GC root, so the
+    // singleton and the string it owns survive even though the scope-block
+    // path holds no stack reference across the churn.
+    let output = compile_and_run_stdout(r#"
+class Store {
+    data: string
+
+    fn set(mut self, v: string) {
+        self.data = v
+    }
+    fn get(self) string {
+        return self.data
+    }
+}
+
+scoped class Ctx {
+    id: int
+}
+
+scoped class Handler[store: Store, ctx: Ctx] {
+    fn read(self) string {
+        return self.store.get()
+    }
+}
+
+app MyApp[store: Store] {
+    fn main(self) {
+        self.store.set("app-wrote-this")
+        let mut i = 0
+        while i < 200000 {
+            let s = f"garbage_{i}"
+            i = i + 1
+        }
+        scope(Ctx { id: 1 }) |h: Handler| {
+            print(h.read())
+        }
+    }
+}
+"#);
+    assert_eq!(output.trim(), "app-wrote-this");
+}

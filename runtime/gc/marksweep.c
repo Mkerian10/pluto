@@ -457,6 +457,48 @@ void __pluto_gc_prepare_fork(void) {}
 void __pluto_gc_after_fork(int is_child) { (void)is_child; }
 #endif
 
+// ── Global roots ──────────────────────────────────────────────────────────────
+//
+// Addresses of module globals that hold GC references — today the
+// __pluto_singleton_* slots written by DI startup wiring (issue #434). A heap
+// value reachable ONLY through such a global (e.g. a singleton consumed
+// exclusively by scope blocks) has no stack or register presence after
+// startup, so without this registry the mark phase would treat it as garbage.
+// The registry stores slot ADDRESSES: the collector re-reads each slot every
+// cycle, so later writes through the global are picked up naturally.
+//
+// Registration is done by generated startup code on the main thread, before
+// any task threads exist, but it interleaves with allocation (each singleton
+// is allocated, stored to its global, then registered), so production mode
+// takes the heap lock like the pending-root API does. The table is raw
+// malloc, never GC memory.
+static void **gc_global_roots = NULL;
+static int gc_global_root_count = 0;
+static int gc_global_root_cap = 0;
+
+void __pluto_gc_register_global_root(void *slot) {
+#ifndef PLUTO_TEST_MODE
+    gc_heap_lock();
+#endif
+    if (gc_global_root_count == gc_global_root_cap) {
+        int new_cap = gc_global_root_cap ? gc_global_root_cap * 2 : 16;
+        void **grown = (void **)realloc(gc_global_roots, new_cap * sizeof(void *));
+        if (!grown) {
+#ifndef PLUTO_TEST_MODE
+            pthread_mutex_unlock(&gc_mutex);
+#endif
+            fprintf(stderr, "pluto: out of memory registering global root\n");
+            exit(1);
+        }
+        gc_global_roots = grown;
+        gc_global_root_cap = new_cap;
+    }
+    gc_global_roots[gc_global_root_count++] = slot;
+#ifndef PLUTO_TEST_MODE
+    pthread_mutex_unlock(&gc_mutex);
+#endif
+}
+
 // Get GC header from user pointer
 static inline GCHeader *gc_get_header(void *user_ptr) {
     return (GCHeader *)((char *)user_ptr - sizeof(GCHeader));
@@ -1012,6 +1054,15 @@ void __pluto_gc_collect(void) {
     // 4. Scan error TLS as explicit root
     if (__pluto_current_error) {
         gc_mark_candidate(__pluto_current_error);
+    }
+
+    // 4a. Scan registered global roots (module globals holding GC refs,
+    // e.g. DI singleton slots). Re-read each slot: it holds the CURRENT
+    // pointer, and a zero (not yet written) is harmlessly rejected by
+    // gc_mark_candidate's interval lookup.
+    for (int gi = 0; gi < gc_global_root_count; gi++) {
+        void **slot = (void **)gc_global_roots[gi];
+        gc_mark_candidate(*slot);
     }
 
 #ifndef PLUTO_TEST_MODE

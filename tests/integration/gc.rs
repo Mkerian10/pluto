@@ -519,3 +519,117 @@ fn main() {
     );
     assert_eq!(out.trim(), "42\ndone");
 }
+
+#[test]
+fn gc_singleton_reachable_only_through_global_survives() {
+    // Regression test for issue #434: DI singleton pointers live in module
+    // globals (__pluto_singleton_*). A singleton consumed only through scope
+    // blocks has no stack or register presence after startup — here Handler
+    // is lifecycle-overridden to scoped (excluding it from startup wiring)
+    // and Store's only data field is nullable (no zero-state allocation
+    // call), so Store's pointer is dead immediately after the global store.
+    // Before global roots were registered with the collector, the churn
+    // loop's collections freed Store and the post-churn scope read
+    // segfaulted through the dangling global.
+    let out = compile_and_run_stdout(r#"
+class Store {
+    data: string?
+
+    fn set(mut self, v: string) {
+        self.data = v
+    }
+    fn get(self) string {
+        return self.data ?? "MISSING"
+    }
+}
+
+scoped class ReqCtx {
+    id: int
+}
+
+class Handler[store: Store, ctx: ReqCtx] {
+    fn put(self, v: string) {
+        self.store.set(v)
+    }
+    fn read(self) string {
+        return self.store.get()
+    }
+}
+
+fn churn() {
+    let mut i = 0
+    let mut last = ""
+    while i < 200000 {
+        last = f"garbage_padding_string_{i}"
+        i = i + 1
+    }
+    print(last.len())
+}
+
+app MyApp {
+    scoped Handler
+
+    fn main(self) {
+        scope(ReqCtx { id: 1 }) |h: Handler| {
+            h.put("sentinel-ABCDEFGH-12345678")
+        }
+        churn()
+        scope(ReqCtx { id: 2 }) |h: Handler| {
+            print(h.read())
+        }
+    }
+}
+"#);
+    assert_eq!(out.trim(), "29\nsentinel-ABCDEFGH-12345678");
+}
+
+#[test]
+fn gc_scope_block_singleton_survives_pressure() {
+    // DI + GC interaction: a singleton wired into declared-scoped classes is
+    // written through one scope block, heavy allocation churn forces multiple
+    // collections, and a later scope block must still observe the data — the
+    // singleton and the heap values it owns are rooted by the global-roots
+    // registry, not by stack residue.
+    let out = compile_and_run_stdout(r#"
+class Store {
+    data: string
+
+    fn set(mut self, v: string) {
+        self.data = v
+    }
+    fn get(self) string {
+        return self.data
+    }
+}
+
+scoped class Ctx {
+    id: int
+}
+
+scoped class Handler[store: Store, ctx: Ctx] {
+    fn put(self, v: string) {
+        self.store.set(v)
+    }
+    fn read(self) string {
+        return self.store.get()
+    }
+}
+
+app MyApp {
+    fn main(self) {
+        scope(Ctx { id: 1 }) |h: Handler| {
+            h.put("written-before-churn")
+        }
+        let mut i = 0
+        while i < 200000 {
+            let s = f"garbage_{i}"
+            i = i + 1
+        }
+        scope(Ctx { id: 2 }) |h: Handler| {
+            print(h.read())
+        }
+    }
+}
+"#);
+    assert_eq!(out.trim(), "written-before-churn");
+}
