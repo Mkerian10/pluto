@@ -1217,3 +1217,249 @@ fn object_nested_in_sent_value_stays_shared() {
     );
     assert_eq!(out.trim(), "1\ntrue\n1");
 }
+
+// ── External writes through entity container fields are rejected (#440 gap 2)
+//
+// #427 rejected `e.field = v` from outside the entity, but an IndexAssign's
+// immediate object is the CONTAINER, not the entity, so `e.arr[0] = 1`
+// slipped past it — mutating entity state without the per-instance lock.
+// The tests below pin the extended rule: any lvalue path whose root
+// traverses an entity field through an index from outside the entity is
+// rejected; `self.` forms inside the entity's methods (which hold the lock)
+// and the same shapes on plain value classes stay legal.
+
+/// Array-index write through an entity field from outside is a compile
+/// error.
+#[test]
+fn object_external_index_assign_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            arr: [int]
+            fn get(self, i: int) int {
+                return self.arr[i]
+            }
+        }
+
+        fn main() {
+            let mut c = Counter { arr: [1, 2, 3] }
+            c.arr[0] = 9
+            print(c.get(0))
+        }
+        "#,
+        "cannot assign through field 'arr' of entity 'Counter' from outside its own methods",
+    );
+}
+
+/// Map-key write through an entity field from outside is rejected the same
+/// way.
+#[test]
+fn object_external_map_key_assign_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Registry {
+            m: Map<string, int>
+        }
+
+        fn main() {
+            let mut r = Registry { m: Map<string, int> { "a": 1 } }
+            r.m["a"] = 2
+        }
+        "#,
+        "cannot assign through field 'm' of entity 'Registry' from outside its own methods",
+    );
+}
+
+/// Nested lvalue path: a field write on an ELEMENT of an entity's array
+/// (`e.a[0].b = v`) still writes entity state — rejected.
+#[test]
+fn object_external_nested_path_assign_rejected() {
+    compile_should_fail_with(
+        r#"
+        class Point {
+            x: int
+        }
+
+        object Board {
+            pts: [Point]
+        }
+
+        fn main() {
+            let b = Board { pts: [Point { x: 0 }] }
+            b.pts[0].x = 5
+        }
+        "#,
+        "cannot assign through field 'pts' of entity 'Board' from outside its own methods",
+    );
+}
+
+/// Nested containers: `e.arr[0][1] = v` is rejected too.
+#[test]
+fn object_external_nested_container_assign_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Grid {
+            rows: [[int]]
+        }
+
+        fn main() {
+            let g = Grid { rows: [[1, 2], [3, 4]] }
+            g.rows[0][1] = 9
+        }
+        "#,
+        "cannot assign through field 'rows' of entity 'Grid' from outside its own methods",
+    );
+}
+
+/// Compound assignment desugars to an index assign — same rejection.
+#[test]
+fn object_external_index_compound_assign_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            arr: [int]
+        }
+
+        fn main() {
+            let mut c = Counter { arr: [1] }
+            c.arr[0] += 1
+        }
+        "#,
+        "cannot assign through field 'arr' of entity 'Counter' from outside its own methods",
+    );
+}
+
+/// Increment statements desugar the same way — rejected.
+#[test]
+fn object_external_index_increment_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            arr: [int]
+        }
+
+        fn main() {
+            let mut c = Counter { arr: [1] }
+            c.arr[0]++
+        }
+        "#,
+        "cannot assign through field 'arr' of entity 'Counter' from outside its own methods",
+    );
+}
+
+/// An alias binding doesn't launder the indexed write: entities have
+/// reference identity, so the alias IS the entity.
+#[test]
+fn object_external_index_assign_through_alias_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            arr: [int]
+        }
+
+        fn main() {
+            let mut c = Counter { arr: [1] }
+            let mut alias = c
+            alias.arr[0] = 7
+        }
+        "#,
+        "cannot assign through field 'arr' of entity 'Counter' from outside its own methods",
+    );
+}
+
+/// An entity nested inside a value class reached via a local: the path
+/// still traverses the entity's field, so the indexed write is rejected —
+/// matching #427's field-chain rule (`w.c.value = 5` is rejected the same
+/// way).
+#[test]
+fn object_index_assign_through_value_wrapper_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Counter {
+            arr: [int]
+        }
+
+        class Wrap {
+            c: Counter
+        }
+
+        fn main() {
+            let c = Counter { arr: [1] }
+            let mut w = Wrap { c: c }
+            w.c.arr[0] = 5
+        }
+        "#,
+        "cannot assign through field 'arr' of entity 'Counter' from outside its own methods",
+    );
+}
+
+/// The legal paths keep working: `self.` indexed writes inside the entity's
+/// own methods (the method holds the lock), and external READS of entity
+/// container fields.
+#[test]
+fn object_self_index_writes_still_work() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Counter {
+            arr: [int]
+            m: Map<string, int>
+            rows: [[int]]
+
+            fn bump(mut self) {
+                self.arr[0] = self.arr[0] + 1
+                self.arr[0] += 1
+                self.m["k"] = 7
+                self.rows[0][1] = 9
+            }
+        }
+
+        fn main() {
+            let mut c = Counter {
+                arr: [0],
+                m: Map<string, int> {},
+                rows: [[1, 2]]
+            }
+            c.bump()
+            print(c.arr[0])
+            print(c.m["k"])
+            print(c.rows[0][1])
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "2\n7\n9");
+}
+
+/// A plain value CLASS with the same shapes is unaffected: indexed writes
+/// through class fields are ordinary container mutation.
+#[test]
+fn class_index_assign_shapes_unaffected() {
+    let out = compile_and_run_stdout(
+        r#"
+        class Point {
+            x: int
+        }
+
+        class Bag {
+            arr: [int]
+            m: Map<string, int>
+            pts: [Point]
+        }
+
+        fn main() {
+            let mut b = Bag {
+                arr: [1],
+                m: Map<string, int> { "a": 1 },
+                pts: [Point { x: 0 }]
+            }
+            b.arr[0] = 9
+            b.arr[0] += 1
+            b.m["a"] = 2
+            b.pts[0].x = 5
+            print(b.arr[0])
+            print(b.m["a"])
+            print(b.pts[0].x)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "10\n2\n5");
+}
