@@ -226,6 +226,8 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_expect_equal_string", &[types::I64, types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_expect_true", &[types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_expect_false", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_expect_raises_no_error", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_expect_raises_wrong_type", &[types::I64, types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_test_start", &[types::I64], &[])?;
         reg.declare(module, "__pluto_test_pass", &[], &[])?;
         reg.declare(module, "__pluto_test_summary", &[types::I64], &[])?;

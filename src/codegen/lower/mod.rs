@@ -58,6 +58,11 @@ struct LowerContext<'a> {
     expected_return_type: Option<PlutoType>,
     /// Stack of (continue_target, break_target) blocks for break/continue
     loop_stack: Vec<(cranelift_codegen::ir::Block, cranelift_codegen::ir::Block)>,
+    /// Stack of `expect_raises` capture blocks. When non-empty, error exits
+    /// (raise, `!` propagation, uncovered typed catch) jump to the innermost
+    /// capture block instead of returning from the function — the construct
+    /// is the handler (see lower_expect_raises).
+    raise_capture_stack: Vec<cranelift_codegen::ir::Block>,
     /// Variables holding Sender handles that need sender_dec on function exit
     sender_cleanup_vars: Vec<Variable>,
     /// If non-None, all returns jump here for sender cleanup before actual return
@@ -265,6 +270,19 @@ impl<'a> LowerContext<'a> {
         let raw_ptr = self.create_data_str(s)?;
         let len_val = self.builder.ins().iconst(types::I64, s.len() as i64);
         Ok(self.call_runtime("__pluto_string_new", &[raw_ptr, len_val]))
+    }
+
+    /// Exit on a raised error: inside an `expect_raises` block, jump to the
+    /// innermost capture block (the error stays in TLS for the construct to
+    /// inspect); otherwise return the default value (the error stays in TLS
+    /// for the caller). Every raise-driven exit goes through here; the
+    /// nullable early-exit (NullPropagate) does not — `none` is not an error.
+    fn emit_error_exit(&mut self) {
+        if let Some(bb) = self.raise_capture_stack.last().copied() {
+            self.builder.ins().jump(bb, &[]);
+        } else {
+            self.emit_default_return();
+        }
     }
 
     /// Emit a return with the default value for the current function's return type.
@@ -670,6 +688,9 @@ impl<'a> LowerContext<'a> {
                 self.builder.seal_block(ok_bb);
                 Ok(())
             }
+            Stmt::ExpectRaises { error_type, body } => {
+                self.lower_expect_raises(error_type.as_ref(), body)
+            }
             Stmt::Yield { .. } => {
                 // Generator yield is handled by lower_generator_next, not lower_stmt
                 unreachable!("Stmt::Yield should only appear in generator next function codegen")
@@ -682,6 +703,84 @@ impl<'a> LowerContext<'a> {
     }
 
     // ── lower_stmt extracted helpers ─────────────────────────────────────
+
+    /// Lower `expect_raises(ErrorType) { body }` / `expect_raises { body }`
+    /// (wildcard). Error exits inside the block (raise, `!`, an uncovered
+    /// typed catch) jump to a capture block instead of returning from the
+    /// enclosing function. The capture block checks the raised error's type
+    /// against the expected one (typed form), consumes the error, and falls
+    /// through; completing the block without raising — or raising a
+    /// different type — reports an assertion failure and exits.
+    fn lower_expect_raises(
+        &mut self,
+        error_type: Option<&crate::span::Spanned<String>>,
+        body: &crate::span::Spanned<Block>,
+    ) -> Result<(), CompileError> {
+        let raised_bb = self.builder.create_block();
+        let continue_bb = self.builder.create_block();
+        let line_no = byte_to_line(self.source, body.span.start);
+
+        self.raise_capture_stack.push(raised_bb);
+        let mut body_terminated = false;
+        for s in &body.node.stmts {
+            self.lower_stmt_covered(s, &mut body_terminated)?;
+        }
+        self.raise_capture_stack.pop();
+
+        if !body_terminated {
+            // The block completed without raising: assertion failure (the
+            // runtime call exits; the jump only keeps the IR well-formed).
+            let line_val = self.builder.ins().iconst(types::I64, line_no as i64);
+            let expected = match error_type {
+                Some(et) => self.make_string_literal(&et.node)?,
+                None => self.builder.ins().iconst(types::I64, 0),
+            };
+            self.call_runtime_void("__pluto_expect_raises_no_error", &[expected, line_val]);
+            self.builder.ins().jump(continue_bb, &[]);
+        }
+
+        // An error was raised inside the block; it sits in TLS.
+        self.builder.switch_to_block(raised_bb);
+        self.builder.seal_block(raised_bb);
+        match error_type {
+            Some(et) => {
+                let actual = self.call_runtime("__pluto_error_type", &[]);
+                let lit = self.make_string_literal(&et.node)?;
+                let is_match = self.call_runtime("__pluto_string_eq", &[actual, lit]);
+                let ok_bb = self.builder.create_block();
+                let wrong_bb = self.builder.create_block();
+                self.builder.ins().brif(is_match, ok_bb, &[], wrong_bb, &[]);
+
+                // Wrong error type: consume it, then fail (the call exits).
+                // Clearing first keeps the atexit unhandled-error check from
+                // re-reporting the already-reported error.
+                self.builder.switch_to_block(wrong_bb);
+                self.builder.seal_block(wrong_bb);
+                self.call_runtime_void("__pluto_clear_error", &[]);
+                let line_val = self.builder.ins().iconst(types::I64, line_no as i64);
+                self.call_runtime_void(
+                    "__pluto_expect_raises_wrong_type",
+                    &[lit, actual, line_val],
+                );
+                self.builder.ins().jump(continue_bb, &[]);
+
+                // Expected type: consume the error and continue the test.
+                self.builder.switch_to_block(ok_bb);
+                self.builder.seal_block(ok_bb);
+                self.call_runtime_void("__pluto_clear_error", &[]);
+                self.builder.ins().jump(continue_bb, &[]);
+            }
+            None => {
+                // Wildcard: any raised error satisfies the assertion.
+                self.call_runtime_void("__pluto_clear_error", &[]);
+                self.builder.ins().jump(continue_bb, &[]);
+            }
+        }
+
+        self.builder.switch_to_block(continue_bb);
+        self.builder.seal_block(continue_bb);
+        Ok(())
+    }
 
     /// Generate an RPC dispatch loop exposing a service's methods over TCP,
     /// matching the line protocol used by `remote` calls: requests are
@@ -2219,8 +2318,9 @@ impl<'a> LowerContext<'a> {
         let type_str = self.make_string_literal(&error_name.node)?;
         self.call_runtime_void("__pluto_set_error_type", &[type_str]);
 
-        // Return default value (caller checks TLS)
-        self.emit_default_return();
+        // Return default value (caller checks TLS) — or jump to the
+        // enclosing expect_raises capture block.
+        self.emit_error_exit();
         Ok(())
     }
 
@@ -2581,7 +2681,7 @@ impl<'a> LowerContext<'a> {
             // Error block: propagate (error is already in TLS)
             self.builder.switch_to_block(err_bb);
             self.builder.seal_block(err_bb);
-            self.emit_default_return();
+            self.emit_error_exit();
 
             // Continue to dispatch
             self.builder.switch_to_block(dispatch_bb);
@@ -3484,12 +3584,13 @@ impl<'a> LowerContext<'a> {
                 let continue_bb = self.builder.create_block();
                 self.builder.ins().brif(is_error, propagate_bb, &[], continue_bb, &[]);
 
-                // Propagate block: return default (error stays in TLS for caller)
+                // Propagate block: return default (error stays in TLS for
+                // caller) — or jump to the enclosing expect_raises capture.
                 self.builder.switch_to_block(propagate_bb);
                 self.builder.seal_block(propagate_bb);
                 // Branch coverage: error propagation — error occurred
                 self.emit_coverage_hit(inner.span.file_id, inner.span.start, 1);
-                self.emit_default_return();
+                self.emit_error_exit();
 
                 // Continue block: no error, use the call result
                 self.builder.switch_to_block(continue_bb);
@@ -4232,7 +4333,7 @@ impl<'a> LowerContext<'a> {
         // All handlers were typed and none matched: re-propagate (the coverage
         // check guarantees this is unreachable for errors the call can raise).
         if !had_catch_all {
-            self.emit_default_return();
+            self.emit_error_exit();
         }
 
         self.builder.switch_to_block(merge_bb);
@@ -5336,6 +5437,7 @@ pub fn lower_serve_handler(
         next_var: 0,
         expected_return_type: Some(PlutoType::Int),
         loop_stack: Vec::new(),
+        raise_capture_stack: Vec::new(),
         sender_cleanup_vars: Vec::new(),
         exit_block: None,
         fn_display_name: format!("__pluto_serve_handler_{class_name}"),
@@ -5503,6 +5605,7 @@ pub fn lower_function(
         next_var,
         expected_return_type,
         loop_stack: Vec::new(),
+        raise_capture_stack: Vec::new(),
         sender_cleanup_vars,
         exit_block,
         fn_display_name,
@@ -5943,6 +6046,7 @@ pub fn lower_generator_next(
         next_var: next_var_id,
         expected_return_type: Some(PlutoType::Void),
         loop_stack: Vec::new(),
+        raise_capture_stack: Vec::new(),
         sender_cleanup_vars: Vec::new(),
         exit_block: None,
         fn_display_name: func.name.node.clone(),

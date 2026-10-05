@@ -725,6 +725,22 @@ fn check_stmt(
                 }
             }
         }
+        Stmt::ExpectRaises { error_type, body } => {
+            if let Some(et) = error_type
+                && !env.errors.contains_key(&et.node)
+            {
+                return Err(CompileError::type_err(
+                    format!("unknown error type '{}'", et.node),
+                    et.span,
+                ));
+            }
+            // The block's facts pop with its scope: control may leave the
+            // block at any raising statement, so nothing it establishes is
+            // assumed afterwards (kills applied inside still hit all frames).
+            env.push_scope();
+            check_block(&body.node, env, return_type)?;
+            env.pop_scope();
+        }
         Stmt::Serve { service, port } => {
             let svc_ty = infer_expr(&service.node, service.span, env, None)?;
             let PlutoType::Class(svc_name) = &svc_ty else {

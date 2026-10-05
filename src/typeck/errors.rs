@@ -282,6 +282,15 @@ pub(crate) fn closure_node_key(span: crate::span::Span) -> String {
     format!("<closure@{}>", span.start)
 }
 
+/// Key for an `expect_raises` block's node in the error-inference graph,
+/// derived from its body span (same uniqueness argument as closure nodes).
+/// The block's raises and propagation edges accrue here instead of to the
+/// enclosing function — the construct consumes every error the block raises,
+/// so the enclosing function stays infallible.
+pub(crate) fn expect_raises_node_key(span: crate::span::Span) -> String {
+    format!("<expect_raises@{}>", span.start)
+}
+
 /// Mutable state threaded through effect collection. Effects accrue to
 /// `current_node`: the enclosing named function, or — inside a closure literal
 /// bound to a variable — that closure's own node, so defining a fallible
@@ -505,6 +514,18 @@ fn collect_stmt_effects(stmt: &Stmt, ctx: &mut EffectCtx) {
         }
         Stmt::Assert { expr } => {
             collect_expr_effects(expr, ctx);
+        }
+        // The block's effects accrue to a dedicated node (never edged back to
+        // the enclosing function): the construct consumes whatever the block
+        // raises, and enforcement reads the node's post-fixpoint error set
+        // for the compile-time raises checks.
+        Stmt::ExpectRaises { body, .. } => {
+            let node = expect_raises_node_key(body.span);
+            ctx.direct.entry(node.clone()).or_default();
+            ctx.edges.entry(node.clone()).or_default();
+            let prev = std::mem::replace(&mut ctx.current_node, node);
+            collect_block_stmts(&body.node.stmts, ctx);
+            ctx.current_node = prev;
         }
         // The generated serve loop handles dispatched methods' errors internally
         // (replying with an error response), so it adds none to the enclosing fn.
@@ -969,6 +990,47 @@ fn enforce_stmt(
         Stmt::Raise { fields, .. } => {
             for (_, val) in fields {
                 enforce_expr(&val.node, val.span, current_fn, env, lenient)?;
+            }
+            Ok(())
+        }
+        Stmt::ExpectRaises { error_type, body } => {
+            // Statements inside the block are enforced as usual: a fallible
+            // call still needs `!` or `catch` — `!` propagates to the
+            // construct (the handler) instead of the enclosing function.
+            enforce_block(&body.node, current_fn, env, lenient)?;
+            // Generic template bodies were never type-checked, so the block's
+            // inferred error set may be incomplete there — skip the raises
+            // checks (mirrors the lenient call-site rules above).
+            if lenient {
+                return Ok(());
+            }
+            let node = expect_raises_node_key(body.span);
+            let set = env.fn_errors.get(&node).cloned().unwrap_or_default();
+            if set.is_empty() {
+                return Err(CompileError::type_err(
+                    "expect_raises block cannot raise: nothing inside it raises or \
+                     propagates an error",
+                    _span,
+                ));
+            }
+            if let Some(et) = error_type {
+                let expected_un = et.node.rsplit('.').next().unwrap_or(&et.node);
+                let covered = set
+                    .iter()
+                    .any(|e| e == &et.node || e.rsplit('.').next().unwrap_or(e) == expected_un);
+                if !covered {
+                    let mut sorted: Vec<&String> = set.iter().collect();
+                    sorted.sort();
+                    let list = sorted
+                        .iter()
+                        .map(|s| format!("'{s}'"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(CompileError::type_err(
+                        format!("the block can raise {list} — not '{}'", et.node),
+                        et.span,
+                    ));
+                }
             }
             Ok(())
         }

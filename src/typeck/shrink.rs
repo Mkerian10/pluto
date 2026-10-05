@@ -745,6 +745,16 @@ impl SummaryBuilder<'_> {
                 self.walk_block(&body.node);
                 self.poison_raises = prev;
             }
+            Stmt::ExpectRaises { body, .. } => {
+                // The block's raises never reach the enclosing function's
+                // error set (the construct consumes them), so they are
+                // poisoned defensively; its calls still taint guard state.
+                self.call_tainted = true;
+                let prev = self.poison_raises;
+                self.poison_raises = true;
+                self.walk_block(&body.node);
+                self.poison_raises = prev;
+            }
             Stmt::Let { name, value, .. } => {
                 self.scan_expr(value);
                 self.killed.insert(name.node.clone());

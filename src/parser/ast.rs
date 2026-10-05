@@ -511,6 +511,17 @@ pub enum Stmt {
     Assert {
         expr: Spanned<Expr>,
     },
+    /// `expect_raises(ErrorType) { body }` — test assertion that the block
+    /// raises an error of the named type; `expect_raises { body }` (wildcard,
+    /// `error_type: None`) asserts the block raises *some* error. The raise is
+    /// consumed by the construct: the block's errors never propagate to the
+    /// enclosing function. Compile-time checked against the block's inferred
+    /// error set (a block that cannot raise, or a named type outside the
+    /// block's error set, is a compile error).
+    ExpectRaises {
+        error_type: Option<Spanned<String>>,
+        body: Spanned<Block>,
+    },
     /// `serve <service> on <port>` — run a generated RPC dispatch loop that
     /// exposes the service's methods over a TCP socket, matching the wire
     /// protocol used by `remote` calls on the client side.

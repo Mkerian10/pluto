@@ -577,6 +577,7 @@ pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Spanned<Stmt>) {
             v.visit_block(body);
         }
         Stmt::Assert { expr } => v.visit_expr(expr),
+        Stmt::ExpectRaises { body, .. } => v.visit_block(body),
         Stmt::Serve { service, port } => {
             v.visit_expr(service);
             v.visit_expr(port);
@@ -1170,6 +1171,7 @@ pub fn walk_stmt_mut<V: VisitMut>(v: &mut V, stmt: &mut Spanned<Stmt>) {
             v.visit_block_mut(body);
         }
         Stmt::Assert { expr } => v.visit_expr_mut(expr),
+        Stmt::ExpectRaises { body, .. } => v.visit_block_mut(body),
         Stmt::Serve { service, port } => {
             v.visit_expr_mut(service);
             v.visit_expr_mut(port);

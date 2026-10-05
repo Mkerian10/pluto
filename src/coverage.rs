@@ -367,6 +367,9 @@ impl<'a> CoverageScanner<'a> {
                 self.scan_block(&body.node);
             }
             // Leaf statements — already counted above
+            Stmt::ExpectRaises { body, .. } => {
+                self.scan_block(&body.node);
+            }
             Stmt::Let { .. }
             | Stmt::LetChan { .. }
             | Stmt::Assign { .. }
@@ -452,7 +455,8 @@ impl<'a> CoverageScanner<'a> {
             | Stmt::Continue
             | Stmt::LetChan { .. }
             | Stmt::Scope { .. }
-            | Stmt::Select { .. } => {}
+            | Stmt::Select { .. }
+            | Stmt::ExpectRaises { .. } => {}
         }
     }
 

@@ -1513,6 +1513,15 @@ impl<'a> Analyzer<'a> {
                 self.havoc();
                 false
             }
+            Stmt::ExpectRaises { body, .. } => {
+                // The block may stop at any raising statement; nothing it
+                // establishes survives the construct.
+                self.push_scope();
+                self.walk_block(&body.node);
+                self.pop_scope();
+                self.havoc();
+                false
+            }
             Stmt::Yield { value } => {
                 self.scan_expr(value);
                 self.kill_fields();

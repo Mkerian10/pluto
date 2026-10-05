@@ -2276,6 +2276,11 @@ impl<'a> Parser<'a> {
                 Ok(Spanned::new(Stmt::Continue, span))
             }
             _ => {
+                // `expect_raises` is a contextual keyword at statement level:
+                // `expect_raises(ErrorType) { ... }` or `expect_raises { ... }`.
+                if self.is_expect_raises_ahead() {
+                    return self.parse_expect_raises_stmt();
+                }
                 // Parse a full expression, then check for `=`, compound assignment,
                 // or `++`/`--` to determine statement kind.
                 let start = tok.span.start;
@@ -3245,6 +3250,57 @@ impl<'a> Parser<'a> {
             return false;
         }
         matches!(self.tokens[i].node, Token::Eq)
+    }
+
+    /// True when the next significant tokens are `expect_raises (` or
+    /// `expect_raises {` — the raises-assertion statement. `expect_raises` is
+    /// contextual (not reserved): a bare `expect_raises` identifier in any
+    /// other position still parses as an ordinary expression.
+    fn is_expect_raises_ahead(&self) -> bool {
+        if self.split_pos < self.split_tokens.len() {
+            return false;
+        }
+        let mut i = self.pos;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        let Some(tok) = self.tokens.get(i) else { return false };
+        if !matches!(tok.node, Token::Ident)
+            || &self.source[tok.span.start..tok.span.end] != "expect_raises"
+        {
+            return false;
+        }
+        i += 1;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        matches!(
+            self.tokens.get(i).map(|t| &t.node),
+            Some(Token::LParen) | Some(Token::LBrace)
+        )
+    }
+
+    /// Parse `expect_raises(ErrorType) { body }` / `expect_raises { body }`.
+    fn parse_expect_raises_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let kw = self.expect_ident()?; // `expect_raises` (validated by lookahead)
+        let start = kw.span.start;
+        let error_type = if self.peek().is_some_and(|t| matches!(t.node, Token::LParen)) {
+            self.expect(&Token::LParen)?;
+            // Allow a module-qualified error type: `mod.ErrorType`.
+            let et = self.expect_dotted_ident()?;
+            self.expect(&Token::RParen)?;
+            Some(et)
+        } else {
+            None
+        };
+        self.skip_newlines();
+        let body = self.parse_block()?;
+        let end = body.span.end;
+        self.consume_statement_end()?;
+        Ok(Spanned::new(
+            Stmt::ExpectRaises { error_type, body },
+            Span::new(start, end),
+        ))
     }
 
     fn parse_assert_stmt(&mut self) -> Result<Spanned<Stmt>, CompileError> {
