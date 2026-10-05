@@ -255,6 +255,18 @@ pub class File<M, S> {
     fn write_bytes(self, data: bytes)                        // #368 slot
         where M == Write, S == Open
 
+    fn truncate(self, len: int)                              // #397 (ftruncate)
+        where M == Write, S == Open
+    // Set the length to exactly len: shrinking discards the tail,
+    // extending zero-fills, the seek cursor does not move — syscall-
+    // faithful, documented rather than restricted. Negative len raises
+    // FileError (code 0) before any syscall: a condition on caller
+    // input, the file sound (the receive_from split). A failed
+    // ftruncate leaves the length/data state unwarranted like a failed
+    // write: Degraded. Durability: truncate dirties the inode — the
+    // change is warranted durable only after sync()/sync_data(); no
+    // directory sync is needed (the name→inode mapping is untouched).
+
     // ── Durability (#367) ────────────────────────────────────
     fn sync(self)        where M == Write, S == Open    // full durability: fsync / F_FULLFSYNC
     fn sync_data(self)   where M == Write, S == Open    // fdatasync / F_FULLFSYNC
@@ -337,6 +349,7 @@ pub fn rmdir(path: string)
 pub fn remove_dir_all(path: string)                      // NEW — recursive; refuses "/" and ""
 pub fn rename(from: string, to: string)
 pub fn copy(from: string, to: string)                    // close errors surfaced (bug fix)
+pub fn truncate(path: string, len: int)                  // NEW (#397): truncate(2); negative len raises FileError; not durable by itself (write_all's stance)
 pub fn list_dir(path: string) [string]
 pub fn temp_dir() string
 ```
