@@ -50,7 +50,7 @@ class Point {
 
 fn main() {
     let first = Point { x: 0, y: 0 }
-    let arr = [first]
+    let mut arr = [first]
     let mut i = 1
     while i < 100 {
         arr.push(Point { x: i, y: i * 2 })
@@ -188,7 +188,7 @@ class Node {
 
 fn main() {
     let first = Node { value: 0, next_idx: -1 }
-    let nodes = [first]
+    let mut nodes = [first]
     let mut i = 1
     while i < 10000 {
         let prev_idx = i - 1
@@ -266,7 +266,7 @@ fn gc_array_growth_under_pressure() {
     // Array that grows (realloc) while GC is active
     let out = compile_and_run_stdout(r#"
 fn main() {
-    let arr = ["seed"]
+    let mut arr = ["seed"]
     let mut i = 1
     while i < 5000 {
         arr.push(f"item_{i}")
@@ -388,7 +388,7 @@ fn churn(id: int) int {
     let mut i = 0
     while i < 1000 {
         let s = f"task-{id}-iter-{i}"
-        let arr = [i, i + 1, i + 2, i + 3]
+        let mut arr = [i, i + 1, i + 2, i + 3]
         total = total + arr[0] + s.len()
         i = i + 1
     }

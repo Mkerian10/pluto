@@ -60,7 +60,7 @@ fn main() {
     let mut wal = bytes_new()
     let records = ["put k1=v1", "put k2=v2", "del k1"]
     for r in records {
-        let frame = frame_record(r.to_bytes())
+        let mut frame = frame_record(r.to_bytes())
         let mut i = 0
         while i < frame.len() {
             wal.push(frame[i])

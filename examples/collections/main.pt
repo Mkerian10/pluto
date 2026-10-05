@@ -23,7 +23,7 @@ fn main() int {
     print(f"After removing alice: {scores.len()}")
 
     // Sets: unique collections
-    let fruits = Set<string> { "apple", "banana", "cherry" }
+    let mut fruits = Set<string> { "apple", "banana", "cherry" }
     print(f"\nFruits: {fruits.len()} items")
     let has_apple = fruits.contains("apple")
     print(f"Has apple? {has_apple}")

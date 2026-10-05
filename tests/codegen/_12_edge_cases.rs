@@ -271,7 +271,7 @@ fn main() {
 fn test_set_1000_elements() {
     let source = r#"
 fn main() {
-    let s = Set<int> {}
+    let mut s = Set<int> {}
     let mut i = 0
     while i < 1000 {
         s.insert(i)
@@ -309,7 +309,7 @@ fn main() {
 fn test_empty_array_len() {
     let source = r#"
 fn main() {
-    let arr: [int] = []
+    let mut arr: [int] = []
     print(arr.len())
 }
 "#;
@@ -334,7 +334,7 @@ fn main() {
 fn test_empty_array_iteration() {
     let source = r#"
 fn main() {
-    let arr: [int] = []
+    let mut arr: [int] = []
     let mut count = 0
     let mut i = 0
     while i < arr.len() {
@@ -382,7 +382,7 @@ fn main() {
 fn test_array_access_boundary() {
     let source = r#"
 fn main() {
-    let arr = [1, 2, 3]
+    let mut arr = [1, 2, 3]
     print(arr[0])
     print(arr[2])
 }
@@ -394,7 +394,7 @@ fn main() {
 fn test_empty_string_operations() {
     let source = r#"
 fn main() {
-    let s = ""
+    let mut s = ""
     print(s.len())
     let s2 = s + ""
     print(s2.len())
@@ -421,7 +421,7 @@ fn main() {
 fn test_empty_set_operations() {
     let source = r#"
 fn main() {
-    let s = Set<int> {}
+    let mut s = Set<int> {}
     print(s.len())
     print(s.contains(42))
 }
@@ -449,7 +449,7 @@ fn main() {
 fn test_zero_length_string_literal() {
     let source = r#"
 fn main() {
-    let s = ""
+    let mut s = ""
     print(s.len())
 }
 "#;
@@ -460,7 +460,7 @@ fn main() {
 fn test_zero_element_array_literal() {
     let source = r#"
 fn main() {
-    let arr: [int] = []
+    let mut arr: [int] = []
     print(arr.len())
 }
 "#;
@@ -498,7 +498,7 @@ fn main() {
 fn test_single_element_array() {
     let source = r#"
 fn main() {
-    let arr = [42]
+    let mut arr = [42]
     print(arr.len())
     print(arr[0])
 }
@@ -510,7 +510,7 @@ fn main() {
 fn test_single_char_string() {
     let source = r#"
 fn main() {
-    let s = "x"
+    let mut s = "x"
     print(s.len())
     print(s)
 }

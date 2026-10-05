@@ -46,7 +46,7 @@ fn nested_if_else() {
 #[test]
 fn for_loop_basic() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [1, 2, 3]\n    for x in a {\n        print(x)\n    }\n}",
+        "fn main() {\n    let mut a = [1, 2, 3]\n    for x in a {\n        print(x)\n    }\n}",
     );
     assert_eq!(out, "1\n2\n3\n");
 }
@@ -54,7 +54,7 @@ fn for_loop_basic() {
 #[test]
 fn for_loop_sum() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [10, 20, 30]\n    let mut total = 0\n    for x in a {\n        total = total + x\n    }\n    print(total)\n}",
+        "fn main() {\n    let mut a = [10, 20, 30]\n    let mut total = 0\n    for x in a {\n        total = total + x\n    }\n    print(total)\n}",
     );
     assert_eq!(out, "60\n");
 }
@@ -62,7 +62,7 @@ fn for_loop_sum() {
 #[test]
 fn for_loop_nested() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [1, 2]\n    let b = [10, 20]\n    for x in a {\n        for y in b {\n            print(x + y)\n        }\n    }\n}",
+        "fn main() {\n    let mut a = [1, 2]\n    let b = [10, 20]\n    for x in a {\n        for y in b {\n            print(x + y)\n        }\n    }\n}",
     );
     assert_eq!(out, "11\n21\n12\n22\n");
 }
@@ -70,7 +70,7 @@ fn for_loop_nested() {
 #[test]
 fn for_loop_empty_body() {
     let code = compile_and_run(
-        "fn main() {\n    let a = [1, 2, 3]\n    for x in a {\n    }\n}",
+        "fn main() {\n    let mut a = [1, 2, 3]\n    for x in a {\n    }\n}",
     );
     assert_eq!(code, 0);
 }
@@ -86,7 +86,7 @@ fn for_loop_non_array_rejected() {
 #[test]
 fn for_loop_bools() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [true, false, true]\n    for b in a {\n        print(b)\n    }\n}",
+        "fn main() {\n    let mut a = [true, false, true]\n    for b in a {\n        print(b)\n    }\n}",
     );
     assert_eq!(out, "true\nfalse\ntrue\n");
 }
@@ -94,7 +94,7 @@ fn for_loop_bools() {
 #[test]
 fn for_loop_floats() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [1.5, 2.5, 3.5]\n    for f in a {\n        print(f)\n    }\n}",
+        "fn main() {\n    let mut a = [1.5, 2.5, 3.5]\n    for f in a {\n        print(f)\n    }\n}",
     );
     assert_eq!(out, "1.5\n2.5\n3.5\n");
 }
@@ -143,7 +143,7 @@ fn for_loop_method_call_on_element() {
 #[test]
 fn for_loop_push_during_iteration() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [1, 2, 3]\n    let mut count = 0\n    for x in a {\n        count = count + 1\n        a.push(x * 10)\n    }\n    print(count)\n    print(a.len())\n}",
+        "fn main() {\n    let mut a = [1, 2, 3]\n    let mut count = 0\n    for x in a {\n        count = count + 1\n        a.push(x * 10)\n    }\n    print(count)\n    print(a.len())\n}",
     );
     assert_eq!(out, "3\n6\n");
 }
@@ -151,7 +151,7 @@ fn for_loop_push_during_iteration() {
 #[test]
 fn for_loop_nested_same_array() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let a = [1, 2]\n    for x in a {\n        for y in a {\n            print(x * 10 + y)\n        }\n    }\n}",
+        "fn main() {\n    let mut a = [1, 2]\n    for x in a {\n        for y in a {\n            print(x * 10 + y)\n        }\n    }\n}",
     );
     assert_eq!(out, "11\n12\n21\n22\n");
 }

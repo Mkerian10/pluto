@@ -70,6 +70,24 @@ let mut m = Map<string, int> { "a": 1 }
 m["b"] = 2
 ```
 
+### Mutating Builtin Methods
+
+Non-`mut` bindings and parameters are read-only: a builtin method that mutates its receiver in place is rejected on an immutable binding, exactly where index assignment is rejected. The mutating builtins are `push`, `pop`, `clear`, `reverse`, `remove_at`, and `insert_at` on arrays; `insert` and `remove` on maps and sets; and `push` on bytes. Calling one requires the receiver's root binding to be `let mut` (or a `mut` parameter), and calling one on a field of `self` requires a `mut self` method. All other collection methods (`len`, `contains`, `slice`, `keys`, ...) read without modifying and need no `mut`.
+
+```
+let xs = [1, 2, 3]
+xs.push(4)          // compile error — xs is immutable
+let mut ys = [1, 2, 3]
+ys.push(4)          // ok
+
+fn stamp(buf: bytes) {
+    buf.push(7 as byte)   // compile error — parameters are read-only without mut
+}
+fn stamp_mut(mut buf: bytes) {
+    buf.push(7 as byte)   // ok
+}
+```
+
 ### Compound Assignment
 
 ```

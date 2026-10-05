@@ -843,13 +843,13 @@ fn generic_fn_with_set_lit() {
     // Bug: resolve_generic_te_in_expr had _ => {} catch-all that skipped SetLit
     let out = compile_and_run_stdout(r#"
 fn create_set<T>(val: T) Set<T> {
-    let s = Set<T> {}
+    let mut s = Set<T> {}
     s.insert(val)
     return s
 }
 
 fn main() {
-    let s = create_set(42)
+    let mut s = create_set(42)
     print(s.contains(42))
 }
 "#);
@@ -1399,7 +1399,7 @@ fn typestate_linearity_ignores_data_generics() {
 
         fn main() {
             let b = Box<int> { value: 5 }
-            let s = b.as_label()
+            let mut s = b.as_label()
             print(b.get())
             print(s.get())
         }
@@ -2199,7 +2199,7 @@ fn must_release_container_push_rejected() {
         &lease_src(
             r#"
             fn main() {
-                let arr: [Lease<Held>] = []
+                let mut arr: [Lease<Held>] = []
                 let l = Lease<Idle> { id: 9 }
                 let h = l.acquire()
                 arr.push(h)
@@ -2328,7 +2328,7 @@ fn must_release_enum_payload_rejected() {
             fn main() {
                 let l = Lease<Idle> { id: 4 }
                 let h = l.acquire()
-                let s = Stash.Hold { kept: h }
+                let mut s = Stash.Hold { kept: h }
                 let x = h.release()
             }
             "#,
@@ -2488,7 +2488,7 @@ fn must_release_leak_hint_respects_instantiation() {
 
         fn main() {
             let m = M2<A, P> { id: 16 }
-            let s = m.slide()
+            let mut s = m.slide()
         }
         "#,
         "transition it out of 'A', move it onward, or return it",

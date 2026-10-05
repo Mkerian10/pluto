@@ -633,7 +633,7 @@ fn main() { }
 //
 // A collection-shaped guarded field's contents can be mutated through an
 // alias of the field's value, outside the assignment/index write-set the
-// dominance proof closes (`let d = self.data; d.push(99)`). Collection
+// dominance proof closes (`let mut d = self.data; d.push(99)`). Collection
 // guarded fields therefore carry the same whole-program aliasing ban as
 // idempotency's dedup sets: no bare-value use, mutating builtins only
 // through `self` under the dominance obligation, and construction/
@@ -654,7 +654,7 @@ class Auth {
     data: [int] guarded_by (g: G) g.token == self.epoch
 
     fn sneak(mut self) {
-        let d = self.data
+        let mut d = self.data
         d.push(99)
     }
 }
@@ -778,7 +778,7 @@ class Auth {
 }
 
 fn main() {
-    let shared = [1, 2]
+    let mut shared = [1, 2]
     let mut a = Auth { epoch: 1, data: shared }
     shared.push(99)
 }
@@ -804,7 +804,7 @@ class Auth {
     }
 }
 
-fn audit(xs: [int]) {
+fn audit(mut xs: [int]) {
     xs.push(99)
 }
 
@@ -907,7 +907,7 @@ object Store {
     epoch: int
 
     fn leak(mut self) {
-        let d = self.data
+        let mut d = self.data
         print(d.len())
     }
 }

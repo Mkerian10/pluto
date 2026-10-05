@@ -388,3 +388,358 @@ fn plain_param_still_immutable() {
         "cannot assign to immutable variable",
     );
 }
+
+// ========== MUTATING BUILTINS REQUIRE A MUTABLE RECEIVER (#395) ==========
+// push/pop/insert/remove/... mutate the collection in place, so they are
+// rejected exactly where `xs[i] = v` is rejected.
+
+#[test]
+fn fail_array_push_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let xs = [1, 2]
+    xs.push(3)
+}
+"#,
+        "cannot call mutating method 'push' on immutable variable 'xs'; declare with 'let mut' to allow mutation",
+    );
+}
+
+#[test]
+fn fail_array_pop_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let xs = [1, 2]
+    xs.pop()
+}
+"#,
+        "cannot call mutating method 'pop' on immutable variable 'xs'",
+    );
+}
+
+#[test]
+fn fail_array_clear_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let xs = [1, 2]
+    xs.clear()
+}
+"#,
+        "cannot call mutating method 'clear' on immutable variable 'xs'",
+    );
+}
+
+#[test]
+fn fail_array_insert_at_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let xs = [1, 2]
+    xs.insert_at(0, 9)
+}
+"#,
+        "cannot call mutating method 'insert_at' on immutable variable 'xs'",
+    );
+}
+
+#[test]
+fn fail_array_remove_at_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let xs = [1, 2]
+    xs.remove_at(0)
+}
+"#,
+        "cannot call mutating method 'remove_at' on immutable variable 'xs'",
+    );
+}
+
+#[test]
+fn fail_array_reverse_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let xs = [1, 2]
+    xs.reverse()
+}
+"#,
+        "cannot call mutating method 'reverse' on immutable variable 'xs'",
+    );
+}
+
+#[test]
+fn fail_map_insert_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let m = Map<string, int> { "a": 1 }
+    m.insert("b", 2)
+}
+"#,
+        "cannot call mutating method 'insert' on immutable variable 'm'",
+    );
+}
+
+#[test]
+fn fail_map_remove_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let m = Map<string, int> { "a": 1 }
+    m.remove("a")
+}
+"#,
+        "cannot call mutating method 'remove' on immutable variable 'm'",
+    );
+}
+
+#[test]
+fn fail_set_insert_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let s = Set<int> { 1 }
+    s.insert(2)
+}
+"#,
+        "cannot call mutating method 'insert' on immutable variable 's'",
+    );
+}
+
+#[test]
+fn fail_set_remove_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let s = Set<int> { 1 }
+    s.remove(1)
+}
+"#,
+        "cannot call mutating method 'remove' on immutable variable 's'",
+    );
+}
+
+#[test]
+fn fail_bytes_push_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let buf = bytes_new()
+    buf.push(7 as byte)
+}
+"#,
+        "cannot call mutating method 'push' on immutable variable 'buf'",
+    );
+}
+
+#[test]
+fn fail_array_push_on_non_mut_param() {
+    compile_should_fail_with(
+        r#"
+fn grow(xs: [int]) {
+    xs.push(3)
+}
+
+fn main() {
+    let mut xs = [1]
+    grow(xs)
+}
+"#,
+        "cannot call mutating method 'push' on immutable variable 'xs'; declare with 'let mut' to allow mutation",
+    );
+}
+
+#[test]
+fn fail_bytes_push_on_non_mut_param() {
+    compile_should_fail_with(
+        r#"
+fn stamp(buf: bytes) {
+    buf.push(7 as byte)
+}
+
+fn main() {
+    let mut buf = bytes_new()
+    stamp(buf)
+}
+"#,
+        "cannot call mutating method 'push' on immutable variable 'buf'",
+    );
+}
+
+#[test]
+fn fail_array_push_on_field_of_immutable_local() {
+    compile_should_fail_with(
+        r#"
+class Holder {
+    xs: [int]
+}
+
+fn main() {
+    let h = Holder { xs: [] }
+    h.xs.push(1)
+}
+"#,
+        "cannot call mutating method 'push' on immutable variable 'h'",
+    );
+}
+
+#[test]
+fn fail_array_push_on_self_field_in_non_mut_method() {
+    compile_should_fail_with(
+        r#"
+class Holder {
+    xs: [int]
+
+    fn add_one(self) {
+        self.xs.push(1)
+    }
+}
+
+fn main() {
+    let mut h = Holder { xs: [] }
+    h.add_one()
+}
+"#,
+        "cannot call mutating method 'push' on self's data in a non-mut method; declare 'mut self'",
+    );
+}
+
+#[test]
+fn fail_map_insert_on_self_field_in_non_mut_method() {
+    compile_should_fail_with(
+        r#"
+class Holder {
+    m: Map<string, int>
+
+    fn put(self) {
+        self.m.insert("a", 1)
+    }
+}
+
+fn main() {
+    let mut h = Holder { m: Map<string, int> {} }
+    h.put()
+}
+"#,
+        "cannot call mutating method 'insert' on self's data in a non-mut method; declare 'mut self'",
+    );
+}
+
+#[test]
+fn array_push_on_mut_local_allowed() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let mut xs = [1, 2]
+    xs.push(3)
+    xs.insert_at(0, 0)
+    xs.remove_at(0)
+    xs.reverse()
+    xs.pop()
+    print(f"{xs.len()}")
+    xs.clear()
+    print(f"{xs.len()}")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "2\n0");
+}
+
+#[test]
+fn map_set_bytes_mutators_on_mut_local_allowed() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let mut m = Map<string, int> { "a": 1 }
+    m.insert("b", 2)
+    m.remove("a")
+    let mut s = Set<int> { 1 }
+    s.insert(2)
+    s.remove(1)
+    let mut buf = bytes_new()
+    buf.push(7 as byte)
+    print(f"{m.len()} {s.len()} {buf.len()}")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1 1 1");
+}
+
+#[test]
+fn array_push_on_mut_param_allowed() {
+    let out = compile_and_run_stdout(
+        r#"
+fn grow(mut xs: [int]) {
+    xs.push(3)
+}
+
+fn main() {
+    let mut xs = [1]
+    grow(xs)
+    print(f"{xs.len()}")
+}
+"#,
+    );
+    // Arrays are heap references; the callee's push is visible here.
+    assert_eq!(out.trim(), "2");
+}
+
+#[test]
+fn bytes_push_on_mut_param_allowed() {
+    let out = compile_and_run_stdout(
+        r#"
+fn stamp(mut buf: bytes) {
+    buf.push(7 as byte)
+}
+
+fn main() {
+    let mut buf = bytes_new()
+    stamp(buf)
+    print(f"{buf.len()}")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1");
+}
+
+#[test]
+fn array_push_on_self_field_in_mut_method_allowed() {
+    let out = compile_and_run_stdout(
+        r#"
+class Holder {
+    xs: [int]
+
+    fn add_one(mut self) {
+        self.xs.push(1)
+    }
+}
+
+fn main() {
+    let mut h = Holder { xs: [] }
+    h.add_one()
+    print(f"{h.xs.len()}")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1");
+}
+
+#[test]
+fn non_mutating_builtins_on_immutable_binding_allowed() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let xs = [3, 1, 2]
+    let m = Map<string, int> { "a": 1 }
+    let s = Set<int> { 1 }
+    let part = xs.slice(0, 2)
+    print(f"{xs.len()} {xs.contains(1)} {xs.first()} {part.len()} {m.contains("a")} {s.contains(1)}")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3 true 3 2 true true");
+}

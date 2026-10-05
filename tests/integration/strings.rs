@@ -829,7 +829,7 @@ fn string_slice_escape_in_array() {
     let out = compile_and_run_stdout(r#"
 fn main() {
     let s = "hello world"
-    let arr = [s.substring(0, 5), s.substring(6, 11)]
+    let mut arr = [s.substring(0, 5), s.substring(6, 11)]
     print(arr[0])
     print(arr[1])
 }
@@ -964,7 +964,7 @@ fn string_slice_array_push() {
     let out = compile_and_run_stdout(r#"
 fn main() {
     let s = "hello world"
-    let arr: [string] = []
+    let mut arr: [string] = []
     arr.push(s.substring(0, 5))
     arr.push(s.substring(6, 11))
     print(arr[0])

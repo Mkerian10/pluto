@@ -5,7 +5,7 @@ use common::*;
 fn set_literal_and_contains() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = Set<int> { 1, 2, 3 }
+    let mut s = Set<int> { 1, 2, 3 }
     print(s.contains(1))
     print(s.contains(4))
     return 0
@@ -18,7 +18,7 @@ fn main() int {
 fn set_empty_literal() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = Set<int> {}
+    let mut s = Set<int> {}
     print(s.len())
     return 0
 }
@@ -30,7 +30,7 @@ fn main() int {
 fn set_insert() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = Set<int> {}
+    let mut s = Set<int> {}
     s.insert(42)
     print(s.contains(42))
     print(s.len())
@@ -44,7 +44,7 @@ fn main() int {
 fn set_remove() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = Set<int> { 1, 2, 3 }
+    let mut s = Set<int> { 1, 2, 3 }
     s.remove(2)
     print(s.len())
     print(s.contains(2))
@@ -59,7 +59,7 @@ fn main() int {
 fn set_len() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = Set<string> { "a", "b", "c" }
+    let mut s = Set<string> { "a", "b", "c" }
     print(s.len())
     return 0
 }
@@ -71,7 +71,7 @@ fn main() int {
 fn set_duplicate_insert() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = Set<int> { 1, 2, 3 }
+    let mut s = Set<int> { 1, 2, 3 }
     s.insert(2)
     print(s.len())
     return 0
@@ -84,7 +84,7 @@ fn main() int {
 fn set_string_elements() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = Set<string> { "hello", "world" }
+    let mut s = Set<string> { "hello", "world" }
     print(s.contains("hello"))
     print(s.contains("foo"))
     return 0
@@ -97,7 +97,7 @@ fn main() int {
 fn set_to_array() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = Set<int> { 10, 20, 30 }
+    let mut s = Set<int> { 10, 20, 30 }
     let arr = s.to_array()
     print(arr.len())
     return 0
@@ -110,7 +110,7 @@ fn main() int {
 fn set_iterate() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = Set<int> { 1, 2, 3 }
+    let mut s = Set<int> { 1, 2, 3 }
     let mut total = 0
     for x in s.to_array() {
         total = total + x
@@ -130,7 +130,7 @@ fn count(s: Set<int>) int {
 }
 
 fn main() int {
-    let s = Set<int> { 1, 2, 3 }
+    let mut s = Set<int> { 1, 2, 3 }
     print(count(s))
     return 0
 }
@@ -142,7 +142,7 @@ fn main() int {
 fn set_non_hashable_element_fails() {
     compile_should_fail_with(r#"
 fn main() int {
-    let s = Set<[int]> {}
+    let mut s = Set<[int]> {}
     return 0
 }
 "#, "cannot be used as a map/set key");
@@ -152,7 +152,7 @@ fn main() int {
 fn set_wrong_element_type_fails() {
     compile_should_fail_with(r#"
 fn main() int {
-    let s = Set<int> { 1, "hello" }
+    let mut s = Set<int> { 1, "hello" }
     return 0
 }
 "#, "set element type mismatch");

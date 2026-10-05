@@ -2567,8 +2567,8 @@ fn mk_let_decode_at(var_name: &str, ty: &TypeExpr, depth: usize) -> Result<Vec<S
                     stmts.push(mk_let(&format!("__len_{depth}"), None,
                         mk_propagate(mk_method_call("dec", "decode_array_start", vec![]))));
 
-                    // let __result: Map<K, V> = Map<K, V> {}
-                    stmts.push(mk_let(&format!("__result_{depth}"), Some(ty.clone()), Expr::MapLit {
+                    // let mut __result: Map<K, V> = Map<K, V> {}
+                    stmts.push(mk_let_mut(&format!("__result_{depth}"), Some(ty.clone()), Expr::MapLit {
                         key_type: type_args[0].clone(),
                         value_type: type_args[1].clone(),
                         entries: vec![],
@@ -2642,7 +2642,7 @@ fn mk_let_decode_at(var_name: &str, ty: &TypeExpr, depth: usize) -> Result<Vec<S
                                 },
                                 span: mk_span(),
                             },
-                            is_mut: false,
+                            is_mut: true,
                         },
                         span: mk_span(),
                     });

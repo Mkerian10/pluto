@@ -1136,7 +1136,7 @@ fn f(b: bytes) int {
 }
 
 fn main() {
-    let b = bytes_new()
+    let mut b = bytes_new()
     b.push(1 as byte)
     print(f(b))
 }

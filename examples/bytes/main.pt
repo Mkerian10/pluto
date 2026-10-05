@@ -17,7 +17,7 @@ fn main() int {
     print(f"-1 as byte = {neg}")
 
     // Bytes buffer
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(72 as byte)
     buf.push(101 as byte)
     buf.push(108 as byte)

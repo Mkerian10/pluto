@@ -935,7 +935,7 @@ fn param_len_guard_shrinks_with_caller_len_fact() {
         }
 
         fn main() {
-            let xs = [7, 8]
+            let mut xs = [7, 8]
             if xs.len() > 0 {
                 print(head(xs))
             }
@@ -960,7 +960,7 @@ fn param_len_guard_without_caller_fact_requires_handling() {
         }
 
         fn main() {
-            let xs = [7, 8]
+            let mut xs = [7, 8]
             print(head(xs))
         }
         "#,
@@ -1430,7 +1430,7 @@ fn skolem_dependent_guard_never_shrinks() {
         }
 
         fn main() {
-            let xs = [1, 2, 3]
+            let mut xs = [1, 2, 3]
             if xs.len() <= 10 {
                 print(cap(xs))
             }

@@ -254,7 +254,7 @@ fn sha256_compress(h: [int], k: [int], block: bytes, offset: int) [int] {
 //   let mut s = hash.new_sha256()
 //   s.update(chunk1)
 //   s.update(chunk2)
-//   let digest = s.finish()   // 32-byte bytes value
+//   let mut digest = s.finish()   // 32-byte bytes value
 //
 // finish() is a non-destructive snapshot: it pads and finalizes a COPY of
 // the running state, so it reports the digest of all bytes seen so far and

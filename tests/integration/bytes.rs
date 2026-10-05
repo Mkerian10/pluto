@@ -7,7 +7,7 @@ use common::*;
 fn byte_basic_cast_and_print() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = 42 as byte
+    let mut b = 42 as byte
     print(b as int)
     return 0
 }
@@ -34,7 +34,7 @@ fn main() int {
 fn byte_let_with_type_annotation() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b: byte = 65 as byte
+    let mut b: byte = 65 as byte
     print(b as int)
     return 0
 }
@@ -120,7 +120,7 @@ fn main() int {
 fn hex_literal_as_byte() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = 0xFF as byte
+    let mut b = 0xFF as byte
     print(b as int)
     return 0
 }
@@ -134,7 +134,7 @@ fn main() int {
 fn byte_cast_truncation() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = 256 as byte
+    let mut b = 256 as byte
     print(b as int)
     return 0
 }
@@ -146,7 +146,7 @@ fn main() int {
 fn byte_cast_negative() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = -1 as byte
+    let mut b = -1 as byte
     print(b as int)
     return 0
 }
@@ -158,7 +158,7 @@ fn main() int {
 fn byte_cast_roundtrip() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = 42 as byte
+    let mut b = 42 as byte
     let i = b as int
     print(i)
     return 0
@@ -174,7 +174,7 @@ fn byte_equality() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let a = 42 as byte
-    let b = 42 as byte
+    let mut b = 42 as byte
     let c = 43 as byte
     if a == b {
         print("eq")
@@ -195,7 +195,7 @@ fn byte_ordering() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let a = 10 as byte
-    let b = 20 as byte
+    let mut b = 20 as byte
     if a < b {
         print("lt")
     }
@@ -236,7 +236,7 @@ fn main() int {
 fn bytes_new_push_len() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(65 as byte)
     buf.push(66 as byte)
     buf.push(67 as byte)
@@ -253,10 +253,10 @@ fn main() int {
 fn bytes_index_read() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(65 as byte)
     buf.push(66 as byte)
-    let b = buf[0]
+    let mut b = buf[0]
     print(b as int)
     print(buf[1] as int)
     return 0
@@ -285,7 +285,7 @@ fn main() int {
 fn bytes_for_loop() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(1 as byte)
     buf.push(2 as byte)
     buf.push(3 as byte)
@@ -306,10 +306,10 @@ fn main() int {
 fn bytes_to_string() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(72 as byte)
     buf.push(105 as byte)
-    let s = buf.to_string()
+    let mut s = buf.to_string()
     print(s)
     return 0
 }
@@ -321,8 +321,8 @@ fn main() int {
 fn string_to_bytes() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = "ABC"
-    let buf = s.to_bytes()
+    let mut s = "ABC"
+    let mut buf = s.to_bytes()
     print(buf.len())
     print(buf[0] as int)
     print(buf[1] as int)
@@ -338,7 +338,7 @@ fn string_to_bytes_to_string_roundtrip() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let original = "Hello"
-    let buf = original.to_bytes()
+    let mut buf = original.to_bytes()
     let restored = buf.to_string()
     print(restored)
     return 0
@@ -352,11 +352,11 @@ fn bytes_interior_nul_truncates_on_print() {
     // Known limitation: NUL-terminated strings truncate on print
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(65 as byte)
     buf.push(0 as byte)
     buf.push(66 as byte)
-    let s = buf.to_string()
+    let mut s = buf.to_string()
     print(s)
     return 0
 }
@@ -387,7 +387,7 @@ fn main() int {
 fn byte_as_set_element() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let s = Set<byte> {}
+    let mut s = Set<byte> {}
     s.insert(10 as byte)
     s.insert(20 as byte)
     s.insert(10 as byte)
@@ -407,7 +407,7 @@ fn main() int {
 fn byte_string_interpolation() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = 42 as byte
+    let mut b = 42 as byte
     print(f"value: {b}")
     return 0
 }
@@ -429,7 +429,7 @@ fn sum_bytes(buf: bytes) int {
 }
 
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(10 as byte)
     buf.push(20 as byte)
     buf.push(30 as byte)
@@ -444,14 +444,14 @@ fn main() int {
 fn bytes_as_function_return() {
     let out = compile_and_run_stdout(r#"
 fn make_bytes() bytes {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(1 as byte)
     buf.push(2 as byte)
     return buf
 }
 
 fn main() int {
-    let buf = make_bytes()
+    let mut buf = make_bytes()
     print(buf.len())
     print(buf[0] as int)
     return 0
@@ -466,7 +466,7 @@ fn main() int {
 fn byte_test_to_equal() {
     let (stdout, _stderr, code) = compile_test_and_run(r#"
 test "byte equality" {
-    let b = 42 as byte
+    let mut b = 42 as byte
     expect(b).to_equal(42 as byte)
 }
 "#);
@@ -477,10 +477,10 @@ test "byte equality" {
 
 #[test]
 fn byte_no_implicit_coercion() {
-    // `let b: byte = 42` should fail — 42 is int, not byte
+    // `let mut b: byte = 42` should fail — 42 is int, not byte
     compile_should_fail_with(r#"
 fn main() int {
-    let b: byte = 42
+    let mut b: byte = 42
     return 0
 }
 "#, "expected byte, found int");
@@ -491,7 +491,7 @@ fn bytes_equality_disallowed() {
     compile_should_fail_with(r#"
 fn main() int {
     let a = bytes_new()
-    let b = bytes_new()
+    let mut b = bytes_new()
     if a == b {
         print("same")
     }
@@ -514,7 +514,7 @@ test "bytes eq" {
 fn bytes_push_wrong_type() {
     compile_should_fail_with(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(42)
     return 0
 }
@@ -525,7 +525,7 @@ fn main() int {
 fn bytes_unknown_method() {
     compile_should_fail_with(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.foo()
     return 0
 }
@@ -538,7 +538,7 @@ fn main() int {
 fn bytes_oob_index_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(1 as byte)
     let x = buf[5]
     return 0
@@ -554,7 +554,7 @@ fn main() int {
 fn bytes_grow_beyond_initial_capacity() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     let mut i = 0
     while i < 100 {
         buf.push((i as byte))
@@ -580,7 +580,7 @@ extern fn __pluto_string_to_bytes(s: string) bytes
 extern fn __pluto_bytes_len(b: bytes) int
 
 fn main() int {
-    let b = __pluto_string_to_bytes("hey")
+    let mut b = __pluto_string_to_bytes("hey")
     print(__pluto_bytes_len(b))
     return 0
 }
@@ -597,7 +597,7 @@ fn main() int {
 fn fstring_interpolation_of_bytes_rejected() {
     compile_should_fail_with(r#"
 fn main() {
-    let b = bytes_new()
+    let mut b = bytes_new()
     b.push(65 as byte)
     print(f"{b}")
 }
@@ -610,13 +610,13 @@ fn main() {
 fn string_bytes_round_trip_all_256_values() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     let mut i = 0
     while i < 256 {
         buf.push(i as byte)
         i = i + 1
     }
-    let s = buf.to_string()
+    let mut s = buf.to_string()
     let back = s.to_bytes()
     let mut ok = back.len() == 256
     let mut j = 0
@@ -665,7 +665,7 @@ fn main() {
     let server = net.listen("127.0.0.1", 0)
     let port = server.port()
 
-    let payload = bytes_new()
+    let mut payload = bytes_new()
     let mut i = 0
     while i < 256 {
         payload.push(i as byte)
@@ -677,7 +677,7 @@ fn main() {
     print(wrote)
 
     let conn = server.accept()
-    let got = bytes_new()
+    let mut got = bytes_new()
     while got.len() < 256 {
         let chunk = conn.read_bytes(256 - got.len())
         if chunk.len() == 0 {
@@ -720,7 +720,7 @@ fn main() {
     let port = server.port()
 
     let client = net.connect("127.0.0.1", port)
-    let data = bytes_new()
+    let mut data = bytes_new()
     data.push(0 as byte)
     data.push(255 as byte)
     print(client.write_bytes(data))

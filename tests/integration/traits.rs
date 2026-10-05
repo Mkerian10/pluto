@@ -167,7 +167,7 @@ class Square impl Shape {
     }
 }
 
-fn describe(s: Shape) {
+fn describe(mut s: Shape) {
     print(s.name())
     print(s.area())
     print(s.perimeter())
@@ -336,7 +336,7 @@ class Cat impl Speaker {
 }
 
 fn main() {
-    let animals: [Speaker] = []
+    let mut animals: [Speaker] = []
     animals.push(Dog { volume: 10 })
     animals.push(Cat { volume: 5 })
     animals.push(Dog { volume: 7 })
@@ -374,7 +374,7 @@ class B impl Valued {
 }
 
 fn main() {
-    let items: [Valued] = []
+    let mut items: [Valued] = []
     items.push(A { x: 1 })
     items.push(B { y: 2 })
     items.push(A { x: 3 })
@@ -786,7 +786,7 @@ class Data impl Stats {
     }
 }
 
-fn show_stats(s: Stats) {
+fn show_stats(mut s: Stats) {
     print(s.min_val())
     print(s.max_val())
     print(s.avg_val())
@@ -1141,7 +1141,7 @@ class Range impl Lister {
     n: int
 
     fn items(self) [int] {
-        let result: [int] = []
+        let mut result: [int] = []
         let mut i = 0
         while i < self.n {
             result.push(i)
@@ -1152,7 +1152,7 @@ class Range impl Lister {
 }
 
 fn show(l: Lister) {
-    let items = l.items()
+    let mut items = l.items()
     print(items.len())
 }
 
@@ -1181,7 +1181,7 @@ class Box impl Transformer {
 }
 
 fn run(t: Transformer) {
-    let result = t.transform((x: int) => x * 3)
+    let mut result = t.transform((x: int) => x * 3)
     print(result)
 }
 
@@ -1293,7 +1293,7 @@ class Record impl Summarizer {
     }
 }
 
-fn show(s: Summarizer) {
+fn show(mut s: Summarizer) {
     print(s.summary())
 }
 
@@ -1321,7 +1321,7 @@ class Impl impl BigSig {
     }
 }
 
-fn run(s: BigSig) {
+fn run(mut s: BigSig) {
     print(s.compute(1, 2, 3, 4, 5, 6, 7, 8))
 }
 
@@ -1381,7 +1381,7 @@ class Dog impl Speaker {
     }
 }
 
-fn make_fn(s: Speaker) fn() int {
+fn make_fn(mut s: Speaker) fn() int {
     return () => s.speak()
 }
 
@@ -1565,12 +1565,12 @@ class TenSummer impl Summer {
     }
 }
 
-fn run(s: Summer) {
+fn run(mut s: Summer) {
     print(s.sum())
 }
 
 fn main() {
-    let s = TenSummer { tag: 0 }
+    let mut s = TenSummer { tag: 0 }
     run(s)
 }
 "#);
@@ -1881,7 +1881,7 @@ class MyList impl Sizable {
     }
 }
 
-fn show(s: Sizable) {
+fn show(mut s: Sizable) {
     print(s.len())
 }
 
@@ -2086,12 +2086,12 @@ class Stack<T> impl Sizable {
     }
 }
 
-fn show(s: Sizable) {
+fn show(mut s: Sizable) {
     print(s.size())
 }
 
 fn main() {
-    let s = Stack<int> { count: 5 }
+    let mut s = Stack<int> { count: 5 }
     show(s)
 }
 "#);
@@ -2152,7 +2152,7 @@ class SafeAdder impl Adder {
 }
 
 fn use_adder(a: Adder) int {
-    let result = a.add(1000) catch -1
+    let mut result = a.add(1000) catch -1
     return result
 }
 
@@ -2193,7 +2193,7 @@ fn run_calc(c: Calculator, x: int) int {
 
 fn main() {
     let d = Divider { divisor: 2 }
-    let result = run_calc(d, 10) catch 0
+    let mut result = run_calc(d, 10) catch 0
     print(result)
 }
 "#);
@@ -2338,7 +2338,7 @@ class SimpleFinder impl Finder {
 }
 
 fn search(f: Finder, key: int) int? {
-    let result = f.find(key)
+    let mut result = f.find(key)
     return result
 }
 
@@ -2483,7 +2483,7 @@ class Adder impl Summable {
     }
 }
 
-fn run(s: Summable) {
+fn run(mut s: Summable) {
     let nums: [int] = [1, 2, 3, 4, 5]
     print(s.sum(nums))
 }
@@ -2672,7 +2672,7 @@ class Game impl Scorer {
     fn score(self) int { return self.s }
 }
 
-fn report(n: Namer, s: Scorer) {
+fn report(n: Namer, mut s: Scorer) {
     print(n.name())
     print(s.score())
 }
@@ -2793,8 +2793,8 @@ class Selector impl Indexer {
 }
 
 fn main() {
-    let arr: [int] = [10, 20, 30, 40, 50]
-    let s: Indexer = Selector { idx: 2 }
+    let mut arr: [int] = [10, 20, 30, 40, 50]
+    let mut s: Indexer = Selector { idx: 2 }
     print(arr[s.index()])
 }
 "#);
@@ -2965,7 +2965,7 @@ class Adder impl Summer {
     }
 }
 
-fn run(s: Summer) {
+fn run(mut s: Summer) {
     print(s.sum_to(5))
 }
 
@@ -2996,7 +2996,7 @@ class RangeSummer impl Summer {
     }
 }
 
-fn run(s: Summer) {
+fn run(mut s: Summer) {
     print(s.sum_range(1, 4))
 }
 
@@ -3052,7 +3052,7 @@ class SumCollector impl Collector {
     base: int
 
     fn collect(self, n: int) int {
-        let arr: [int] = []
+        let mut arr: [int] = []
         let mut i = 0
         while i < n {
             arr.push(i + self.base)
@@ -3403,7 +3403,7 @@ class Record impl Summary {
     }
 }
 
-fn show(s: Summary) {
+fn show(mut s: Summary) {
     print(s.total())
 }
 
@@ -3437,7 +3437,7 @@ class Large impl Sized {
     fn size(self) int { return 5 }
 }
 
-fn show(s: Sized) {
+fn show(mut s: Sized) {
     print(s.size())
 }
 
@@ -3496,7 +3496,7 @@ class Value impl Scaler {
     }
 }
 
-fn run(s: Scaler) {
+fn run(mut s: Scaler) {
     print(s.scale(2.0))
 }
 
@@ -3617,7 +3617,7 @@ class Server impl Stateful {
     }
 }
 
-fn check(s: Stateful) {
+fn check(mut s: Stateful) {
     match s.status() {
         Status.Active {
             print(1)
@@ -3678,13 +3678,13 @@ fn trait_method_modifies_array_param() {
     // Trait method receives array and modifies it (arrays are heap, passed by reference)
     let out = compile_and_run_stdout(r#"
 trait Filler {
-    fn fill(self, arr: [int])
+    fn fill(self, mut arr: [int])
 }
 
 class ConstFiller impl Filler {
     value: int
 
-    fn fill(self, arr: [int]) {
+    fn fill(self, mut arr: [int]) {
         let mut i = 0
         while i < 3 {
             arr.push(self.value)
@@ -3694,7 +3694,7 @@ class ConstFiller impl Filler {
 }
 
 fn run(f: Filler) {
-    let arr: [int] = []
+    let mut arr: [int] = []
     f.fill(arr)
     print(arr.len())
     print(arr[0])
@@ -3962,7 +3962,7 @@ class Num impl Signum {
     }
 }
 
-fn show(s: Signum) {
+fn show(mut s: Signum) {
     print(s.sign())
 }
 
@@ -4059,7 +4059,7 @@ class User impl Named {
 }
 
 fn name_length(n: Named) {
-    let s = n.name()
+    let mut s = n.name()
     print(s.len())
 }
 
@@ -4117,7 +4117,7 @@ class X impl Valued {
 
 fn main() {
     let v: Valued = X { n: 10 }
-    let result = v.val()
+    let mut result = v.val()
     print(result)
     print(result + 1)
     print(result * 2)
@@ -4316,7 +4316,7 @@ class Player impl Scorer {
     fn score(self) int { return self.points }
 }
 
-fn grade(s: Scorer) {
+fn grade(mut s: Scorer) {
     if s.score() > 90 {
         print("A")
     } else {
@@ -4761,7 +4761,7 @@ class Negative impl Scorer {
     fn score(self) int { return -self.val }
 }
 
-fn show(s: Scorer) {
+fn show(mut s: Scorer) {
     print(s.score())
 }
 
@@ -4902,12 +4902,12 @@ class SafeInt impl Bounded {
 }
 
 fn try_add(b: Bounded, x: int) {
-    let result = b.add(x) catch -1
+    let mut result = b.add(x) catch -1
     print(result)
 }
 
 fn main() {
-    let s = SafeInt { max: 10 }
+    let mut s = SafeInt { max: 10 }
     try_add(s, 5)
     try_add(s, 20)
 }
@@ -5015,7 +5015,7 @@ class Foo impl Named {
 }
 
 fn show_len(n: Named) {
-    let s = n.name()
+    let mut s = n.name()
     print(s.len())
 }
 
@@ -5403,7 +5403,7 @@ class Named2 impl Named {
 }
 
 fn show(n: Named) {
-    let s = n.name()
+    let mut s = n.name()
     if s.len() == 0 {
         print("anonymous")
     } else {
@@ -5573,13 +5573,13 @@ fn trait_method_body_with_break() {
     // Trait method body uses break in a while loop
     let out = compile_and_run_stdout(r#"
 trait Finder {
-    fn find_first_gt(self, arr: [int], threshold: int) int
+    fn find_first_gt(self, mut arr: [int], threshold: int) int
 }
 
 class LinearFinder impl Finder {
     default_val: int
 
-    fn find_first_gt(self, arr: [int], threshold: int) int {
+    fn find_first_gt(self, mut arr: [int], threshold: int) int {
         let mut i = 0
         while i < arr.len() {
             if arr[i] > threshold {
@@ -5592,7 +5592,7 @@ class LinearFinder impl Finder {
 }
 
 fn run(f: Finder) {
-    let arr: [int] = [1, 3, 7, 2, 9]
+    let mut arr: [int] = [1, 3, 7, 2, 9]
     print(f.find_first_gt(arr, 5))
     print(f.find_first_gt(arr, 100))
 }
@@ -5733,7 +5733,7 @@ class X impl Valued {
 
 fn main() {
     let v: Valued = X { n: 5 }
-    let result = v.val() * 3 + v.val() - 2
+    let mut result = v.val() * 3 + v.val() - 2
     print(result)
 }
 "#);
@@ -5793,7 +5793,7 @@ class Num impl Source {
 }
 
 fn main() {
-    let s: Source = Num { n: 5 }
+    let mut s: Source = Num { n: 5 }
     print(double(add_one(s.get())))
 }
 "#);
@@ -6191,7 +6191,7 @@ class FourFields impl Summary {
     }
 }
 
-fn show(s: Summary) {
+fn show(mut s: Summary) {
     print(s.sum())
 }
 
@@ -6293,7 +6293,7 @@ class Bare impl Simple {
     fn val(self) int { return self.n }
 }
 
-fn show(s: Simple) {
+fn show(mut s: Simple) {
     print(s.val())
 }
 
@@ -6579,13 +6579,13 @@ fn trait_method_with_array_param_and_base() {
     // Trait method takes an array parameter and adds to base
     let out = compile_and_run_stdout(r#"
 trait Summable {
-    fn sum(self, arr: [int]) int
+    fn sum(self, mut arr: [int]) int
 }
 
 class Adder impl Summable {
     base: int
 
-    fn sum(self, arr: [int]) int {
+    fn sum(self, mut arr: [int]) int {
         let mut total = self.base
         let mut i = 0
         while i < arr.len() {
@@ -6596,7 +6596,7 @@ class Adder impl Summable {
     }
 }
 
-fn run(s: Summable) {
+fn run(mut s: Summable) {
     let nums: [int] = [1, 2, 3, 4, 5]
     print(s.sum(nums))
 }
@@ -6620,7 +6620,7 @@ class Counter impl Generator {
     start: int
 
     fn generate(self, count: int) [int] {
-        let result: [int] = []
+        let mut result: [int] = []
         let mut i = 0
         while i < count {
             result.push(self.start + i)
@@ -6631,7 +6631,7 @@ class Counter impl Generator {
 }
 
 fn show(g: Generator) {
-    let arr = g.generate(3)
+    let mut arr = g.generate(3)
     let mut i = 0
     while i < arr.len() {
         print(arr[i])
@@ -6651,20 +6651,20 @@ fn trait_method_appends_to_array() {
     // Trait method receives array and adds to it (heap shared)
     let out = compile_and_run_stdout(r#"
 trait Appender {
-    fn append(self, arr: [int])
+    fn append(self, mut arr: [int])
 }
 
 class DoubleAppender impl Appender {
     val: int
 
-    fn append(self, arr: [int]) {
+    fn append(self, mut arr: [int]) {
         arr.push(self.val)
         arr.push(self.val * 2)
     }
 }
 
 fn run(a: Appender) {
-    let arr: [int] = [1]
+    let mut arr: [int] = [1]
     a.append(arr)
     let mut i = 0
     while i < arr.len() {
@@ -6706,7 +6706,7 @@ class B impl Valued {
 fn main() {
     let a: Valued = A { n: 3 }
     let b: Valued = B { n: 4 }
-    let results: [int] = []
+    let mut results: [int] = []
     results.push(a.val())
     results.push(b.val())
     results.push(a.val() + b.val())
@@ -7142,7 +7142,7 @@ trait Scorer {
     fn raw_score(self) int
 
     fn grade(self) string {
-        let s = self.raw_score()
+        let mut s = self.raw_score()
         if s >= 90 {
             return "A"
         }
@@ -7161,7 +7161,7 @@ class Student impl Scorer {
     fn raw_score(self) int { return self.points }
 }
 
-fn show(s: Scorer) {
+fn show(mut s: Scorer) {
     print(s.grade())
 }
 
@@ -7194,7 +7194,7 @@ class Full impl Named {
 }
 
 fn show(n: Named) {
-    let s = n.name()
+    let mut s = n.name()
     if s.len() > 0 {
         print(s)
     } else {
@@ -7246,7 +7246,7 @@ class X impl Simple {
     fn extra(self) int { return 99 }
 }
 
-fn use_it(s: Simple) {
+fn use_it(mut s: Simple) {
     print(s.extra())
 }
 
@@ -7273,7 +7273,7 @@ class L impl Logger {
 
 fn main() {
     let l: Logger = L { val: 0 }
-    let result = l.log("test")
+    let mut result = l.log("test")
     print("ok")
 }
 "#);
@@ -7328,7 +7328,7 @@ class Container<T> impl HasSize, HasLabel {
     fn label(self) string { return self.name }
 }
 
-fn show_size(s: HasSize) { print(s.size()) }
+fn show_size(mut s: HasSize) { print(s.size()) }
 fn show_label(l: HasLabel) { print(l.label()) }
 
 fn main() {
@@ -7644,13 +7644,13 @@ class ArraySearcher impl Searcher {
     }
 }
 
-fn run(s: Searcher) {
+fn run(mut s: Searcher) {
     print(s.find(30))
     print(s.find(99))
 }
 
 fn main() {
-    let arr: [int] = [10, 20, 30, 40, 50]
+    let mut arr: [int] = [10, 20, 30, 40, 50]
     run(ArraySearcher { data: arr })
 }
 "#);
@@ -7758,7 +7758,7 @@ class RangeBuilder impl Builder {
     start: int
 
     fn build(self, n: int) [int] {
-        let arr: [int] = []
+        let mut arr: [int] = []
         let mut i = 0
         while i < n {
             arr.push(self.start + i)
@@ -7769,7 +7769,7 @@ class RangeBuilder impl Builder {
 }
 
 fn show(b: Builder) {
-    let arr = b.build(4)
+    let mut arr = b.build(4)
     let mut i = 0
     while i < arr.len() {
         print(arr[i])
@@ -7827,7 +7827,7 @@ class Adder impl Summer {
     }
 }
 
-fn run(s: Summer) {
+fn run(mut s: Summer) {
     print(s.sum_to(5))
 }
 
@@ -7935,7 +7935,7 @@ fn try_parse(p: Parser, input: string) int {
 
 fn main() {
     let p = IntParser { val: 0 }
-    let result = try_parse(p, "good") catch -1
+    let mut result = try_parse(p, "good") catch -1
     print(result)
     let result2 = try_parse(p, "bad") catch -1
     print(result2)
@@ -7963,7 +7963,7 @@ fn apply_fn(f: fn(Valued) int, v: Valued) int {
 
 fn main() {
     let x = X { n: 7 }
-    let result = apply_fn((v: Valued) => v.val() * 2, x)
+    let mut result = apply_fn((v: Valued) => v.val() * 2, x)
     print(result)
 }
 "#);
@@ -8018,7 +8018,7 @@ fn risky(x: int) int {
 }
 
 fn run(fb: Fallback) {
-    let result = risky(-1) catch fb.fallback_val()
+    let mut result = risky(-1) catch fb.fallback_val()
     print(result)
     let result2 = risky(10) catch fb.fallback_val()
     print(result2)
@@ -8251,7 +8251,7 @@ class Record impl Summary {
     }
 }
 
-fn show(s: Summary) {
+fn show(mut s: Summary) {
     print(s.summarize())
 }
 
@@ -8601,7 +8601,7 @@ trait Measurable {
     fn raw_size(self) int
 
     fn formatted_size(self) string {
-        let s = self.raw_size()
+        let mut s = self.raw_size()
         if s > 1000 {
             return "large"
         }
@@ -8647,7 +8647,7 @@ class Src impl Source {
     fn value(self) int { return self.v }
 }
 
-fn run(s: Source) {
+fn run(mut s: Source) {
     print(s.doubled())
     print(s.tripled())
 }
@@ -8814,12 +8814,12 @@ class Low impl Scorer {
     fn score(self) int { return self.s }
 }
 
-fn collect_score(s: Scorer) int {
+fn collect_score(mut s: Scorer) int {
     return s.score()
 }
 
 fn main() {
-    let results: [int] = []
+    let mut results: [int] = []
     results.push(collect_score(High { s: 100 }))
     results.push(collect_score(Low { s: 10 }))
     results.push(collect_score(High { s: 50 }))
@@ -9022,7 +9022,7 @@ class Item impl Namer, Sizer {
 }
 
 fn show_name(n: Namer) { print(n.name()) }
-fn show_size(s: Sizer) { print(s.size()) }
+fn show_size(mut s: Sizer) { print(s.size()) }
 
 fn main() {
     let item = Item { label: "box", count: 5 }
@@ -9055,7 +9055,7 @@ class BigRow impl Summable {
     }
 }
 
-fn run(s: Summable) { print(s.total()) }
+fn run(mut s: Summable) { print(s.total()) }
 
 fn main() {
     run(BigRow { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 })
@@ -9295,16 +9295,16 @@ fn trait_method_with_set_param() {
     // Trait method takes a Set<int> parameter
     let out = compile_and_run_stdout(r#"
 trait Analyzer {
-    fn count_unique(self, s: Set<int>) int
+    fn count_unique(self, mut s: Set<int>) int
 }
 
 class Counter impl Analyzer {
     tag: int
-    fn count_unique(self, s: Set<int>) int { return s.len() }
+    fn count_unique(self, mut s: Set<int>) int { return s.len() }
 }
 
 fn run(a: Analyzer) {
-    let s = Set<int> { 1, 2, 3, 2, 1 }
+    let mut s = Set<int> { 1, 2, 3, 2, 1 }
     print(a.count_unique(s))
 }
 
@@ -9326,7 +9326,7 @@ trait Producer {
 class SetMaker impl Producer {
     val: int
     fn produce(self) Set<int> {
-        let s = Set<int> {}
+        let mut s = Set<int> {}
         s.insert(self.val)
         s.insert(self.val + 1)
         return s
@@ -9334,7 +9334,7 @@ class SetMaker impl Producer {
 }
 
 fn run(p: Producer) {
-    let s = p.produce()
+    let mut s = p.produce()
     print(s.len())
     print(s.contains(10))
 }
@@ -9351,13 +9351,13 @@ fn trait_method_builds_set_in_loop() {
     // Trait method builds a set from array
     let out = compile_and_run_stdout(r#"
 trait Deduper {
-    fn dedup_count(self, arr: [int]) int
+    fn dedup_count(self, mut arr: [int]) int
 }
 
 class SetDeduper impl Deduper {
     tag: int
-    fn dedup_count(self, arr: [int]) int {
-        let s = Set<int> {}
+    fn dedup_count(self, mut arr: [int]) int {
+        let mut s = Set<int> {}
         let mut i = 0
         while i < arr.len() {
             s.insert(arr[i])
@@ -9368,7 +9368,7 @@ class SetDeduper impl Deduper {
 }
 
 fn run(d: Deduper) {
-    let arr: [int] = [1, 2, 2, 3, 3, 3]
+    let mut arr: [int] = [1, 2, 2, 3, 3, 3]
     print(d.dedup_count(arr))
 }
 
@@ -9424,7 +9424,7 @@ class EmptyFinder impl Finder {
 }
 
 fn run(f: Finder) {
-    let result = f.find_val(5)
+    let mut result = f.find_val(5)
     if result == none {
         print("not found")
     }
@@ -9456,7 +9456,7 @@ class IdentityFinder impl Finder {
 }
 
 fn run(f: Finder) int? {
-    let result = f.find_val(5)?
+    let mut result = f.find_val(5)?
     print(result)
     return result
 }
@@ -9517,7 +9517,7 @@ class Empty impl Source {
     fn get_val(self) int? { return none }
 }
 
-fn double_val(s: Source) int? {
+fn double_val(mut s: Source) int? {
     let v = s.get_val()?
     return v * 2
 }
@@ -9701,7 +9701,7 @@ class Box<T> impl Sizable {
     fn size(self) int { return self.count }
 }
 
-fn show_size(s: Sizable) { print(s.size()) }
+fn show_size(mut s: Sizable) { print(s.size()) }
 
 fn main() {
     show_size(Box<int> { val: 42, count: 1 })
@@ -9722,7 +9722,7 @@ trait Generator {
 class RangeGen impl Generator {
     start: int
     fn generate(self, n: int) [int] {
-        let result: [int] = []
+        let mut result: [int] = []
         let mut i = 0
         while i < n {
             result.push(self.start + i)
@@ -9733,7 +9733,7 @@ class RangeGen impl Generator {
 }
 
 fn run(g: Generator) {
-    let arr = g.generate(3)
+    let mut arr = g.generate(3)
     let mut i = 0
     while i < arr.len() {
         print(arr[i])
@@ -9783,12 +9783,12 @@ fn trait_dispatch_preserves_array_state() {
     // Array modified in trait method stays modified after dispatch
     let out = compile_and_run_stdout(r#"
 trait Appender {
-    fn append_vals(self, arr: [int])
+    fn append_vals(self, mut arr: [int])
 }
 
 class TripleAppender impl Appender {
     val: int
-    fn append_vals(self, arr: [int]) {
+    fn append_vals(self, mut arr: [int]) {
         arr.push(self.val)
         arr.push(self.val * 2)
         arr.push(self.val * 3)
@@ -9796,7 +9796,7 @@ class TripleAppender impl Appender {
 }
 
 fn run(a: Appender) {
-    let arr: [int] = [0]
+    let mut arr: [int] = [0]
     a.append_vals(arr)
     print(arr.len())
     print(arr[3])
@@ -9828,7 +9828,7 @@ class SimpleSummer impl Summer {
     }
 }
 
-fn run(s: Summer) {
+fn run(mut s: Summer) {
     print(s.sum_range(5))
 }
 
@@ -9844,12 +9844,12 @@ fn trait_method_with_for_array_body() {
     // Trait method body iterates array with for loop
     let out = compile_and_run_stdout(r#"
 trait Processor {
-    fn process(self, arr: [int]) int
+    fn process(self, mut arr: [int]) int
 }
 
 class MaxFinder impl Processor {
     tag: int
-    fn process(self, arr: [int]) int {
+    fn process(self, mut arr: [int]) int {
         let mut best = arr[0]
         for v in arr {
             if v > best {
@@ -9891,7 +9891,7 @@ class Player impl Named, Scored {
     fn score(self) int { return self.s }
 }
 
-fn report(n: Named, s: Scored) {
+fn report(n: Named, mut s: Scored) {
     print(f"{n.name()}: {s.score()}")
 }
 
@@ -10047,7 +10047,7 @@ class B impl ValSender {
     fn send_val(self, tx: Sender<int>) { tx.send(self.v * 10)! }
 }
 
-fn dispatch(s: ValSender, tx: Sender<int>) {
+fn dispatch(mut s: ValSender, tx: Sender<int>) {
     s.send_val(tx)!
 }
 
@@ -10154,7 +10154,7 @@ class Doubler impl Stepper {
     fn step(self, x: int) int { return x * 2 }
 }
 
-fn apply_n(s: Stepper, x: int, n: int) int {
+fn apply_n(mut s: Stepper, x: int, n: int) int {
     if n == 0 {
         return x
     }
@@ -10216,7 +10216,7 @@ class SafeDiv impl Safeguard {
     }
 }
 
-fn run(s: Safeguard) {
+fn run(mut s: Safeguard) {
     print(s.safe_div(10, 3))
     print(s.safe_div(10, 0))
 }
@@ -10241,7 +10241,7 @@ class Fixed impl Source {
     fn get(self) int { return self.v }
 }
 
-fn run(s: Source) {
+fn run(mut s: Source) {
     let val = s.get()
     print(val)
     print(val + 1)
@@ -10340,7 +10340,7 @@ class RangeFilter impl Filter {
     }
 }
 
-fn count_accepted(f: Filter, arr: [int]) int {
+fn count_accepted(f: Filter, mut arr: [int]) int {
     let mut count = 0
     let mut i = 0
     while i < arr.len() {
@@ -10629,7 +10629,7 @@ class ProviderB impl IDProvider {
 fn main() {
     let a: IDProvider = ProviderA { val: 1 }
     let b: IDProvider = ProviderB { val: 2 }
-    let s = Set<int> {}
+    let mut s = Set<int> {}
     s.insert(a.id())
     s.insert(b.id())
     print(s.len())
@@ -10824,7 +10824,7 @@ class Dog impl Labeled {
 }
 
 fn main() {
-    let animals: [Labeled] = []
+    let mut animals: [Labeled] = []
     animals.push(Dog { name: "Rex" })
 }
 "#, "expected trait Labeled");
@@ -10848,12 +10848,12 @@ class Cat impl Labeled {
     fn label(self) string { return f"cat:{self.name}" }
 }
 
-fn add_animal(animals: [Labeled], a: Labeled) {
+fn add_animal(mut animals: [Labeled], a: Labeled) {
     animals.push(a)
 }
 
 fn main() {
-    let animals: [Labeled] = []
+    let mut animals: [Labeled] = []
     add_animal(animals, Dog { name: "Rex" })
     add_animal(animals, Cat { name: "Mimi" })
     for a in animals {
@@ -10885,7 +10885,7 @@ class Ten impl Numberer {
 fn main() {
     let f: Numberer = Five { tag: 0 }
     let t: Numberer = Ten { tag: 0 }
-    let arr: [int] = []
+    let mut arr: [int] = []
     arr.push(f.num())
     arr.push(t.num())
     arr.push(f.num() + t.num())
@@ -11036,7 +11036,7 @@ class Rectangle impl Shape {
     fn name(self) string { return "rect" }
 }
 
-fn describe(s: Shape) {
+fn describe(mut s: Shape) {
     print(s.name())
     print(s.area())
     print(s.perimeter())
@@ -11075,7 +11075,7 @@ fn bigger(a: Sized_, b: Sized_) Sized_ {
 }
 
 fn main() {
-    let s: Sized_ = Small { tag: 0 }
+    let mut s: Sized_ = Small { tag: 0 }
     let b: Sized_ = Big { tag: 0 }
     let winner = bigger(s, b)
     print(winner.size())
@@ -11089,12 +11089,12 @@ fn trait_method_modifies_array_through_dispatch() {
     // Trait method takes mutable array and modifies it
     let out = compile_and_run_stdout(r#"
 trait Filler {
-    fn fill(self, arr: [int], count: int)
+    fn fill(self, mut arr: [int], count: int)
 }
 
 class ZeroFiller impl Filler {
     tag: int
-    fn fill(self, arr: [int], count: int) {
+    fn fill(self, mut arr: [int], count: int) {
         let mut i = 0
         while i < count {
             arr.push(0)
@@ -11105,7 +11105,7 @@ class ZeroFiller impl Filler {
 
 class SeqFiller impl Filler {
     start: int
-    fn fill(self, arr: [int], count: int) {
+    fn fill(self, mut arr: [int], count: int) {
         let mut i = 0
         while i < count {
             arr.push(self.start + i)
@@ -11115,7 +11115,7 @@ class SeqFiller impl Filler {
 }
 
 fn main() {
-    let arr: [int] = []
+    let mut arr: [int] = []
     let f: Filler = SeqFiller { start: 10 }
     f.fill(arr, 3)
     let mut i = 0
@@ -11511,12 +11511,12 @@ fn fail_trait_method_array_param_type_mismatch() {
     // Trait requires [int] but class impl provides [string]
     compile_should_fail_with(r#"
 trait Lister {
-    fn list(self, items: [int]) int
+    fn list(self, mut items: [int]) int
 }
 
 class BadLister impl Lister {
     tag: int
-    fn list(self, items: [string]) int { return 0 }
+    fn list(self, mut items: [string]) int { return 0 }
 }
 
 fn main() {
@@ -11538,7 +11538,7 @@ trait Producer_ {
 class BadProducer impl Producer_ {
     tag: int
     fn produce(self) [string] {
-        let arr: [string] = ["a"]
+        let mut arr: [string] = ["a"]
         return arr
     }
 }
@@ -11601,7 +11601,7 @@ class Counter_ impl Source_ {
 }
 
 fn main() {
-    let s: Source_ = Counter_ { start: 0 }
+    let mut s: Source_ = Counter_ { start: 0 }
     let mut val = 0
     val = s.next()
     print(val)
@@ -11617,12 +11617,12 @@ fn trait_method_with_while_and_break() {
     // Trait method body uses while loop with break
     let out = compile_and_run_stdout(r#"
 trait Searcher {
-    fn find_first_gt(self, arr: [int], threshold: int) int
+    fn find_first_gt(self, mut arr: [int], threshold: int) int
 }
 
 class LinearSearcher impl Searcher {
     tag: int
-    fn find_first_gt(self, arr: [int], threshold: int) int {
+    fn find_first_gt(self, mut arr: [int], threshold: int) int {
         let mut i = 0
         while i < arr.len() {
             if arr[i] > threshold {
@@ -11634,7 +11634,7 @@ class LinearSearcher impl Searcher {
     }
 }
 
-fn run(s: Searcher) {
+fn run(mut s: Searcher) {
     let data: [int] = [1, 5, 3, 8, 2]
     print(s.find_first_gt(data, 4))
     print(s.find_first_gt(data, 10))
@@ -11669,7 +11669,7 @@ class Complex_ impl Summary {
     fn summarize(self) string { return f"complex:{self.a},{self.b},{self.c}" }
 }
 
-fn show(s: Summary) {
+fn show(mut s: Summary) {
     print(s.summarize())
 }
 
@@ -11853,7 +11853,7 @@ trait Lister_ {
 class RangeList impl Lister_ {
     count: int
     fn items(self) [int] {
-        let arr: [int] = []
+        let mut arr: [int] = []
         let mut i = 0
         while i < self.count {
             arr.push(i)
@@ -11864,7 +11864,7 @@ class RangeList impl Lister_ {
 }
 
 fn run(l: Lister_) {
-    let arr = l.items()
+    let mut arr = l.items()
     print(arr.len())
     let mut i = 0
     while i < arr.len() {
@@ -12091,7 +12091,7 @@ class LinearScorer impl Scorer_ {
     fn score(self, round: int) int { return round * self.multiplier }
 }
 
-fn total_score(s: Scorer_, rounds: int) int {
+fn total_score(mut s: Scorer_, rounds: int) int {
     let mut total = 0
     for i in 1..rounds + 1 {
         total = total + s.score(i)
@@ -12124,12 +12124,12 @@ class B_ impl Valued_ {
     fn val(self) int { return self.n * 10 }
 }
 
-fn add_item(arr: [Valued_], item: Valued_) {
+fn add_item(mut arr: [Valued_], item: Valued_) {
     arr.push(item)
 }
 
 fn main() {
-    let items: [Valued_] = []
+    let mut items: [Valued_] = []
     add_item(items, A_ { n: 1 })
     add_item(items, B_ { n: 2 })
     add_item(items, A_ { n: 3 })
@@ -12295,7 +12295,7 @@ class FixedSource impl IntSource {
 }
 
 fn main() {
-    let s: IntSource = FixedSource { val: 7 }
+    let mut s: IntSource = FixedSource { val: 7 }
     let f = s.get() as float
     print(f)
 }
@@ -12400,7 +12400,7 @@ fn format(p: Prefix, msg: string) string {
 
 fn main() {
     let b: Prefix = BangPrefix { tag: 0 }
-    let s: Prefix = StarPrefix { tag: 0 }
+    let mut s: Prefix = StarPrefix { tag: 0 }
     print(format(b, "urgent"))
     print(format(s, "tag"))
 }
@@ -12499,7 +12499,7 @@ class Pos impl SignedVal {
 }
 
 fn main() {
-    let s: SignedVal = Pos { n: 42 }
+    let mut s: SignedVal = Pos { n: 42 }
     print(0 - s.val())
 }
 "#);
@@ -12596,7 +12596,7 @@ class Hello_ impl Greeter_ {
     fn greet(self) string { return f"hi {self.name}" }
 }
 
-fn add(arr: [Greeter_], g: Greeter_) {
+fn add(mut arr: [Greeter_], g: Greeter_) {
     arr.push(g)
 }
 
@@ -12632,7 +12632,7 @@ class NotFoundStatus impl StatusCode {
     fn code(self) int { return 404 }
 }
 
-fn is_ok(s: StatusCode) bool {
+fn is_ok(mut s: StatusCode) bool {
     return s.code() == 200
 }
 
@@ -12665,7 +12665,7 @@ class NaiveSummer impl Summer_ {
     }
 }
 
-fn run(s: Summer_) {
+fn run(mut s: Summer_) {
     print(s.sum_to(5))
     print(s.sum_to(10))
 }
@@ -12760,12 +12760,12 @@ class C4 impl Ident {
     }
 }
 
-fn add_ident(arr: [Ident], item: Ident) {
+fn add_ident(mut arr: [Ident], item: Ident) {
     arr.push(item)
 }
 
 fn main() {
-    let items: [Ident] = []
+    let mut items: [Ident] = []
     add_ident(items, C1 { tag: 0 })
     add_ident(items, C2 { tag: 0 })
     add_ident(items, C3 { tag: 0 })
@@ -12932,7 +12932,7 @@ class Wrap<T> impl Sizer {
     fn size(self) int { return 1 }
 }
 
-fn show_size(s: Sizer) {
+fn show_size(mut s: Sizer) {
     print(s.size())
 }
 
@@ -12975,7 +12975,7 @@ fn sum_list(l: IntList) int {
     }
 }
 
-fn run(s: Summable) {
+fn run(mut s: Summable) {
     print(s.total())
 }
 
@@ -13106,7 +13106,7 @@ class ConstGen impl NumGen {
 
 fn main() {
     let g: NumGen = ConstGen { val: 7 }
-    let arr: [int] = [g.gen(), g.gen() + 1, g.gen() + 2]
+    let mut arr: [int] = [g.gen(), g.gen() + 1, g.gen() + 2]
     print(arr[0])
     print(arr[1])
     print(arr[2])
@@ -13288,13 +13288,13 @@ fn trait_method_with_nested_closures() {
     // Trait method uses a closure that captures a local variable
     let out = compile_and_run_stdout(r#"
 trait ArrayProcessor {
-    fn process(self, arr: [int]) [int]
+    fn process(self, mut arr: [int]) [int]
 }
 
 class Doubler_ impl ArrayProcessor {
     tag: int
-    fn process(self, arr: [int]) [int] {
-        let result: [int] = []
+    fn process(self, mut arr: [int]) [int] {
+        let mut result: [int] = []
         let mut i = 0
         while i < arr.len() {
             result.push(arr[i] * 2)
@@ -13326,12 +13326,12 @@ fn trait_method_with_break_in_while() {
     // Trait method uses break to exit loop early
     let out = compile_and_run_stdout(r#"
 trait SearchAlgo {
-    fn find(self, arr: [int], target: int) int
+    fn find(self, mut arr: [int], target: int) int
 }
 
 class LinearSearch impl SearchAlgo {
     tag: int
-    fn find(self, arr: [int], target: int) int {
+    fn find(self, mut arr: [int], target: int) int {
         let mut i = 0
         while i < arr.len() {
             if arr[i] == target {
@@ -13343,7 +13343,7 @@ class LinearSearch impl SearchAlgo {
     }
 }
 
-fn run(s: SearchAlgo) {
+fn run(mut s: SearchAlgo) {
     let data: [int] = [10, 20, 30, 40, 50]
     print(s.find(data, 30))
     print(s.find(data, 99))
@@ -13396,12 +13396,12 @@ class B impl Valued {
     fn val(self) int { return self.x * 10 }
 }
 
-fn add_item(arr: [Valued], v: Valued) {
+fn add_item(mut arr: [Valued], v: Valued) {
     arr.push(v)
 }
 
 fn main() {
-    let items: [Valued] = []
+    let mut items: [Valued] = []
     add_item(items, A { x: 1 })
     add_item(items, B { x: 2 })
     add_item(items, A { x: 3 })
@@ -13439,12 +13439,12 @@ class Doubler impl Transform {
     fn apply(self, x: int) int { return x * 2 }
 }
 
-fn pipeline(s: Source, t: Transform) int {
+fn pipeline(mut s: Source, t: Transform) int {
     return t.apply(s.produce())
 }
 
 fn main() {
-    let s: Source = NumSource { n: 7 }
+    let mut s: Source = NumSource { n: 7 }
     let t: Transform = Doubler { tag: 0 }
     print(pipeline(s, t))
 }
@@ -13511,24 +13511,24 @@ fn trait_method_modifies_array_param_visible_to_caller() {
     // Trait method pushes to array param; changes visible after dispatch
     let out = compile_and_run_stdout(r#"
 trait Filler {
-    fn fill(self, arr: [int])
+    fn fill(self, mut arr: [int])
 }
 
 class TripleFiller impl Filler {
     base: int
-    fn fill(self, arr: [int]) {
+    fn fill(self, mut arr: [int]) {
         arr.push(self.base)
         arr.push(self.base + 1)
         arr.push(self.base + 2)
     }
 }
 
-fn do_fill(f: Filler, arr: [int]) {
+fn do_fill(f: Filler, mut arr: [int]) {
     f.fill(arr)
 }
 
 fn main() {
-    let arr: [int] = []
+    let mut arr: [int] = []
     let f: Filler = TripleFiller { base: 10 }
     do_fill(f, arr)
     print(arr.len())
@@ -13612,7 +13612,7 @@ class DoubleStepper impl Stepper {
     fn step(self, current: int) int { return current * 2 }
 }
 
-fn run(s: Stepper) {
+fn run(mut s: Stepper) {
     let mut val = 1
     while val < 100 {
         val = s.step(val)
@@ -13621,7 +13621,7 @@ fn run(s: Stepper) {
 }
 
 fn main() {
-    let s: Stepper = DoubleStepper { tag: 0 }
+    let mut s: Stepper = DoubleStepper { tag: 0 }
     run(s)
 }
 "#);
@@ -13903,7 +13903,7 @@ class Data impl Stats {
     fn max_val(self) int { return self.hi }
 }
 
-fn show(s: Stats) {
+fn show(mut s: Stats) {
     print(s.range())
 }
 
@@ -13938,12 +13938,12 @@ class Three impl Numbered {
     fn num(self) int { return 3 }
 }
 
-fn add_item(arr: [Numbered], n: Numbered) {
+fn add_item(mut arr: [Numbered], n: Numbered) {
     arr.push(n)
 }
 
 fn main() {
-    let items: [Numbered] = []
+    let mut items: [Numbered] = []
     add_item(items, One { tag: 0 })
     add_item(items, Two { tag: 0 })
     add_item(items, Three { tag: 0 })
@@ -14011,7 +14011,7 @@ class SubstringMatcher impl Matcher {
     }
 }
 
-fn check(m: Matcher, s: string) {
+fn check(m: Matcher, mut s: string) {
     if m.matches(s) {
         print(1)
     } else {
@@ -14061,12 +14061,12 @@ fn trait_method_iterates_array_param() {
     // Trait method uses for..in to iterate array parameter
     let out = compile_and_run_stdout(r#"
 trait Aggregator_ {
-    fn total(self, items: [int]) int
+    fn total(self, mut items: [int]) int
 }
 
 class Summer_ impl Aggregator_ {
     tag: int
-    fn total(self, items: [int]) int {
+    fn total(self, mut items: [int]) int {
         let mut sum = 0
         for v in items {
             sum = sum + v
@@ -14076,7 +14076,7 @@ class Summer_ impl Aggregator_ {
 }
 
 fn run(a: Aggregator_) {
-    let arr: [int] = [10, 20, 30]
+    let mut arr: [int] = [10, 20, 30]
     print(a.total(arr))
 }
 
@@ -14205,7 +14205,7 @@ class Server_ impl StatusProvider_ {
     }
 }
 
-fn check(s: StatusProvider_) {
+fn check(mut s: StatusProvider_) {
     match s.status() {
         Status_.Active {
             print("ok")
@@ -14276,7 +14276,7 @@ trait IntParser {
 class SafeParser impl IntParser {
     default_val: int
     fn parse(self, input: string) int? {
-        let result = input.to_int()
+        let mut result = input.to_int()
         if result == none {
             return self.default_val
         }
@@ -14355,7 +14355,7 @@ class HttpCheck impl PrefixCheck {
     }
 }
 
-fn check(p: PrefixCheck, s: string) {
+fn check(p: PrefixCheck, mut s: string) {
     if p.has_prefix(s) {
         print("yes")
     } else {
@@ -14433,7 +14433,7 @@ fn show(r: TextRepeater) {
 }
 
 fn main() {
-    let s: TextRepeater = Star { tag: 0 }
+    let mut s: TextRepeater = Star { tag: 0 }
     show(s)
 }
 "#);
@@ -14478,7 +14478,7 @@ trait Lister__ {
 class ListerImpl impl Lister__ {
     tag: int
     fn items(self) [int] {
-        let arr: [string] = ["a"]
+        let mut arr: [string] = ["a"]
         return arr
     }
 }
@@ -14532,7 +14532,7 @@ class FiveProducer impl IntProducer {
 
 fn main() {
     let p: IntProducer = FiveProducer { tag: 0 }
-    let arr: [int] = []
+    let mut arr: [int] = []
     arr.push(p.produce())
     arr.push(p.produce())
     arr.push(p.produce())
@@ -14548,12 +14548,12 @@ fn trait_method_complex_search_with_early_return() {
     // Trait method with if/else + for + early return
     let out = compile_and_run_stdout(r#"
 trait ArraySearcher {
-    fn find_first_above(self, items: [int], threshold: int) int
+    fn find_first_above(self, mut items: [int], threshold: int) int
 }
 
 class LinearSearcher impl ArraySearcher {
     tag: int
-    fn find_first_above(self, items: [int], threshold: int) int {
+    fn find_first_above(self, mut items: [int], threshold: int) int {
         for v in items {
             if v > threshold {
                 return v
@@ -14563,14 +14563,14 @@ class LinearSearcher impl ArraySearcher {
     }
 }
 
-fn run(s: ArraySearcher) {
-    let arr: [int] = [1, 5, 3, 8, 2]
+fn run(mut s: ArraySearcher) {
+    let mut arr: [int] = [1, 5, 3, 8, 2]
     print(s.find_first_above(arr, 4))
     print(s.find_first_above(arr, 10))
 }
 
 fn main() {
-    let s: ArraySearcher = LinearSearcher { tag: 0 }
+    let mut s: ArraySearcher = LinearSearcher { tag: 0 }
     run(s)
 }
 "#);
@@ -14600,7 +14600,7 @@ class StrictTextParser impl TextParser {
 }
 
 fn safe_parse(p: TextParser, input: string) {
-    let result = p.parse(input) catch err {
+    let mut result = p.parse(input) catch err {
         print("error")
         0
     }
@@ -14662,7 +14662,7 @@ fn run(bs: BigSig_) {
 }
 
 fn main() {
-    let s: BigSig_ = Summer { tag: 0 }
+    let mut s: BigSig_ = Summer { tag: 0 }
     run(s)
 }
 "#);
@@ -14757,7 +14757,7 @@ class RangeSet impl SetBuilder {
     start: int
     end: int
     fn build_set(self) Set<int> {
-        let s = Set<int> {}
+        let mut s = Set<int> {}
         for i in self.start..self.end {
             s.insert(i)
         }
@@ -14766,7 +14766,7 @@ class RangeSet impl SetBuilder {
 }
 
 fn show(sb: SetBuilder) {
-    let s = sb.build_set()
+    let mut s = sb.build_set()
     print(s.len())
 }
 
@@ -14824,12 +14824,12 @@ class Neg impl Valued__ {
     fn val(self) int { return 0 - self.n }
 }
 
-fn add_valued(arr: [Valued__], v: Valued__) {
+fn add_valued(mut arr: [Valued__], v: Valued__) {
     arr.push(v)
 }
 
 fn main() {
-    let items: [Valued__] = []
+    let mut items: [Valued__] = []
     add_valued(items, Pos { n: 10 })
     add_valued(items, Neg { n: 5 })
     add_valued(items, Pos { n: 3 })
@@ -15036,16 +15036,16 @@ class Val impl Doubler {
     fn double(self) int { return self.n * 2 }
 }
 
-fn add_doubler(arr: [Doubler], d: Doubler) {
+fn add_doubler(mut arr: [Doubler], d: Doubler) {
     arr.push(d)
 }
 
 fn main() {
-    let items: [Doubler] = []
+    let mut items: [Doubler] = []
     add_doubler(items, Val { n: 1 })
     add_doubler(items, Val { n: 2 })
     add_doubler(items, Val { n: 3 })
-    let results: [int] = []
+    let mut results: [int] = []
     let mut i = 0
     while i < items.len() {
         results.push(items[i].double())
@@ -15413,7 +15413,7 @@ fn generic_trait_dynamic_dispatch() {
             }
         }
         fn main() {
-            let items: [Conv<int>] = [A { x: 3 }, B { y: 5 }]
+            let mut items: [Conv<int>] = [A { x: 3 }, B { y: 5 }]
             for it in items {
                 print(it.conv())
             }
@@ -15530,7 +15530,7 @@ fn generic_trait_default_method_uses_type_param() {
             fn one(self) U
 
             fn pair(self) [U] {
-                let arr: [U] = [self.one(), self.one()]
+                let mut arr: [U] = [self.one(), self.one()]
                 return arr
             }
         }
@@ -15681,7 +15681,7 @@ fn generic_class_impl_mixed_dispatch() {
             }
         }
         fn main() {
-            let items: [Conv<int>] = [Box<int> { value: 3 }, Fixed { n: 4 }]
+            let mut items: [Conv<int>] = [Box<int> { value: 3 }, Fixed { n: 4 }]
             for it in items {
                 print(it.conv())
             }

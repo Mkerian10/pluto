@@ -327,7 +327,7 @@ fn error_generic_fn_with_method_call_compiles() {
 #[test]
 fn error_builtin_method_bang_rejected() {
     compile_should_fail_with(
-        "fn main() {\n    let arr = [1, 2, 3]\n    arr.push(4)!\n}",
+        "fn main() {\n    let mut arr = [1, 2, 3]\n    arr.push(4)!\n}",
         "infallible",
     );
 }
@@ -335,7 +335,7 @@ fn error_builtin_method_bang_rejected() {
 #[test]
 fn error_builtin_method_catch_rejected() {
     compile_should_fail_with(
-        "fn main() {\n    let arr = [1, 2, 3]\n    let x = arr.len() catch 0\n}",
+        "fn main() {\n    let mut arr = [1, 2, 3]\n    let x = arr.len() catch 0\n}",
         "infallible",
     );
 }
@@ -343,7 +343,7 @@ fn error_builtin_method_catch_rejected() {
 #[test]
 fn error_builtin_method_bare_ok() {
     let out = compile_and_run_stdout(
-        "fn main() {\n    let arr = [1, 2, 3]\n    arr.push(4)\n    print(arr.len())\n}",
+        "fn main() {\n    let mut arr = [1, 2, 3]\n    arr.push(4)\n    print(arr.len())\n}",
     );
     assert_eq!(out, "4\n");
 }

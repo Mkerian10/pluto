@@ -5,7 +5,7 @@ use common::*;
 fn map_literal_and_get() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<string, int> { "a": 1, "b": 2 }
+    let mut m = Map<string, int> { "a": 1, "b": 2 }
     print(m["a"])
     print(m["b"])
     return 0
@@ -18,7 +18,7 @@ fn main() int {
 fn map_empty_literal() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<string, int> {}
+    let mut m = Map<string, int> {}
     print(m.len())
     return 0
 }
@@ -30,7 +30,7 @@ fn main() int {
 fn map_insert_and_get() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<string, int> {}
+    let mut m = Map<string, int> {}
     m.insert("x", 42)
     print(m["x"])
     return 0
@@ -43,7 +43,7 @@ fn main() int {
 fn map_contains() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<string, int> { "a": 1 }
+    let mut m = Map<string, int> { "a": 1 }
     print(m.contains("a"))
     print(m.contains("b"))
     return 0
@@ -56,7 +56,7 @@ fn main() int {
 fn map_remove() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<string, int> { "a": 1, "b": 2 }
+    let mut m = Map<string, int> { "a": 1, "b": 2 }
     m.remove("a")
     print(m.len())
     print(m.contains("a"))
@@ -71,7 +71,7 @@ fn main() int {
 fn map_len() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<string, int> { "a": 1, "b": 2, "c": 3 }
+    let mut m = Map<string, int> { "a": 1, "b": 2, "c": 3 }
     print(m.len())
     return 0
 }
@@ -83,7 +83,7 @@ fn main() int {
 fn map_overwrite() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<string, int> { "a": 1 }
+    let mut m = Map<string, int> { "a": 1 }
     m.insert("a", 99)
     print(m["a"])
     print(m.len())
@@ -113,7 +113,7 @@ fn main() int {
 fn map_int_keys() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<int, string> { 1: "one", 2: "two" }
+    let mut m = Map<int, string> { 1: "one", 2: "two" }
     print(m[1])
     print(m[2])
     return 0
@@ -126,7 +126,7 @@ fn main() int {
 fn map_bool_keys() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<bool, int> { true: 1, false: 0 }
+    let mut m = Map<bool, int> { true: 1, false: 0 }
     print(m[true])
     print(m[false])
     return 0
@@ -139,7 +139,7 @@ fn main() int {
 fn map_keys_method() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<int, string> { 10: "ten", 20: "twenty" }
+    let mut m = Map<int, string> { 10: "ten", 20: "twenty" }
     let keys = m.keys()
     print(keys.len())
     return 0
@@ -152,7 +152,7 @@ fn main() int {
 fn map_values_method() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<int, string> { 10: "ten", 20: "twenty" }
+    let mut m = Map<int, string> { 10: "ten", 20: "twenty" }
     let vals = m.values()
     print(vals.len())
     return 0
@@ -165,7 +165,7 @@ fn main() int {
 fn map_iterate_keys() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<int, int> { 1: 10, 2: 20, 3: 30 }
+    let mut m = Map<int, int> { 1: 10, 2: 20, 3: 30 }
     let mut total = 0
     for k in m.keys() {
         total = total + m[k]
@@ -189,7 +189,7 @@ fn sum_values(m: Map<string, int>) int {
 }
 
 fn main() int {
-    let m = Map<string, int> { "a": 10, "b": 20 }
+    let mut m = Map<string, int> { "a": 10, "b": 20 }
     print(sum_values(m))
     return 0
 }
@@ -205,7 +205,7 @@ fn make_map() Map<string, int> {
 }
 
 fn main() int {
-    let m = make_map()
+    let mut m = make_map()
     print(m["x"])
     return 0
 }
@@ -217,7 +217,7 @@ fn main() int {
 fn map_wrong_key_type_fails() {
     compile_should_fail_with(r#"
 fn main() int {
-    let m = Map<string, int> { "a": 1 }
+    let mut m = Map<string, int> { "a": 1 }
     print(m[42])
     return 0
 }
@@ -228,7 +228,7 @@ fn main() int {
 fn map_wrong_value_type_fails() {
     compile_should_fail_with(r#"
 fn main() int {
-    let m = Map<string, int> { "a": "hello" }
+    let mut m = Map<string, int> { "a": "hello" }
     return 0
 }
 "#, "map value type mismatch");
@@ -238,7 +238,7 @@ fn main() int {
 fn map_non_hashable_key_fails() {
     compile_should_fail_with(r#"
 fn main() int {
-    let m = Map<[int], int> {}
+    let mut m = Map<[int], int> {}
     return 0
 }
 "#, "cannot be used as a map/set key");
@@ -248,7 +248,7 @@ fn main() int {
 fn map_grow_rehash() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let m = Map<int, int> {}
+    let mut m = Map<int, int> {}
     let mut i = 0
     while i < 100 {
         m.insert(i, i * 2)
