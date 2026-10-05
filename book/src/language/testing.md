@@ -73,7 +73,7 @@ test "clamp above maximum" {
 
 ## Testing Error-Raising Code
 
-Use `catch` to test functions that raise errors:
+`expect_raises` asserts that a block raises an error of a specific type:
 
 ```
 error InvalidInput {
@@ -93,12 +93,50 @@ test "parse_positive succeeds" {
 }
 
 test "parse_positive rejects zero" {
-    let result = parse_positive(0) catch -1
-    expect(result).to_equal(-1)
+    expect_raises(InvalidInput) {
+        parse_positive(0)!
+    }
 }
 ```
 
-The `catch` expression handles the error inline, exactly as it does in production code. There is no special test-only error handling mechanism.
+Inside the block, `!` propagates to the construct itself — the enclosing
+test does not become fallible. The assertion fails if the block completes
+without raising (`expected InvalidInput to be raised, but no error was
+raised`) or raises a different error type (`expected InvalidInput to be
+raised, got SegmentError`); either way the error is consumed by the
+construct and does not escape the test. A wildcard form asserts that the
+block raises *something*, whatever the type:
+
+```
+test "parse_positive rejects negatives" {
+    expect_raises {
+        parse_positive(-3)!
+    }
+}
+```
+
+The assertion is checked against the compiler's inferred error sets at
+compile time. A block that cannot raise at all is a compile error
+(`expect_raises block cannot raise`), and naming an error type the block
+cannot produce is one too (`the block can raise 'InvalidInput' — not
+'IoError'`), so an error-path test can never silently pass for the wrong
+reason.
+
+`expect_raises` asserts on the error *type* only. To inspect an error's
+fields, use `catch` — it handles the error inline, exactly as it does in
+production code:
+
+```
+test "error carries the message" {
+    let mut seen = ""
+    let v = parse_positive(0) catch err: InvalidInput {
+        seen = err.message
+        0
+    }
+    expect(v).to_equal(0)
+    expect(seen).to_equal("must be positive")
+}
+```
 
 ## Tests in Modules
 

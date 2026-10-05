@@ -56,3 +56,48 @@ test "portfolio uses injected feed" {
         expect(p.value(3)).to_equal(300)
     }
 }
+
+// ── Raises assertions ────────────────────────────────────────────────────
+// expect_raises asserts that a block raises an error of a specific type.
+// Inside the block, ! propagates to the construct itself — the test stays
+// infallible, and the raise is consumed. The assertion is checked against
+// the compiler's inferred error sets: a block that cannot raise, or an
+// error type the block cannot produce, is a compile error.
+
+error InvalidInput {
+    reason: string
+}
+
+error OutOfRange {
+    value: int
+}
+
+fn parse_percent(n: int) int {
+    if n < 0 {
+        raise InvalidInput { reason: "negative" }
+    }
+    if n > 100 {
+        raise OutOfRange { value: n }
+    }
+    return n
+}
+
+test "negative input raises InvalidInput" {
+    expect_raises(InvalidInput) {
+        parse_percent(0 - 1)!
+    }
+}
+
+test "oversized input raises OutOfRange" {
+    expect_raises(OutOfRange) {
+        let ok = parse_percent(100)!
+        expect(ok).to_equal(100)
+        parse_percent(101)!
+    }
+}
+
+test "any raise satisfies the wildcard form" {
+    expect_raises {
+        parse_percent(999)!
+    }
+}
