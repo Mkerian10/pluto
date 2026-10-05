@@ -760,6 +760,7 @@ fn instantiate_generic_class(template: &ClassDecl, mangled_name: &str, type_arg_
             is_remote: field.is_remote,
             is_domain: field.is_domain,
             guarded_by: field.guarded_by.clone(),
+            is_priv: field.is_priv,
         });
     }
 
@@ -810,6 +811,7 @@ fn instantiate_generic_enum(template: &crate::parser::ast::EnumDecl, mangled_nam
                 is_remote: field.is_remote,
                 is_domain: field.is_domain,
                 guarded_by: field.guarded_by.clone(),
+                is_priv: field.is_priv,
             });
         }
         instantiated_variants.push(EnumVariant {
@@ -3460,7 +3462,7 @@ mod tests {
                 },
                 is_injected: false,
                 is_ambient: false,
-                is_remote: false, is_domain: false, guarded_by: None,
+                is_remote: false, is_domain: false, guarded_by: None, is_priv: false,
             }],
             methods: vec![],
             invariants: vec![],
@@ -3514,7 +3516,7 @@ mod tests {
                 },
                 is_injected: false,
                 is_ambient: false,
-                is_remote: false, is_domain: false, guarded_by: None,
+                is_remote: false, is_domain: false, guarded_by: None, is_priv: false,
             }],
             methods: vec![],
             invariants: vec![],
@@ -3573,7 +3575,7 @@ mod tests {
                         },
                         is_injected: false,
                         is_ambient: false,
-                        is_remote: false, is_domain: false, guarded_by: None,
+                        is_remote: false, is_domain: false, guarded_by: None, is_priv: false,
                     }],
                 },
                 EnumVariant {
@@ -3638,7 +3640,7 @@ mod tests {
                     },
                     is_injected: false,
                     is_ambient: false,
-                    is_remote: false, is_domain: false, guarded_by: None,
+                    is_remote: false, is_domain: false, guarded_by: None, is_priv: false,
                 }],
             }],
             is_pub: false,

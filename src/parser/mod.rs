@@ -942,7 +942,7 @@ impl<'a> Parser<'a> {
                 // placed in it with `at` (docs/design/rfc-at-placement.md).
                 let is_domain = !is_remote && p.eat_contextual_keyword("domain");
                 let ty = p.parse_type()?;
-                Ok(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false, is_remote, is_domain, guarded_by: None })
+                Ok(Field { id: Uuid::new_v4(), name, ty, is_injected: true, is_ambient: false, is_remote, is_domain, guarded_by: None, is_priv: false })
             })?;
             self.expect(&Token::RBracket)?;
             Ok(deps)
@@ -1198,7 +1198,7 @@ impl<'a> Parser<'a> {
                     let fname = p.expect_ident()?;
                     p.expect(&Token::Colon)?;
                     let fty = p.parse_type()?;
-                    Ok(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false, guarded_by: None })
+                    Ok(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false, guarded_by: None, is_priv: false })
                 })?;
                 self.expect(&Token::RBrace)?;
                 fields
@@ -1236,7 +1236,7 @@ impl<'a> Parser<'a> {
             let fname = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
-            fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false, guarded_by: None });
+            fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false, guarded_by: None, is_priv: false });
             self.skip_newlines();
         }
 
@@ -1502,6 +1502,14 @@ impl<'a> Parser<'a> {
                 ));
                 self.consume_statement_end()?;
             } else {
+                // Optional module-privacy marker (rfc-module-semantics.md §1):
+                //   priv token: int
+                let is_priv = if matches!(self.peek().expect("token should exist after is_some check").node, Token::Priv) {
+                    self.advance(); // consume 'priv'
+                    true
+                } else {
+                    false
+                };
                 let fname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
@@ -1521,7 +1529,7 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false, guarded_by });
+                fields.push(Field { id: Uuid::new_v4(), name: fname, ty: fty, is_injected: false, is_ambient: false, is_remote: false, is_domain: false, guarded_by, is_priv });
                 // Allow comma-separated fields: x: int, y: int
                 if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Comma) {
                     self.advance(); // consume comma
@@ -3486,6 +3494,34 @@ impl<'a> Parser<'a> {
                     };
 
                     segments.push(field_name.clone());
+
+                    // Generic struct literal on a qualified name (issue #421,
+                    // rfc-module-semantics.md section 2): mod.Class<T> { fields }.
+                    // Same lookahead discipline as the local Ident<T> { } case,
+                    // so `a.b < c` comparisons are untouched.
+                    if !self.restrict_struct_lit
+                        && segments.len() == 2
+                        && self.peek().is_some()
+                        && matches!(self.peek().unwrap().node, Token::Lt)
+                        && self.is_generic_struct_lit_ahead()
+                    {
+                        let type_args = self.parse_type_arg_list()?;
+                        self.advance(); // consume '{'
+                        let (fields, close_end) = self.parse_field_list()?;
+                        let qualified_name = format!("{}.{}", segments[0].node, segments[1].node);
+                        let name_span = Span::new(segments[0].span.start, segments[1].span.end);
+                        let span = Span::new(segments[0].span.start, close_end);
+                        lhs = Spanned::new(
+                            Expr::StructLit {
+                                name: Spanned::new(qualified_name, name_span),
+                                type_args,
+                                fields,
+                                target_id: None,
+                            },
+                            span,
+                        );
+                        continue;
+                    }
 
                     // Check if followed by struct literal: a.b { fields } or a.b.c { fields }
                     if !self.restrict_struct_lit

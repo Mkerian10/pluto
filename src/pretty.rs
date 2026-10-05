@@ -466,6 +466,9 @@ impl PrettyPrinter {
         let regular_fields: Vec<&Field> = cls.fields.iter().filter(|f| !f.is_injected).collect();
         for field in &regular_fields {
             self.write_indent();
+            if field.is_priv {
+                self.write("priv ");
+            }
             self.write(&field.name.node);
             self.write(": ");
             self.emit_type_expr(&field.ty.node);
