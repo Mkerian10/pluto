@@ -1453,3 +1453,496 @@ fn main() {
     );
     assert_eq!(out.trim(), "3");
 }
+
+// ── Issue #454: calls that provably cannot write the receiver ──────────────
+//
+// A call boundary keeps obligation (a) — the invariant must hold at the
+// call, an observer may see the receiver — but exact two-state knowledge
+// survives when every call in the statement provably cannot WRITE the
+// receiver's int fields: a non-mut-self method of the receiver's own class,
+// no alias-capable parameter, and a transitively write-free body (the body
+// check closes the shallow-mutability laundering doors).
+
+#[test]
+fn two_state_invariant_survives_readonly_self_call() {
+    // The issue #454 repro: an immutable-self helper call must not havoc
+    // the old() relations the return-site proof needs.
+    let out = compile_and_run_stdout(
+        r#"
+class Node {
+    current_term: int
+    voted_for: int
+
+    invariant self.current_term > old(self.current_term) || self.voted_for == old(self.voted_for) || old(self.voted_for) == 0
+
+    fn helper(self) int {
+        return self.current_term
+    }
+
+    fn go(mut self) int {
+        let x = self.helper()
+        self.current_term = self.current_term + 1
+        return x
+    }
+}
+
+fn main() {
+    let mut n = Node { current_term: 1, voted_for: 0 }
+    print(n.go())
+    print(n.current_term)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1\n2");
+}
+
+#[test]
+fn raft_shaped_dispatcher_proves_two_state_invariant() {
+    // Term monotonicity as a two-state invariant on the node itself: the
+    // dispatcher consults read-only helpers (which call each other) before
+    // and after its writes. None of those calls may drop the relation.
+    let out = compile_and_run_stdout(
+        r#"
+class Node {
+    term: int
+    commit: int
+
+    invariant self.term >= old(self.term) && self.commit >= old(self.commit)
+
+    fn current(self) int {
+        return self.term
+    }
+
+    fn behind(self, t: int) bool {
+        return self.current() < t
+    }
+
+    fn step(mut self, t: int) {
+        let seen = self.current()
+        if t > self.term {
+            self.term = t
+        }
+        let late = self.behind(t)
+        self.commit = self.commit + 1
+        print(seen)
+    }
+}
+
+fn main() {
+    let mut n = Node { term: 3, commit: 0 }
+    n.step(5)
+    n.step(2)
+    print(n.term)
+    print(n.commit)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3\n5\n5\n2");
+}
+
+#[test]
+fn ensures_survives_readonly_self_call() {
+    let out = compile_and_run_stdout(
+        r#"
+class Counter {
+    n: int
+
+    fn peek(self) int {
+        return self.n
+    }
+
+    fn bump(mut self) ensures self.n == old(self.n) + 1 {
+        self.n = self.n + 1
+        let seen = self.peek()
+        print(seen)
+    }
+}
+
+fn main() {
+    let mut c = Counter { n: 41 }
+    c.bump()
+    print(c.n)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\n42");
+}
+
+#[test]
+fn two_state_survives_reach_free_free_function() {
+    // Verify-and-align: a free function whose declared parameters cannot
+    // reach the receiver's class was already a non-boundary (shared
+    // call_severity classification) — exact two-state knowledge survives.
+    let out = compile_and_run_stdout(
+        r#"
+fn double(v: int) int {
+    return v * 2
+}
+
+class Counter {
+    n: int
+
+    fn bump(mut self) ensures self.n == old(self.n) + 1 {
+        self.n = self.n + 1
+        let d = double(self.n)
+        print(d)
+    }
+}
+
+fn main() {
+    let mut c = Counter { n: 20 }
+    c.bump()
+    print(c.n)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\n21");
+}
+
+#[test]
+fn mut_self_callee_still_havocs() {
+    // Conservatism pin: a mut-self callee havocs two-state knowledge even
+    // when its body happens to write nothing.
+    compile_should_fail_with(
+        r#"
+class C {
+    x: int
+
+    fn noop(mut self) {
+    }
+
+    fn stable(mut self) ensures self.x == old(self.x) {
+        self.noop()
+    }
+}
+
+fn main() {
+    let mut c = C { x: 10 }
+    c.stable()
+    print(c.x)
+}
+"#,
+        "cannot prove ensures clause 'self.x == old(self.x)'",
+    );
+}
+
+#[test]
+fn alias_capable_param_callee_still_havocs() {
+    // Conservatism pin: a callee taking a parameter of the receiver's own
+    // class may be handed a writable alias of the receiver.
+    compile_should_fail_with(
+        r#"
+class C {
+    x: int
+
+    fn observe(self, other: C) int {
+        return other.x
+    }
+
+    fn stable(mut self, o: C) ensures self.x == old(self.x) {
+        let v = self.observe(o)
+        print(v)
+    }
+}
+
+fn main() {
+    let mut c = C { x: 10 }
+    let o = C { x: 1 }
+    c.stable(o)
+    print(c.x)
+}
+"#,
+        "cannot prove ensures clause 'self.x == old(self.x)'",
+    );
+}
+
+#[test]
+fn trait_dispatch_call_still_havocs() {
+    // Conservatism pin: trait-dispatched calls stay opaque (the concrete
+    // callee — and what it reaches — is unknown).
+    compile_should_fail_with(
+        r#"
+trait Sink {
+    fn accept(self, v: int)
+}
+
+class Console impl Sink {
+    tag: int
+
+    fn accept(self, v: int) {
+        print(v)
+    }
+}
+
+class C {
+    x: int
+
+    fn stable(mut self, s: Sink) ensures self.x == old(self.x) {
+        s.accept(self.x)
+    }
+}
+
+fn main() {
+    let con = Console { tag: 0 }
+    let mut c = C { x: 10 }
+    c.stable(con)
+    print(c.x)
+}
+"#,
+        "cannot prove ensures clause 'self.x == old(self.x)'",
+    );
+}
+
+#[test]
+fn laundered_alias_write_still_havocs() {
+    // THE soundness pin for the refinement: binding mutability is shallow,
+    // so an immutable-self callee can mint a writable alias of the receiver
+    // (`let mut me = self`) and write through it. The signature alone must
+    // not qualify the callee — the transitive body summary sees the foreign
+    // write and keeps the full havoc. (Without it, `stable` would certify
+    // `self.x == old(self.x)` while sneaky changes x at runtime.)
+    compile_should_fail_with(
+        r#"
+class C {
+    x: int
+
+    fn sneaky(self) {
+        let mut me = self
+        me.x = me.x - 5
+    }
+
+    fn stable(mut self) ensures self.x == old(self.x) {
+        self.sneaky()
+    }
+}
+
+fn main() {
+    let mut c = C { x: 10 }
+    c.stable()
+    print(c.x)
+}
+"#,
+        "cannot prove ensures clause 'self.x == old(self.x)'",
+    );
+}
+
+#[test]
+fn transitive_laundered_mut_call_still_havocs() {
+    // Same laundering door one call deeper: the innocent-looking
+    // immutable-self callee re-binds the receiver mutably and calls a
+    // mut-self method through the alias.
+    compile_should_fail_with(
+        r#"
+class C {
+    x: int
+
+    fn deep_write(mut self) {
+        self.x = self.x + 1
+    }
+
+    fn looks_innocent(self) {
+        let mut me = self
+        me.deep_write()
+    }
+
+    fn stable(mut self) ensures self.x == old(self.x) {
+        self.looks_innocent()
+    }
+}
+
+fn main() {
+    let mut c = C { x: 10 }
+    c.stable()
+    print(c.x)
+}
+"#,
+        "cannot prove ensures clause 'self.x == old(self.x)'",
+    );
+}
+
+// ── Issue #455: guard-established ensures relations at branch joins ────────
+//
+// An ensures relation that EVERY surviving branch proves at its own end
+// (under that branch's facts) holds of the joined state — the runtime join
+// state is one of the survivors. This mirrors exactly how invariant
+// checking treats joins; a branch that cannot prove the relation simply
+// contributes nothing and the exit proof decides.
+
+#[test]
+fn ensures_guarded_monotonic_write_proves() {
+    // The issue #455 repro: the only writing path is guarded by n > self.x,
+    // the fall-through path leaves x unchanged — both satisfy >= old(x).
+    let out = compile_and_run_stdout(
+        r#"
+class C {
+    x: int
+
+    fn bump(mut self, n: int) ensures self.x >= old(self.x) {
+        if n > self.x {
+            self.x = n
+        }
+    }
+}
+
+fn main() {
+    let mut c = C { x: 1 }
+    c.bump(5)
+    print(c.x)
+    c.bump(3)
+    print(c.x)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "5\n5");
+}
+
+#[test]
+fn ensures_guarded_with_else_branch_proves() {
+    let out = compile_and_run_stdout(
+        r#"
+class C {
+    x: int
+
+    fn raise_to(mut self, n: int) ensures self.x >= old(self.x) {
+        if n > self.x {
+            self.x = n
+        } else {
+            self.x = self.x + 1
+        }
+    }
+}
+
+fn main() {
+    let mut c = C { x: 1 }
+    c.raise_to(5)
+    print(c.x)
+    c.raise_to(2)
+    print(c.x)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "5\n6");
+}
+
+#[test]
+fn ensures_guarded_match_arms_prove() {
+    let out = compile_and_run_stdout(
+        r#"
+enum Cmd {
+    Set { v: int }
+    Bump
+}
+
+class C {
+    x: int
+
+    fn apply(mut self, cmd: Cmd) ensures self.x >= old(self.x) {
+        match cmd {
+            Cmd.Set { v } {
+                if v > self.x {
+                    self.x = v
+                }
+            }
+            Cmd.Bump {
+                self.x = self.x + 1
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut c = C { x: 1 }
+    c.apply(Cmd.Set { v: 7 })
+    print(c.x)
+    c.apply(Cmd.Bump)
+    print(c.x)
+    c.apply(Cmd.Set { v: 2 })
+    print(c.x)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "7\n8\n8");
+}
+
+#[test]
+fn ensures_write_after_guarded_join_proves() {
+    // The join fact (x >= old(x), proven on both paths) composes with a
+    // later unconditional write: x@join + 1 >= old(x) + 1 >= old(x).
+    let out = compile_and_run_stdout(
+        r#"
+class C {
+    x: int
+
+    fn step(mut self, n: int) ensures self.x >= old(self.x) {
+        if n > self.x {
+            self.x = n
+        }
+        self.x = self.x + 1
+    }
+}
+
+fn main() {
+    let mut c = C { x: 1 }
+    c.step(5)
+    print(c.x)
+    c.step(0)
+    print(c.x)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "6\n7");
+}
+
+#[test]
+fn ensures_failing_on_one_branch_still_errors() {
+    // Conservatism pin: a branch that genuinely violates the relation (and
+    // is never repaired) must still fail the exit proof.
+    compile_should_fail_with(
+        r#"
+class C {
+    x: int
+
+    fn bad(mut self, n: int) ensures self.x >= old(self.x) {
+        if n > 0 {
+            self.x = self.x + 1
+        } else {
+            self.x = self.x - 1
+        }
+    }
+}
+
+fn main() {
+    let mut c = C { x: 1 }
+    c.bad(1)
+    print(c.x)
+}
+"#,
+        "cannot prove ensures clause 'self.x >= old(self.x)'",
+    );
+}
+
+#[test]
+fn ensures_failing_guarded_write_still_errors() {
+    // Else-less variant: the guarded path violates, the fall-through path
+    // trivially holds — the join must not certify the relation.
+    compile_should_fail_with(
+        r#"
+class C {
+    x: int
+
+    fn bad(mut self, n: int) ensures self.x >= old(self.x) {
+        if n > 0 {
+            self.x = self.x - 1
+        }
+    }
+}
+
+fn main() {
+    let mut c = C { x: 1 }
+    c.bad(1)
+    print(c.x)
+}
+"#,
+        "cannot prove ensures clause 'self.x >= old(self.x)'",
+    );
+}

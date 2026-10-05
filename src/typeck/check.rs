@@ -547,9 +547,23 @@ fn check_stmt(
                     surviving.extend(super::discharge::branch_snapshot(env));
                 }
                 env.pop_scope();
-            } else {
+            } else if disc_snap.is_some() {
                 // Implicit fall-through path: the pre-branch state survives.
-                surviving.extend(disc_snap.clone());
+                // Snapshot it under the negated-guard ghost facts — the
+                // facts that path actually carries into the join — so a
+                // guard-established ensures relation can be recognized as
+                // proven on this path too (discharge::join_syms, issue
+                // #455). The frame is popped right after; only the
+                // snapshot's per-spec verdicts keep the information.
+                super::discharge::branch_restore(env, &disc_snap);
+                env.push_scope();
+                if let (Some(gc), Some(scope)) = (&ghost_cond, env.invariant_scope.as_mut()) {
+                    for f in &gc.else_facts {
+                        scope.ghost_facts.assume(f.clone());
+                    }
+                }
+                surviving.extend(super::discharge::branch_snapshot(env));
+                env.pop_scope();
             }
             // Merge the symbolic field state across the branches.
             let any_surviving_changed = then_changed || else_changed;
