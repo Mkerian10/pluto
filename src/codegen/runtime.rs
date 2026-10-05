@@ -162,6 +162,27 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_bytes_len", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_bytes_to_string", &[types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_string_to_bytes", &[types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_slice", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_extend", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_fill", &[types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_copy_from", &[types::I64, types::I64, types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_find", &[types::I64, types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_compare", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_filled", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_read_u8", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_read_u16_le", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_read_u16_be", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_read_u32_le", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_read_u32_be", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_read_i64_le", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_read_i64_be", &[types::I64, types::I64], &[types::I64])?;
+        reg.declare(module, "__pluto_bytes_write_u8", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_write_u16_le", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_write_u16_be", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_write_u32_le", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_write_u32_be", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_write_i64_le", &[types::I64, types::I64, types::I64], &[])?;
+        reg.declare(module, "__pluto_bytes_write_i64_be", &[types::I64, types::I64, types::I64], &[])?;
 
         // Map functions
         reg.declare(module, "__pluto_map_new", &[types::I64], &[types::I64])?;

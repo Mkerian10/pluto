@@ -103,6 +103,19 @@ Runtime functions:
 - `__pluto_bytes_to_string(void *handle) -> void *` — raw byte copy, no UTF-8 validation
 - `__pluto_string_to_bytes(void *str) -> void *` — copies string bytes into new bytes buffer
 
+Bulk operations and fixed-width integer codecs (issue #393; memcpy/memmove/
+memcmp/memchr/memset under the hood):
+
+- `__pluto_bytes_slice(void *handle, long start, long end) -> void *` — fresh copy of `[start, end)`, aborts on OOB
+- `__pluto_bytes_extend(void *handle, void *other)` — appends all of `other`
+- `__pluto_bytes_fill(void *handle, long value)` — memset over the whole buffer
+- `__pluto_bytes_copy_from(void *dst, void *src, long src_off, long dst_off, long n)` — memmove semantics (overlap-safe), aborts on OOB
+- `__pluto_bytes_find(void *handle, long needle, long from) -> long` — memchr; -1 when absent, `from >= len` returns -1, `from < 0` aborts
+- `__pluto_bytes_compare(void *a, void *b) -> long` — lexicographic -1/0/1 (memcmp order)
+- `__pluto_bytes_filled(long n, long value) -> void *` — fresh buffer of length `n`, every byte set to `value`
+- `__pluto_bytes_read_{u8,u16_le,u16_be,u32_le,u32_be,i64_le,i64_be}(void *handle, long off) -> long` — fixed-width decode, aborts on OOB. No `read_u64`: a u64 with the top bit set cannot be represented in Pluto's int (i64)
+- `__pluto_bytes_write_{u8,u16_le,u16_be,u32_le,u32_be,i64_le,i64_be}(void *handle, long off, long value)` — fixed-width encode, aborts on OOB; a value outside the width (`u8` 0..255, `u16` 0..65535, `u32` 0..4294967295) is a defect and traps
+
 Unlike arrays (which store `i64` slots), bytes store packed `unsigned char` values
 (1 byte per element). This is 8x more memory-efficient for binary data.
 

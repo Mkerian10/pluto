@@ -509,6 +509,255 @@ long __pluto_string_to_bytes(long str_handle) {
     return (long)handle;
 }
 
+// ── Bytes bulk operations (issue #393) ───────────────────────────────────────
+// Offset-based bulk ops and fixed-width integer codecs. The C compiler's
+// auto-vectorization is the performance mechanism: memcpy/memmove/memcmp/
+// memchr/memset where possible. Out-of-bounds offsets abort with the same
+// message style as bytes indexing; out-of-range write values are defects
+// (bugs, not conditions — same doctrine as __pluto_defect_binop).
+
+// Allocate a fresh bytes handle with length `len` (uninitialized data).
+// GC allocation happens first, then the malloc — same ordering as
+// __pluto_bytes_new / __pluto_fs_bytes_from_scratch.
+static long *__pluto_bytes_alloc(long len) {
+    long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
+    long cap = len > 16 ? len : 16;
+    unsigned char *data = (unsigned char *)malloc((size_t)cap);
+    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    handle[0] = len;
+    handle[1] = cap;
+    handle[2] = (long)data;
+    return handle;
+}
+
+// Grow a bytes buffer to hold at least `needed` bytes (geometric growth,
+// same policy as __pluto_bytes_push).
+static void __pluto_bytes_reserve(long *h, long needed) {
+    long cap = h[1];
+    if (needed <= cap) return;
+    long new_cap = cap > 0 ? cap : 16;
+    while (new_cap < needed) {
+        if (new_cap > LONG_MAX / 2) {
+            fprintf(stderr, "pluto: bytes capacity overflow\n");
+            exit(1);
+        }
+        new_cap *= 2;
+    }
+    unsigned char *data = (unsigned char *)realloc((unsigned char *)h[2], (size_t)new_cap);
+    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    h[1] = new_cap;
+    h[2] = (long)data;
+}
+
+long __pluto_bytes_slice(long handle, long start, long end) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (start < 0 || end < start || end > len) {
+        fprintf(stderr, "pluto: bytes slice out of bounds: start %ld, end %ld, length %ld\n",
+                start, end, len);
+        exit(1);
+    }
+    long n = end - start;
+    long *out = __pluto_bytes_alloc(n);
+    if (n > 0) memcpy((unsigned char *)out[2], (unsigned char *)h[2] + start, (size_t)n);
+    return (long)out;
+}
+
+void __pluto_bytes_extend(long handle, long other) {
+    long *dst = (long *)handle;
+    long *src = (long *)other;
+    long dst_len = dst[0];
+    long n = src[0];
+    if (n == 0) return;
+    if (dst_len > LONG_MAX - n) {
+        fprintf(stderr, "pluto: bytes capacity overflow\n");
+        exit(1);
+    }
+    __pluto_bytes_reserve(dst, dst_len + n);
+    // Self-extend (b.extend(b)) is fine: after reserve, src and dst share the
+    // same data pointer and the ranges [0, n) and [dst_len, dst_len + n) are
+    // disjoint because dst_len == n.
+    memcpy((unsigned char *)dst[2] + dst_len, (unsigned char *)src[2], (size_t)n);
+    dst[0] = dst_len + n;
+}
+
+void __pluto_bytes_fill(long handle, long value) {
+    long *h = (long *)handle;
+    if (h[0] > 0) memset((unsigned char *)h[2], (int)(value & 0xFF), (size_t)h[0]);
+}
+
+// memmove semantics: overlap is handled, including when dst and src are the
+// same buffer.
+void __pluto_bytes_copy_from(long dst_handle, long src_handle, long src_off, long dst_off, long n) {
+    long *dst = (long *)dst_handle;
+    long *src = (long *)src_handle;
+    long dst_len = dst[0];
+    long src_len = src[0];
+    if (n < 0 || src_off < 0 || dst_off < 0
+        || n > src_len - src_off || n > dst_len - dst_off) {
+        fprintf(stderr,
+                "pluto: bytes copy_from out of bounds: src_off %ld, dst_off %ld, n %ld, src length %ld, dst length %ld\n",
+                src_off, dst_off, n, src_len, dst_len);
+        exit(1);
+    }
+    if (n > 0) memmove((unsigned char *)dst[2] + dst_off, (unsigned char *)src[2] + src_off, (size_t)n);
+}
+
+// First index of `needle` at or after `from`; -1 when absent. `from == len`
+// (the natural end of a scanning loop) returns -1 rather than aborting.
+long __pluto_bytes_find(long handle, long needle, long from) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (from < 0) {
+        fprintf(stderr, "pluto: bytes find out of bounds: from %ld, length %ld\n", from, len);
+        exit(1);
+    }
+    if (from >= len) return -1;
+    unsigned char *data = (unsigned char *)h[2];
+    unsigned char *p = (unsigned char *)memchr(data + from, (int)(needle & 0xFF), (size_t)(len - from));
+    return p ? (long)(p - data) : -1;
+}
+
+// Lexicographic byte order: -1 / 0 / 1. (Equality via == is already
+// memcmp-backed in __pluto_deep_eq; this adds ordering.)
+long __pluto_bytes_compare(long a, long b) {
+    long *ha = (long *)a;
+    long *hb = (long *)b;
+    long la = ha[0];
+    long lb = hb[0];
+    long min = la < lb ? la : lb;
+    int c = min > 0 ? memcmp((void *)ha[2], (void *)hb[2], (size_t)min) : 0;
+    if (c < 0) return -1;
+    if (c > 0) return 1;
+    if (la < lb) return -1;
+    if (la > lb) return 1;
+    return 0;
+}
+
+long __pluto_bytes_filled(long n, long value) {
+    if (n < 0) {
+        fprintf(stderr, "pluto: bytes_filled length out of range: %ld\n", n);
+        exit(1);
+    }
+    long *h = __pluto_bytes_alloc(n);
+    if (n > 0) memset((unsigned char *)h[2], (int)(value & 0xFF), (size_t)n);
+    return (long)h;
+}
+
+// Bounds-checked pointer to `width` bytes at `off`. Same message style as
+// bytes index out of bounds.
+static unsigned char *__pluto_bytes_span(long handle, long off, long width, const char *op) {
+    long *h = (long *)handle;
+    long len = h[0];
+    if (off < 0 || width > len || off > len - width) {
+        fprintf(stderr, "pluto: bytes %s out of bounds: offset %ld, length %ld\n", op, off, len);
+        exit(1);
+    }
+    return (unsigned char *)h[2] + off;
+}
+
+// A value that doesn't fit the width is a defect (a bug in the program, not
+// a condition): trap with a clear message, same doctrine as shift range.
+static void __pluto_bytes_check_write_range(long value, long max, const char *op) {
+    if (value < 0 || value > max) {
+        fprintf(stderr, "pluto: defect: bytes %s value %ld out of range 0..%ld\n", op, value, max);
+        exit(1);
+    }
+}
+
+// Fixed-width integer codecs. All return/take plain Pluto int (i64). There
+// is deliberately no read_u64: a u64 with the top bit set cannot be
+// represented in Pluto's int — use read_i64_le/read_i64_be instead.
+
+long __pluto_bytes_read_u8(long handle, long off) {
+    unsigned char *p = __pluto_bytes_span(handle, off, 1, "read_u8");
+    return (long)p[0];
+}
+
+long __pluto_bytes_read_u16_le(long handle, long off) {
+    unsigned char *p = __pluto_bytes_span(handle, off, 2, "read_u16_le");
+    return (long)((uint64_t)p[0] | ((uint64_t)p[1] << 8));
+}
+
+long __pluto_bytes_read_u16_be(long handle, long off) {
+    unsigned char *p = __pluto_bytes_span(handle, off, 2, "read_u16_be");
+    return (long)(((uint64_t)p[0] << 8) | (uint64_t)p[1]);
+}
+
+long __pluto_bytes_read_u32_le(long handle, long off) {
+    unsigned char *p = __pluto_bytes_span(handle, off, 4, "read_u32_le");
+    return (long)((uint64_t)p[0] | ((uint64_t)p[1] << 8) | ((uint64_t)p[2] << 16) | ((uint64_t)p[3] << 24));
+}
+
+long __pluto_bytes_read_u32_be(long handle, long off) {
+    unsigned char *p = __pluto_bytes_span(handle, off, 4, "read_u32_be");
+    return (long)(((uint64_t)p[0] << 24) | ((uint64_t)p[1] << 16) | ((uint64_t)p[2] << 8) | (uint64_t)p[3]);
+}
+
+long __pluto_bytes_read_i64_le(long handle, long off) {
+    unsigned char *p = __pluto_bytes_span(handle, off, 8, "read_i64_le");
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) v = (v << 8) | (uint64_t)p[i];
+    return (long)v;
+}
+
+long __pluto_bytes_read_i64_be(long handle, long off) {
+    unsigned char *p = __pluto_bytes_span(handle, off, 8, "read_i64_be");
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) v = (v << 8) | (uint64_t)p[i];
+    return (long)v;
+}
+
+void __pluto_bytes_write_u8(long handle, long off, long value) {
+    __pluto_bytes_check_write_range(value, 255, "write_u8");
+    unsigned char *p = __pluto_bytes_span(handle, off, 1, "write_u8");
+    p[0] = (unsigned char)value;
+}
+
+void __pluto_bytes_write_u16_le(long handle, long off, long value) {
+    __pluto_bytes_check_write_range(value, 65535, "write_u16_le");
+    unsigned char *p = __pluto_bytes_span(handle, off, 2, "write_u16_le");
+    p[0] = (unsigned char)(value & 0xFF);
+    p[1] = (unsigned char)((value >> 8) & 0xFF);
+}
+
+void __pluto_bytes_write_u16_be(long handle, long off, long value) {
+    __pluto_bytes_check_write_range(value, 65535, "write_u16_be");
+    unsigned char *p = __pluto_bytes_span(handle, off, 2, "write_u16_be");
+    p[0] = (unsigned char)((value >> 8) & 0xFF);
+    p[1] = (unsigned char)(value & 0xFF);
+}
+
+void __pluto_bytes_write_u32_le(long handle, long off, long value) {
+    __pluto_bytes_check_write_range(value, 4294967295L, "write_u32_le");
+    unsigned char *p = __pluto_bytes_span(handle, off, 4, "write_u32_le");
+    p[0] = (unsigned char)(value & 0xFF);
+    p[1] = (unsigned char)((value >> 8) & 0xFF);
+    p[2] = (unsigned char)((value >> 16) & 0xFF);
+    p[3] = (unsigned char)((value >> 24) & 0xFF);
+}
+
+void __pluto_bytes_write_u32_be(long handle, long off, long value) {
+    __pluto_bytes_check_write_range(value, 4294967295L, "write_u32_be");
+    unsigned char *p = __pluto_bytes_span(handle, off, 4, "write_u32_be");
+    p[0] = (unsigned char)((value >> 24) & 0xFF);
+    p[1] = (unsigned char)((value >> 16) & 0xFF);
+    p[2] = (unsigned char)((value >> 8) & 0xFF);
+    p[3] = (unsigned char)(value & 0xFF);
+}
+
+void __pluto_bytes_write_i64_le(long handle, long off, long value) {
+    unsigned char *p = __pluto_bytes_span(handle, off, 8, "write_i64_le");
+    uint64_t v = (uint64_t)value;
+    for (int i = 0; i < 8; i++) p[i] = (unsigned char)((v >> (8 * i)) & 0xFF);
+}
+
+void __pluto_bytes_write_i64_be(long handle, long off, long value) {
+    unsigned char *p = __pluto_bytes_span(handle, off, 8, "write_i64_be");
+    uint64_t v = (uint64_t)value;
+    for (int i = 0; i < 8; i++) p[i] = (unsigned char)((v >> (8 * (7 - i))) & 0xFF);
+}
+
 // ── String utility functions ──────────────────────────────────────────────────
 
 void *__pluto_string_substring(void *s, long start, long len) {

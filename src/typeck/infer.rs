@@ -1159,6 +1159,27 @@ fn infer_call(
                 }
                 Ok(PlutoType::Bytes)
             }
+            "bytes_filled" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("bytes_filled() expects 2 arguments (n, value), got {}", args.len()),
+                        span,
+                    ));
+                }
+                let t = infer_expr(&args[0].node, args[0].span, env, None)?;
+                if t != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("bytes_filled(): expected int, found {t}"), args[0].span,
+                    ));
+                }
+                let t = infer_expr(&args[1].node, args[1].span, env, None)?;
+                if t != PlutoType::Byte {
+                    return Err(CompileError::type_err(
+                        format!("bytes_filled(): expected byte, found {t}"), args[1].span,
+                    ));
+                }
+                Ok(PlutoType::Bytes)
+            }
             "abs" => {
                 if args.len() != 1 {
                     return Err(CompileError::type_err(
@@ -2522,6 +2543,146 @@ fn infer_method_call(
                 }
                 builtin(env, method);
                 return Ok(PlutoType::String);
+            }
+            "slice" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err("slice() expects 2 arguments (start, end)".to_string(), span));
+                }
+                for arg in args {
+                    let t = infer_expr(&arg.node, arg.span, env, None)?;
+                    if t != PlutoType::Int {
+                        return Err(CompileError::type_err(
+                            format!("slice(): expected int, found {t}"), arg.span,
+                        ));
+                    }
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Bytes);
+            }
+            "extend" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err("extend() expects 1 argument".to_string(), span));
+                }
+                let t = infer_expr(&args[0].node, args[0].span, env, None)?;
+                if t != PlutoType::Bytes {
+                    return Err(CompileError::type_err(
+                        format!("extend(): expected bytes, found {t}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Void);
+            }
+            "fill" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err("fill() expects 1 argument".to_string(), span));
+                }
+                let t = infer_expr(&args[0].node, args[0].span, env, None)?;
+                if t != PlutoType::Byte {
+                    return Err(CompileError::type_err(
+                        format!("fill(): expected byte, found {t}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Void);
+            }
+            "copy_from" => {
+                if args.len() != 4 {
+                    return Err(CompileError::type_err(
+                        "copy_from() expects 4 arguments (src, src_off, dst_off, n)".to_string(), span,
+                    ));
+                }
+                let t = infer_expr(&args[0].node, args[0].span, env, None)?;
+                if t != PlutoType::Bytes {
+                    return Err(CompileError::type_err(
+                        format!("copy_from(): expected bytes, found {t}"), args[0].span,
+                    ));
+                }
+                for arg in &args[1..] {
+                    let t = infer_expr(&arg.node, arg.span, env, None)?;
+                    if t != PlutoType::Int {
+                        return Err(CompileError::type_err(
+                            format!("copy_from(): expected int, found {t}"), arg.span,
+                        ));
+                    }
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Void);
+            }
+            "find" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err("find() expects 2 arguments (needle, from)".to_string(), span));
+                }
+                let t = infer_expr(&args[0].node, args[0].span, env, None)?;
+                if t != PlutoType::Byte {
+                    return Err(CompileError::type_err(
+                        format!("find(): expected byte, found {t}"), args[0].span,
+                    ));
+                }
+                let t = infer_expr(&args[1].node, args[1].span, env, None)?;
+                if t != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("find(): expected int, found {t}"), args[1].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Int);
+            }
+            "compare" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err("compare() expects 1 argument".to_string(), span));
+                }
+                let t = infer_expr(&args[0].node, args[0].span, env, None)?;
+                if t != PlutoType::Bytes {
+                    return Err(CompileError::type_err(
+                        format!("compare(): expected bytes, found {t}"), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Int);
+            }
+            "read_u8" | "read_u16_le" | "read_u16_be" | "read_u32_le" | "read_u32_be"
+            | "read_i64_le" | "read_i64_be" => {
+                if args.len() != 1 {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 1 argument (offset)", method.node), span,
+                    ));
+                }
+                let t = infer_expr(&args[0].node, args[0].span, env, None)?;
+                if t != PlutoType::Int {
+                    return Err(CompileError::type_err(
+                        format!("{}(): expected int, found {t}", method.node), args[0].span,
+                    ));
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Int);
+            }
+            "read_u64_le" | "read_u64_be" => {
+                return Err(CompileError::type_err(
+                    format!(
+                        "bytes has no method '{}': a u64 with the top bit set cannot be represented in int (i64) — use {} instead",
+                        method.node,
+                        method.node.replace("u64", "i64"),
+                    ),
+                    method.span,
+                ));
+            }
+            "write_u8" | "write_u16_le" | "write_u16_be" | "write_u32_le" | "write_u32_be"
+            | "write_i64_le" | "write_i64_be" => {
+                if args.len() != 2 {
+                    return Err(CompileError::type_err(
+                        format!("{}() expects 2 arguments (offset, value)", method.node), span,
+                    ));
+                }
+                for arg in args {
+                    let t = infer_expr(&arg.node, arg.span, env, None)?;
+                    if t != PlutoType::Int {
+                        return Err(CompileError::type_err(
+                            format!("{}(): expected int, found {t}", method.node), arg.span,
+                        ));
+                    }
+                }
+                builtin(env, method);
+                return Ok(PlutoType::Void);
             }
             _ => {
                 return Err(CompileError::type_err(

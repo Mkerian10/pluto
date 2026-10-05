@@ -518,6 +518,7 @@ impl TypeEnv {
         builtins.insert("gc_heap_size".to_string());
         builtins.insert("expect".to_string());
         builtins.insert("bytes_new".to_string());
+        builtins.insert("bytes_filled".to_string());
         builtins.insert("wrapping_add".to_string());
         builtins.insert("wrapping_sub".to_string());
         builtins.insert("wrapping_mul".to_string());
