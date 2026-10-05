@@ -204,6 +204,7 @@ impl RuntimeRegistry {
 
         // GC
         reg.declare(module, "__pluto_gc_init", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_gc_register_global_root", &[types::I64], &[])?;
         reg.declare(module, "__pluto_gc_heap_size", &[], &[types::I64])?;
         reg.declare(module, "__pluto_safepoint", &[], &[])?;
 

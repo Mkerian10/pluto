@@ -1153,10 +1153,18 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                 singletons.insert(class_name.clone(), ptr);
 
                 // Store pointer to module-level global for scope block access (Phase 2)
+                // and register the global as a GC root: a singleton consumed only
+                // through scope blocks has no stack presence after startup, so
+                // without this the collector would free it (issue #434).
                 if let Some(&data_id) = singleton_data_ids.get(class_name) {
                     let gv = module.declare_data_in_func(data_id, builder.func);
                     let addr = builder.ins().global_value(types::I64, gv);
                     builder.ins().store(MemFlags::new(), ptr, addr, Offset32::new(0));
+                    let reg_root = module.declare_func_in_func(
+                        runtime.get("__pluto_gc_register_global_root"),
+                        builder.func,
+                    );
+                    builder.ins().call(reg_root, &[addr]);
                 }
             }
 
@@ -1324,10 +1332,17 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
 
                 singletons.insert(class_name.clone(), ptr);
 
+                // Store to the module-level global and register it as a GC
+                // root (see the app-main path above; issue #434).
                 if let Some(&data_id) = singleton_data_ids.get(class_name) {
                     let gv = module.declare_data_in_func(data_id, builder.func);
                     let addr = builder.ins().global_value(types::I64, gv);
                     builder.ins().store(MemFlags::new(), ptr, addr, Offset32::new(0));
+                    let reg_root = module.declare_func_in_func(
+                        runtime.get("__pluto_gc_register_global_root"),
+                        builder.func,
+                    );
+                    builder.ins().call(reg_root, &[addr]);
                 }
             }
 

@@ -136,6 +136,12 @@ void __pluto_gc_leave_safe_region(void);
 void __pluto_gc_add_pending_root(void *p);
 void __pluto_gc_remove_pending_root(void *p);
 
+// Global roots: register the ADDRESS of a module global that holds a GC
+// reference (e.g. a DI singleton slot). The collector re-reads each slot at
+// every cycle and marks what it currently points to. Called by generated
+// startup code; a no-op in the noop backend (which never collects).
+void __pluto_gc_register_global_root(void *slot);
+
 // Fork support: hold the allocator lock across fork(); in the child, reset
 // GC coordination state (ghost threads from the parent must not be waited on).
 void __pluto_gc_prepare_fork(void);
