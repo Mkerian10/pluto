@@ -53,7 +53,11 @@ import std.blob
 fn run_demo(mut store: blob.BlobAuthority) {
     // Writer A asks the authority for the write capability.
     let grant_a = at store { grant_write() }!
-    print(f"A holds a grant (token {grant_a.token})")
+    let epoch_a = at store { epoch_now() }!
+    // The grant's token is priv — an opaque capability only the authority's
+    // fence may judge (and only the module may mint or alter). The epoch is
+    // the public observable.
+    print(f"A holds a grant (minted at epoch {epoch_a})")
 
     // A's grant is current, so the fence admits the write.
     at store { apply(grant_a, "A: first draft") }!
@@ -64,7 +68,8 @@ fn run_demo(mut store: blob.BlobAuthority) {
     // alone is what invalidates A. A is not consulted and needs no
     // network round trip to be fenced out.
     let grant_b = at store { grant_write() }!
-    print(f"B holds a grant (token {grant_b.token}) — A's token {grant_a.token} is now stale")
+    let epoch_b = at store { epoch_now() }!
+    print(f"B holds a grant (minted at epoch {epoch_b}) — the mint alone fenced A out")
 
     // A, unaware, tries to write again. The authority's fence compares
     // A's token against the current epoch and rejects — a DEFINITE

@@ -2176,14 +2176,21 @@ app Writer[reg: domain BlobRegistry] {
     fn main(self) {
         let local = blob.create("local-fallback")
         let auth = at self.reg { authority() } catch local
-        let miss = blob.WriteGrant { token: -1 }
-
-        let grant_a = at auth { grant_write() } catch miss
+        // WriteGrant.token is priv: grants cannot be forged by literal
+        // (pinned in modules.rs), so boundary failures terminate instead
+        // of falling back to a fabricated stale grant.
+        let grant_a = at auth { grant_write() } catch err {
+            print("boundary failure")
+            return
+        }
         at auth { apply(grant_a, "A: first draft") } catch err {
             print("boundary failure")
         }
 
-        let grant_b = at auth { grant_write() } catch miss
+        let grant_b = at auth { grant_write() } catch err {
+            print("boundary failure")
+            return
+        }
         at auth { apply(grant_a, "A: sneaky overwrite") } catch err: blob.StaleGrant {
             print(f"fenced {err.token} < {err.epoch}")
         } catch err {

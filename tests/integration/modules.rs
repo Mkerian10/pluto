@@ -1360,3 +1360,136 @@ fn main() {
         ),
     ]);
 }
+
+// ============================================================
+// Module privacy: priv fields (rfc-module-semantics.md section 1)
+// and proof-gated external instantiation (section 2, issue #421)
+// ============================================================
+
+/// Like [`compile_project_should_fail`], asserting the diagnostic text.
+fn compile_project_should_fail_with(files: &[(&str, &str)], expected_msg: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, content) in files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+    }
+    let entry = dir.path().join("main.pluto");
+    let bin_path = dir.path().join("test_bin");
+    match pluto::compile_file(&entry, &bin_path) {
+        Ok(_) => panic!("Compilation should have failed with: {expected_msg}"),
+        Err(e) => {
+            let msg = format!("{e}");
+            assert!(
+                msg.contains(expected_msg),
+                "expected diagnostic containing {expected_msg:?}, got: {msg}"
+            );
+        }
+    }
+}
+
+const VAULT_SRC: &str = "pub class Grant {\n    priv token: int\n}\n\npub fn mint(epoch: int) Grant {\n    return Grant { token: epoch }\n}\n\npub fn token_of(g: Grant) int {\n    return g.token\n}";
+
+/// A priv field makes external literal construction impossible: creation
+/// flows through the module's own functions (provenance by construction).
+#[test]
+fn priv_field_blocks_external_literal() {
+    compile_project_should_fail_with(
+        &[
+            ("vault.pluto", VAULT_SRC),
+            ("main.pluto", "import vault\n\nfn main() {\n    let g = vault.Grant { token: 99 }\n    print(1)\n}"),
+        ],
+        "field 'token' is priv, so instances are only created inside module 'vault'",
+    );
+}
+
+/// priv fields are unreadable outside the declaring module.
+#[test]
+fn priv_field_blocks_external_read() {
+    compile_project_should_fail_with(
+        &[
+            ("vault.pluto", VAULT_SRC),
+            ("main.pluto", "import vault\n\nfn main() {\n    let g = vault.mint(1)\n    print(g.token)\n}"),
+        ],
+        "is priv and cannot be read outside module 'vault'",
+    );
+}
+
+/// priv fields are unwritable outside the declaring module — a
+/// legitimately-minted value cannot be tampered into a forged one.
+#[test]
+fn priv_field_blocks_external_write() {
+    compile_project_should_fail_with(
+        &[
+            ("vault.pluto", VAULT_SRC),
+            ("main.pluto", "import vault\n\nfn main() {\n    let mut g = vault.mint(1)\n    g.token = 99\n    print(1)\n}"),
+        ],
+        "is priv and cannot be written outside module 'vault'",
+    );
+}
+
+/// Inside the declaring module, priv fields have full rights; the value
+/// itself moves freely everywhere.
+#[test]
+fn priv_fields_full_rights_inside_module() {
+    let out = run_project(&[
+        ("vault.pluto", VAULT_SRC),
+        ("main.pluto", "import vault\n\nfn main() {\n    let g = vault.mint(7)\n    let h = g\n    print(vault.token_of(h))\n}"),
+    ]);
+    assert_eq!(out, "7\n");
+}
+
+/// Issue #421: imported generic classes instantiate with explicit type
+/// arguments — `mod.Class<T> { ... }` is ordinary, solver-guarded
+/// construction, not a wall.
+#[test]
+fn imported_generic_class_instantiates() {
+    let out = run_project(&[
+        ("geo.pluto", "pub class Pair<T> {\n    x: T\n    y: T\n}"),
+        ("main.pluto", "import geo\n\nfn main() {\n    let p = geo.Pair<int> { x: 1, y: 2 }\n    print(p.x + p.y)\n}"),
+    ]);
+    assert_eq!(out, "3\n");
+}
+
+/// The solver guards external construction: an imported class's invariant
+/// is discharged at the external site, and a violating literal rejects.
+#[test]
+fn external_construction_discharges_invariant() {
+    let out = run_project(&[
+        ("geo.pluto", "pub class Bounded {\n    n: int\n    invariant self.n >= 0\n}"),
+        ("main.pluto", "import geo\n\nfn main() {\n    let b = geo.Bounded { n: 5 }\n    print(b.n)\n}"),
+    ]);
+    assert_eq!(out, "5\n");
+    compile_project_should_fail_with(
+        &[
+            ("geo.pluto", "pub class Bounded {\n    n: int\n    invariant self.n >= 0\n}"),
+            ("main.pluto", "import geo\n\nfn main() {\n    let b = geo.Bounded { n: 0 - 5 }\n    print(b.n)\n}"),
+        ],
+        "violates its invariant",
+    );
+}
+
+/// Generic + priv compose: the instantiation syntax exists, and privacy
+/// still gates it (resolved through the instance's base template).
+#[test]
+fn imported_generic_with_priv_field_blocked() {
+    compile_project_should_fail_with(
+        &[
+            ("geo.pluto", "pub class Sealed<T> {\n    priv inner: T\n}\n\npub fn make(v: int) Sealed<int> {\n    return Sealed<int> { inner: v }\n}"),
+            ("main.pluto", "import geo\n\nfn main() {\n    let s = geo.Sealed<int> { inner: 3 }\n    print(1)\n}"),
+        ],
+        "field 'inner' is priv",
+    );
+}
+
+/// `a.b < c` comparisons are untouched by the generic-literal grammar.
+#[test]
+fn dotted_comparison_not_parsed_as_generic_literal() {
+    let out = run_project(&[
+        ("cfg.pluto", "pub class Limits {\n    max: int\n}"),
+        ("main.pluto", "import cfg\n\nfn main() {\n    let l = cfg.Limits { max: 10 }\n    let c = 20\n    if l.max < c {\n        print(\"less\")\n    }\n}"),
+    ]);
+    assert_eq!(out, "less\n");
+}
