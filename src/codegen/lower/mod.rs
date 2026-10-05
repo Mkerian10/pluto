@@ -3197,21 +3197,14 @@ impl<'a> LowerContext<'a> {
                 self.builder.seal_block(propagate_bb);
                 // Branch coverage: null propagation — value was null
                 self.emit_coverage_hit(inner.span.file_id, inner.span.start, 1);
-                let is_void_return = matches!(&self.expected_return_type, Some(PlutoType::Void) | None);
-                if is_void_return {
-                    if let Some(exit_bb) = self.exit_block {
-                        self.builder.ins().jump(exit_bb, &[]);
-                    } else {
-                        self.builder.ins().return_(&[]);
-                    }
-                } else {
-                    let none_val = self.builder.ins().iconst(types::I64, 0);
-                    if let Some(exit_bb) = self.exit_block {
-                        self.builder.ins().jump(exit_bb, &[none_val]);
-                    } else {
-                        self.builder.ins().return_(&[none_val]);
-                    }
-                }
+                // Return the default value for the function's return type.
+                // For a genuine `?` the function returns a nullable (I64 0 =
+                // none). For a flow-narrowed read (rewritten to NullPropagate
+                // by closures.rs) this branch is provably dead, but it must
+                // still type-check: a narrowed `float?` lives in a function
+                // returning F64, bool/byte in one returning I8 — a bare
+                // iconst I64 fails Cranelift verification there (#447).
+                self.emit_default_return();
 
                 // Continue block: unwrap the value
                 self.builder.switch_to_block(continue_bb);

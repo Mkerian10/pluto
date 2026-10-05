@@ -298,3 +298,187 @@ fn main() {
         "operand type mismatch: int? vs int",
     );
 }
+
+// ── Narrowed value types in non-I64 slots (#447) ─────────────────────────────
+//
+// Nullable value types are boxed; a flow-narrowed read unwraps the box. The
+// unwrap's dead none-branch must still produce a value of the enclosing
+// function's Cranelift return type — float (F64) and bool/byte (I8) used to
+// fail verification where int (I64) happened to type-check.
+
+#[test]
+fn narrowed_float_guard_raise_then_return() {
+    // Exact repro from #447.
+    let out = compile_and_run_stdout(
+        r#"
+error E {}
+
+fn f(s: string) float {
+    let v = s.to_float()
+    if v == none {
+        raise E {}
+    }
+    return v
+}
+
+fn main() {
+    print(f("1.5") catch 0.0)
+    print(f("nope") catch 0.0)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "1.5\n0");
+}
+
+#[test]
+fn narrowed_float_guard_return_then_return() {
+    let out = compile_and_run_stdout(
+        r#"
+fn f(s: string) float {
+    let v = s.to_float()
+    if v == none {
+        return -1.0
+    }
+    return v
+}
+
+fn main() {
+    print(f("2.25"))
+    print(f("nope"))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "2.25\n-1");
+}
+
+#[test]
+fn narrowed_float_then_branch_use() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let v: float? = 3.5
+    if v != none {
+        print(v)
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3.5");
+}
+
+#[test]
+fn narrowed_float_arithmetic_argument_and_field() {
+    let out = compile_and_run_stdout(
+        r#"
+class Holder {
+    val: float
+}
+
+fn twice(x: float) float {
+    return x * 2.0
+}
+
+fn main() {
+    let v: float? = 1.5
+    if v != none {
+        print(v + 1.0)
+        print(twice(v))
+        let h = Holder { val: v }
+        print(h.val)
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "2.5\n3\n1.5");
+}
+
+#[test]
+fn narrowed_byte_guard_raise_and_uses() {
+    let out = compile_and_run_stdout(
+        r#"
+error E {}
+
+class Holder {
+    val: byte
+}
+
+fn pick(b: byte?) byte {
+    if b == none {
+        raise E {}
+    }
+    return b
+}
+
+fn main() {
+    let v: byte? = 42 as byte
+    print(pick(v) catch 0 as byte)
+    print(pick(none) catch 7 as byte)
+    if v != none {
+        let h = Holder { val: v }
+        print(h.val)
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\n7\n42");
+}
+
+#[test]
+fn narrowed_bool_guard_raise_and_uses() {
+    let out = compile_and_run_stdout(
+        r#"
+error E {}
+
+class Holder {
+    val: bool
+}
+
+fn flip(x: bool) bool {
+    return !x
+}
+
+fn pick(b: bool?) bool {
+    if b == none {
+        raise E {}
+    }
+    return b
+}
+
+fn main() {
+    let v: bool? = true
+    print(pick(v) catch false)
+    print(pick(none) catch false)
+    if v != none {
+        print(flip(v))
+        let h = Holder { val: v }
+        print(h.val)
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "true\nfalse\nfalse\ntrue");
+}
+
+#[test]
+fn narrowed_int_guard_raise_control_case() {
+    // Control: the shape that already worked (I64 return slot).
+    let out = compile_and_run_stdout(
+        r#"
+error E {}
+
+fn f(s: string) int {
+    let v = s.to_int()
+    if v == none {
+        raise E {}
+    }
+    return v
+}
+
+fn main() {
+    print(f("15") catch 0)
+    print(f("nope") catch 0)
+}
+"#,
+    );
+    assert_eq!(out.trim(), "15\n0");
+}

@@ -284,12 +284,8 @@ pub fn parse_float(s: string) float {
     if i != n {
         raise ParseError { input: s, message: f"invalid character at index {i}" }
     }
-    // Unwrap with ?? rather than flow-narrowing `parsed`: returning a
-    // narrowed float? currently fails Cranelift verification.
-    let parsed = s.to_float()
-    let missing = parsed == none
-    let v = parsed ?? 0.0
-    if missing {
+    let v = s.to_float()
+    if v == none {
         raise ParseError { input: s, message: "invalid float" }
     }
     // Overflow to infinity: the magnitude exceeds the largest finite double.
