@@ -2450,6 +2450,31 @@ test "addition works" {
         assert_roundtrip_stable(src);
     }
 
+    #[test]
+    fn test_expect_raises_blocks() {
+        let src = r#"error ParseError {
+    input: string
+}
+
+fn explode() int {
+    raise ParseError { input: "x" }
+}
+
+test "raises" {
+    expect_raises(ParseError) {
+        explode()!
+    }
+    expect_raises {
+        explode()!
+    }
+}
+"#;
+        let result = pp(src);
+        assert!(result.contains("expect_raises(ParseError) {"));
+        assert!(result.contains("expect_raises {"));
+        assert_roundtrip_stable(src);
+    }
+
     // ── Idempotency ──────────────────────────────────────────────────
 
     #[test]
