@@ -15,8 +15,10 @@
 //!   this pass's own elisions, inductively), every int expression that
 //!   completes evaluates to its mathematical value, which always lies in
 //!   `[i64::MIN, i64::MAX]`. An operand's interval is therefore
-//!   `affine_bounds(..) ∩ [i64::MIN, i64::MAX]`, with an unbounded or
-//!   non-affine side clamped to the type range.
+//!   `affine_bounds(..) ∩ [i64::MIN, i64::MAX]`, with an unbounded side
+//!   clamped to the type range; a non-affine operand falls back to the
+//!   structural rules in `facts::expr_bounds` (masks, remainders,
+//!   byte-valued reads — same clamp, same conservatism).
 //! - The result interval is exact i128 interval arithmetic over the operand
 //!   intervals (`lo_a + lo_b`, endpoint products for `*`, …). The check is
 //!   elided iff that interval is contained in the i64 range.
@@ -54,13 +56,14 @@
 //! is the count of checks that remain at runtime, reported by
 //! `pluto analyze` next to the assumption surface (DerivedInfo).
 
-use crate::parser::ast::{BinOp, Expr, Stmt, UnaryOp};
+use crate::parser::ast::{BinOp, Expr, Stmt, TypeExpr, UnaryOp};
 use crate::span::Spanned;
 use crate::visit::Visitor;
 
 use super::env::TypeEnv;
 use super::facts::{
-    affine_bounds, contains_impure_call, immediate_exprs, len_path, to_affine, typed_path,
+    affine_bounds, contains_impure_call, expr_bounds, immediate_exprs, len_path, to_affine,
+    typed_path,
 };
 use super::types::PlutoType;
 
@@ -189,6 +192,12 @@ impl<'a> FitScan<'a> {
                 lhs,
                 ..
             } => self.is_int_operand(&lhs.node),
+            // An `as int` cast is an int operand whatever its source —
+            // byte/bool widenings participate (and byte sources carry
+            // their [0, 255] bounds through `expr_bounds`).
+            Expr::Cast { target_type, .. } => {
+                matches!(&target_type.node, TypeExpr::Named(n) if n == "int")
+            }
             _ => {
                 matches!(typed_path(e, self.env), Some((_, PlutoType::Int)))
                     || len_path(e, self.env).is_some()
@@ -201,7 +210,11 @@ impl<'a> FitScan<'a> {
     /// mathematical value within i64 — trapping semantics).
     fn operand_interval(&self, e: &Expr) -> Result<(i128, i128), ()> {
         let Some(a) = to_affine(e, self.env) else {
-            return Ok((I64_MIN, I64_MAX));
+            // Outside the affine fragment: structural interval rules —
+            // masks (`x & c`), remainders (`x % c`), byte-valued reads
+            // widened to int (facts.rs `expr_bounds`). Already clamped to
+            // the i64 range.
+            return expr_bounds(e, self.env);
         };
         let (lo, hi) = affine_bounds(&a, &self.env.facts)?;
         let mut lo = lo.unwrap_or(I64_MIN).max(I64_MIN);

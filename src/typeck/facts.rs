@@ -40,10 +40,21 @@
 //!   branches (a reassignment inside the surviving branch invalidates them).
 //! - `&&` decomposition (both conjuncts' facts in the then-branch) and, by
 //!   De Morgan, `||` decomposition in the else-branch.
+//! - `assert <cond>`: the failure path aborts the process, so the
+//!   condition's then-facts hold for the rest of the enclosing block —
+//!   exactly the terminating-guard rule, with the same extraction path
+//!   (`condition_facts`) and the same impure-call exclusion.
 //!
 //! No facts are extracted from a condition that contains an impure
 //! call-like expression (the call could mutate state between evaluation
 //! and use); builtin `len` on a collection-typed path is pure and exempt.
+//!
+//! Separately from flow facts, [`expr_bounds`] answers point-wise interval
+//! queries for int-valued expressions *outside* the affine fragment: masks
+//! (`x & c`), remainders (`x % c`), and byte-typed values widened to int
+//! (`[0, 255]` by construction — a type fact that survives loops and
+//! kills). Consumed by the overflow/shift-check elision pass
+//! (arith_fit.rs).
 //!
 //! # What kills facts
 //!
@@ -136,7 +147,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::parser::ast::{BinOp, Expr, UnaryOp};
+use crate::parser::ast::{BinOp, Expr, TypeExpr, UnaryOp};
 use crate::span::Spanned;
 use crate::visit::{walk_expr, Visitor};
 
@@ -1337,6 +1348,180 @@ pub(crate) fn affine_bounds(a: &Affine, facts: &FactEnv) -> Result<(Option<i128>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Non-affine interval evaluation (expr_bounds)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const I64_MIN_128: i128 = i64::MIN as i128;
+const I64_MAX_128: i128 = i64::MAX as i128;
+
+/// Leaf-bounds hook for [`expr_bounds_with`]: interval bounds for int-valued
+/// leaves outside the affine fragment. The production hook
+/// ([`byte_value_bounds`]) answers `[0, 255]` for byte values widened to
+/// int; tests inject their own. `None` means "no extra information".
+pub(crate) type ExtraBounds<'a> = dyn Fn(&Expr) -> Option<(i128, i128)> + 'a;
+
+/// Clamp bounds to the i64 range. Sound for any expression a program
+/// actually evaluates as an `int`: arithmetic defects trap (#416), so every
+/// completing int expression evaluates to its mathematical value inside
+/// i64. `Err(())` when the clamped interval is empty — the facts are
+/// contradictory (or the value provably cannot exist), i.e. the code is
+/// unreachable, and every consumer must answer "no proof" rather than
+/// derive nonsense.
+fn clamp_to_i64(lo: Option<i128>, hi: Option<i128>) -> Result<(i128, i128), ()> {
+    let lo = lo.unwrap_or(I64_MIN_128).max(I64_MIN_128);
+    let hi = hi.unwrap_or(I64_MAX_128).min(I64_MAX_128);
+    if lo > hi {
+        Err(())
+    } else {
+        Ok((lo, hi))
+    }
+}
+
+/// The constant value of an expression, if it normalizes to a term-free
+/// affine form (literals, negation, folded constant arithmetic).
+fn const_of(e: &Expr, resolve: &AffineResolver) -> Option<i128> {
+    let a = to_affine_with(e, resolve)?;
+    a.terms.is_empty().then_some(a.k)
+}
+
+/// Interval bounds of an **int-valued** expression under the current facts,
+/// clamped to the i64 range. Extends the affine fragment with structural
+/// rules for shapes an affine form cannot express:
+///
+/// - `x & c` / `c & x` for constant `c >= 0` lies in `[0, c]` regardless of
+///   the other side (AND with a non-negative two's-complement mask clears
+///   the sign bit and every bit above the mask's highest set bit). A
+///   negative mask contributes nothing.
+/// - `x % c` for constant `c > 0`: Pluto's int `%` is truncated (C-style)
+///   remainder — codegen lowers it to Cranelift `srem`, so the result's
+///   sign follows the dividend (`(-7) % 3 == -1`, pinned in
+///   tests/integration/numeric.rs). The result therefore lies in
+///   `[-(c-1), c-1]` in general and in `[0, min(x_hi, c-1)]` when `x` is
+///   provably `>= 0` (for `0 <= x`, `x % c <= x`). Division by zero traps
+///   (defect) and a negative or non-constant divisor is out of scope —
+///   both contribute nothing.
+/// - `+`/`-`/`*` recurse structurally when the affine pass rejected the
+///   whole expression (a masked or byte-valued operand): operand bounds
+///   are inside the i64 range, so i128 interval arithmetic cannot
+///   overflow, and the node's own completed value is clamped back to the
+///   i64 range (trapping semantics, #416).
+/// - `extra` resolves leaves the rules above cannot (byte-typed values in
+///   production).
+///
+/// Everything else is the full i64 range (unknown, but still an i64 value).
+/// Callers must only pass int-typed expressions. **False bounds are worse
+/// than wide ones: when in doubt, the answer is the full range.**
+pub(crate) fn expr_bounds_with(
+    expr: &Expr,
+    resolve: &AffineResolver,
+    extra: &ExtraBounds,
+    facts: &FactEnv,
+) -> Result<(i128, i128), ()> {
+    // The affine fragment first — it is exact and sees interval AND
+    // relation facts.
+    if let Some(a) = to_affine_with(expr, resolve) {
+        let (lo, hi) = affine_bounds(&a, facts)?;
+        return clamp_to_i64(lo, hi);
+    }
+    if let Some((lo, hi)) = extra(expr) {
+        return clamp_to_i64(Some(lo), Some(hi));
+    }
+    match expr {
+        Expr::BinOp { op: BinOp::BitAnd, lhs, rhs } => {
+            let mask = [&lhs.node, &rhs.node]
+                .into_iter()
+                .filter_map(|s| const_of(s, resolve))
+                .filter(|c| *c >= 0)
+                .min();
+            match mask {
+                Some(c) => clamp_to_i64(Some(0), Some(c)),
+                None => Ok((I64_MIN_128, I64_MAX_128)),
+            }
+        }
+        Expr::BinOp { op: BinOp::Mod, lhs, rhs } => match const_of(&rhs.node, resolve) {
+            Some(c) if c > 0 => {
+                let (llo, lhi) = expr_bounds_with(&lhs.node, resolve, extra, facts)?;
+                if llo >= 0 {
+                    clamp_to_i64(Some(0), Some((c - 1).min(lhi)))
+                } else {
+                    clamp_to_i64(Some(-(c - 1)), Some(c - 1))
+                }
+            }
+            _ => Ok((I64_MIN_128, I64_MAX_128)),
+        },
+        Expr::BinOp { op: op @ (BinOp::Add | BinOp::Sub | BinOp::Mul), lhs, rhs } => {
+            let (la, ha) = expr_bounds_with(&lhs.node, resolve, extra, facts)?;
+            let (lb, hb) = expr_bounds_with(&rhs.node, resolve, extra, facts)?;
+            let (lo, hi) = match op {
+                BinOp::Add => (la + lb, ha + hb),
+                BinOp::Sub => (la - hb, ha - lb),
+                BinOp::Mul => {
+                    let p = [la * lb, la * hb, ha * lb, ha * hb];
+                    (
+                        *p.iter().min().expect("non-empty"),
+                        *p.iter().max().expect("non-empty"),
+                    )
+                }
+                _ => unreachable!("matched Add | Sub | Mul above"),
+            };
+            clamp_to_i64(Some(lo), Some(hi))
+        }
+        Expr::UnaryOp { op: UnaryOp::Neg, operand } => {
+            let (lo, hi) = expr_bounds_with(&operand.node, resolve, extra, facts)?;
+            clamp_to_i64(Some(-hi), Some(-lo))
+        }
+        _ => Ok((I64_MIN_128, I64_MAX_128)),
+    }
+}
+
+/// [`expr_bounds_with`] over the default vocabulary: trackable fact terms
+/// as affine leaves, byte-typed values as `[0, 255]`. Consumed by the
+/// overflow/shift-check elision pass (arith_fit.rs) for operands outside
+/// the affine fragment.
+pub(crate) fn expr_bounds(expr: &Expr, env: &TypeEnv) -> Result<(i128, i128), ()> {
+    expr_bounds_with(
+        expr,
+        &|e| fact_term(e, env).map(Affine::term),
+        &|e| byte_value_bounds(e, env),
+        &env.facts,
+    )
+}
+
+/// `[0, 255]` bounds for byte values and their int widenings: trackable
+/// byte-typed paths (params, locals, fields), element reads from `bytes`
+/// and `[byte]`, casts *to* byte, and `as int` casts of any of those. A
+/// byte's value is 0..255 by construction — a type fact, not a flow fact,
+/// so it holds wherever the value is read (inside loops, after calls).
+pub(crate) fn byte_value_bounds(e: &Expr, env: &TypeEnv) -> Option<(i128, i128)> {
+    if let Expr::Cast { expr, target_type } = e {
+        if matches!(&target_type.node, TypeExpr::Named(n) if n == "int")
+            && is_byte_valued(&expr.node, env)
+        {
+            return Some((0, 255));
+        }
+        return None;
+    }
+    is_byte_valued(e, env).then_some((0, 255))
+}
+
+/// Is this expression byte-typed by construction? Trackable byte paths,
+/// element reads from `bytes` / `[byte]`, and casts to byte. Conservative:
+/// anything unrecognized (method calls, map reads, ...) is not.
+fn is_byte_valued(e: &Expr, env: &TypeEnv) -> bool {
+    match e {
+        Expr::Index { object, .. } => match typed_path(&object.node, env) {
+            Some((_, PlutoType::Bytes)) => true,
+            Some((_, PlutoType::Array(el))) => *el == PlutoType::Byte,
+            _ => false,
+        },
+        Expr::Cast { target_type, .. } => {
+            matches!(&target_type.node, TypeExpr::Named(n) if n == "byte")
+        }
+        _ => matches!(typed_path(e, env), Some((_, PlutoType::Byte))),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Condition evaluation (the `implies` API)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1810,7 +1995,7 @@ pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
 }
 
 /// Facts a `let`/`=` binding establishes about its target. Deliberately
-/// narrow — two shapes transfer:
+/// narrow — three shapes transfer:
 ///
 /// - a direct `xs.len()` value (the bound variable inherits the automatic
 ///   `>= 0` and an equality to the length term, which dies with the usual
@@ -1821,7 +2006,9 @@ pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
 ///   initializers, so the caller's fact env learns the exact int-field
 ///   values (`acc.balance == 100` after `let acc = Account { balance: 100 }`).
 ///   The usual kill rules take over from there. Entities are excluded
-///   (entity fields never carry flow facts).
+///   (entity fields never carry flow facts);
+/// - a byte widening (`b as int`, `data[i] as int` — see
+///   [`byte_value_bounds`]): the binding starts bounded to `[0, 255]`.
 ///
 /// General value-to-binding fact transfer is out of scope. Callers assume
 /// these after the binding is defined; the statement's own kill (of the
@@ -1835,6 +2022,13 @@ pub(crate) fn binding_facts(name: &str, value: &Expr, env: &TypeEnv) -> Vec<Fact
     }
     if let Expr::StructLit { name: cls, fields, .. } = value {
         return construction_facts(name, &cls.node, fields, env);
+    }
+    // Byte widening (`let x = b as int`, `let x = data[i] as int`): the
+    // captured value is a byte's, so the binding starts in [0, 255]. Like
+    // the `>= 0` length bound above, this is a fact about the captured
+    // value itself — it holds until the binding is reassigned.
+    if matches!(value, Expr::Cast { .. }) && byte_value_bounds(value, env).is_some() {
+        return vec![Fact::Bound(name.to_string(), Interval { lo: 0, hi: 255 })];
     }
     Vec::new()
 }
@@ -2456,6 +2650,183 @@ mod tests {
         assert_eq!(lo, None);
         assert_eq!(hi, None);
     }
+
+    // ── expr_bounds_with: masks, remainders, structural recursion ────────
+
+    const FULL: (i128, i128) = (i64::MIN as i128, i64::MAX as i128);
+
+    fn ident_resolve(e: &Expr) -> Option<Affine> {
+        match e {
+            Expr::Ident(n) => Some(Affine::term(n.clone())),
+            _ => None,
+        }
+    }
+
+    fn no_extra(_: &Expr) -> Option<(i128, i128)> {
+        None
+    }
+
+    fn sp(e: Expr) -> Box<Spanned<Expr>> {
+        Box::new(Spanned::dummy(e))
+    }
+
+    fn bin(op: BinOp, l: Expr, r: Expr) -> Expr {
+        Expr::BinOp { op, lhs: sp(l), rhs: sp(r) }
+    }
+
+    fn ident(n: &str) -> Expr {
+        Expr::Ident(n.to_string())
+    }
+
+    fn bounds(e: &Expr, f: &FactEnv) -> Result<(i128, i128), ()> {
+        expr_bounds_with(e, &ident_resolve, &no_extra, f)
+    }
+
+    #[test]
+    fn mask_const_bounds_either_side() {
+        let f = FactEnv::new();
+        // x & 255 ∈ [0, 255] regardless of x.
+        let e = bin(BinOp::BitAnd, ident("x"), Expr::IntLit(255));
+        assert_eq!(bounds(&e, &f), Ok((0, 255)));
+        // Constant on the left too.
+        let e = bin(BinOp::BitAnd, Expr::IntLit(255), ident("x"));
+        assert_eq!(bounds(&e, &f), Ok((0, 255)));
+        // x & 0 is exactly 0.
+        let e = bin(BinOp::BitAnd, ident("x"), Expr::IntLit(0));
+        assert_eq!(bounds(&e, &f), Ok((0, 0)));
+        // Two constant masks: the smaller wins (5 & 3 ≤ 3).
+        let e = bin(BinOp::BitAnd, Expr::IntLit(5), Expr::IntLit(3));
+        assert_eq!(bounds(&e, &f), Ok((0, 3)));
+    }
+
+    #[test]
+    fn mask_negative_or_nonconst_contributes_nothing() {
+        let f = FactEnv::new();
+        // x & -1 == x: a negative mask preserves the sign bit — NO fact.
+        let neg_one = Expr::UnaryOp { op: UnaryOp::Neg, operand: sp(Expr::IntLit(1)) };
+        let e = bin(BinOp::BitAnd, ident("x"), neg_one);
+        assert_eq!(bounds(&e, &f), Ok(FULL));
+        // x & y with no constant side — NO fact.
+        let e = bin(BinOp::BitAnd, ident("x"), ident("y"));
+        assert_eq!(bounds(&e, &f), Ok(FULL));
+        // Other bitwise ops never get mask bounds (x | c can be huge).
+        let e = bin(BinOp::BitOr, ident("x"), Expr::IntLit(255));
+        assert_eq!(bounds(&e, &f), Ok(FULL));
+        let e = bin(BinOp::BitXor, ident("x"), Expr::IntLit(255));
+        assert_eq!(bounds(&e, &f), Ok(FULL));
+    }
+
+    #[test]
+    fn mod_const_bounds_truncated_semantics() {
+        // Pluto `%` is truncated (srem): the sign follows the DIVIDEND —
+        // `(-7) % 3 == -1` — so without a dividend sign the bound must be
+        // symmetric. Pinned against codegen in tests/integration/numeric.rs.
+        let f = FactEnv::new();
+        let e = bin(BinOp::Mod, ident("x"), Expr::IntLit(10));
+        assert_eq!(bounds(&e, &f), Ok((-9, 9)));
+    }
+
+    #[test]
+    fn mod_const_nonneg_dividend_tightens() {
+        let mut f = FactEnv::new();
+        f.assume(Fact::Bound("x".into(), Interval::at_least(0)));
+        let e = bin(BinOp::Mod, ident("x"), Expr::IntLit(10));
+        assert_eq!(bounds(&e, &f), Ok((0, 9)));
+        // A dividend already tighter than the divisor caps the result:
+        // 0 <= x <= 5 ⇒ x % 10 == x ∈ [0, 5].
+        f.assume(Fact::Bound("x".into(), Interval::at_most(5)));
+        assert_eq!(bounds(&e, &f), Ok((0, 5)));
+    }
+
+    #[test]
+    fn mod_zero_or_negative_divisor_contributes_nothing() {
+        let f = FactEnv::new();
+        // x % 0 traps at runtime — the bound engine must claim NOTHING.
+        let e = bin(BinOp::Mod, ident("x"), Expr::IntLit(0));
+        assert_eq!(bounds(&e, &f), Ok(FULL));
+        // Negative divisors are out of scope — NO fact.
+        let neg3 = Expr::UnaryOp { op: UnaryOp::Neg, operand: sp(Expr::IntLit(3)) };
+        let e = bin(BinOp::Mod, ident("x"), neg3);
+        assert_eq!(bounds(&e, &f), Ok(FULL));
+        // Non-constant divisor — NO fact.
+        let e = bin(BinOp::Mod, ident("x"), ident("y"));
+        assert_eq!(bounds(&e, &f), Ok(FULL));
+    }
+
+    #[test]
+    fn structural_recursion_composes_masks() {
+        // (x & 255) * 256 + (y & 255) ∈ [0, 65535] — the two-byte pack.
+        let f = FactEnv::new();
+        let lo_byte = |v: &str| bin(BinOp::BitAnd, ident(v), Expr::IntLit(255));
+        let e = bin(
+            BinOp::Add,
+            bin(BinOp::Mul, lo_byte("x"), Expr::IntLit(256)),
+            lo_byte("y"),
+        );
+        assert_eq!(bounds(&e, &f), Ok((0, 65535)));
+        // Negation flips the interval.
+        let e = Expr::UnaryOp { op: UnaryOp::Neg, operand: sp(lo_byte("x")) };
+        assert_eq!(bounds(&e, &f), Ok((-255, 0)));
+        // Subtraction of two masked values.
+        let e = bin(BinOp::Sub, lo_byte("x"), lo_byte("y"));
+        assert_eq!(bounds(&e, &f), Ok((-255, 255)));
+    }
+
+    #[test]
+    fn extra_hook_resolves_leaves() {
+        // Model a byte-valued leaf: `b` is not affine-resolvable, the extra
+        // hook answers [0, 255] — the production shape for `data[i] as int`.
+        let f = FactEnv::new();
+        let resolve = |e: &Expr| match e {
+            Expr::Ident(n) if n == "b" => None,
+            other => ident_resolve(other),
+        };
+        let extra = |e: &Expr| match e {
+            Expr::Ident(n) if n == "b" => Some((0i128, 255i128)),
+            _ => None,
+        };
+        let e = bin(
+            BinOp::Add,
+            bin(BinOp::Mul, ident("b"), Expr::IntLit(256)),
+            ident("b"),
+        );
+        assert_eq!(expr_bounds_with(&e, &resolve, &extra, &f), Ok((0, 65535)));
+    }
+
+    #[test]
+    fn unknown_expr_is_full_i64_range() {
+        let f = FactEnv::new();
+        // An unresolvable leaf: full range, never a panic, never Err.
+        let e = Expr::BoolLit(true);
+        assert_eq!(bounds(&e, &f), Ok(FULL));
+        // Affine path with no facts: full range too.
+        assert_eq!(bounds(&ident("x"), &f), Ok(FULL));
+    }
+
+    #[test]
+    fn contradictory_facts_are_err() {
+        let mut f = FactEnv::new();
+        f.assume(Fact::Bound("x".into(), Interval::EMPTY));
+        assert_eq!(bounds(&ident("x"), &f), Err(()));
+        // The contradiction propagates through structural recursion (the
+        // dividend of a mod, an operand of an add).
+        let e = bin(BinOp::Mod, ident("x"), Expr::IntLit(10));
+        assert_eq!(bounds(&e, &f), Err(()));
+    }
+
+    #[test]
+    fn affine_facts_still_apply_through_expr_bounds() {
+        // The affine fragment keeps its precision: x in [2, 5] ⇒ 2x - 1 in
+        // [3, 9], through the same entry point.
+        let mut f = FactEnv::new();
+        f.assume(Fact::Bound("x".into(), Interval { lo: 2, hi: 5 }));
+        let e = bin(
+            BinOp::Sub,
+            bin(BinOp::Mul, Expr::IntLit(2), ident("x")),
+            Expr::IntLit(1),
+        );
+        assert_eq!(bounds(&e, &f), Ok((3, 9)));
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2858,6 +3229,153 @@ mod prop_tests {
                     "substitution does not commute for {:?} with deltas {:?} at {:?}",
                     gexpr, deltas, asg
                 );
+            }
+        }
+    }
+
+    // ── expr_bounds soundness (masks / remainders) ───────────────────────
+
+    /// Expression grammar for the structural bound rules: the affine
+    /// fragment plus `& const` and `% const` nodes. Evaluation mirrors the
+    /// runtime: two's-complement AND, truncated (srem) remainder, trap on
+    /// `% 0` (modeled as `None` — no completed value, nothing owed).
+    #[derive(Debug, Clone)]
+    enum BExpr {
+        Var(usize),
+        Const(i64),
+        Add(Box<BExpr>, Box<BExpr>),
+        Sub(Box<BExpr>, Box<BExpr>),
+        MulC(i64, Box<BExpr>),
+        Neg(Box<BExpr>),
+        /// `e & c` (or `c & e` when the flag is set).
+        AndC(bool, i64, Box<BExpr>),
+        /// `e % c`.
+        ModC(Box<BExpr>, i64),
+    }
+
+    fn arb_bexpr() -> impl Strategy<Value = BExpr> {
+        let leaf = prop_oneof![
+            (0..3usize).prop_map(BExpr::Var),
+            (-6..=6i64).prop_map(BExpr::Const),
+        ];
+        leaf.prop_recursive(3, 16, 2, |inner| {
+            prop_oneof![
+                (inner.clone(), inner.clone())
+                    .prop_map(|(a, b)| BExpr::Add(Box::new(a), Box::new(b))),
+                (inner.clone(), inner.clone())
+                    .prop_map(|(a, b)| BExpr::Sub(Box::new(a), Box::new(b))),
+                (-4..=4i64, inner.clone()).prop_map(|(c, e)| BExpr::MulC(c, Box::new(e))),
+                inner.clone().prop_map(|e| BExpr::Neg(Box::new(e))),
+                (any::<bool>(), -6..=6i64, inner.clone())
+                    .prop_map(|(flip, c, e)| BExpr::AndC(flip, c, Box::new(e))),
+                (inner, -6..=6i64).prop_map(|(e, c)| BExpr::ModC(Box::new(e), c)),
+            ]
+        })
+    }
+
+    fn bexpr_to_ast(e: &BExpr) -> Spanned<Expr> {
+        let node = match e {
+            BExpr::Var(v) => Expr::Ident(VARS[*v].to_string()),
+            BExpr::Const(c) => Expr::IntLit(*c),
+            BExpr::Add(a, b) => Expr::BinOp {
+                op: BinOp::Add,
+                lhs: Box::new(bexpr_to_ast(a)),
+                rhs: Box::new(bexpr_to_ast(b)),
+            },
+            BExpr::Sub(a, b) => Expr::BinOp {
+                op: BinOp::Sub,
+                lhs: Box::new(bexpr_to_ast(a)),
+                rhs: Box::new(bexpr_to_ast(b)),
+            },
+            BExpr::MulC(c, a) => Expr::BinOp {
+                op: BinOp::Mul,
+                lhs: Box::new(Spanned::dummy(Expr::IntLit(*c))),
+                rhs: Box::new(bexpr_to_ast(a)),
+            },
+            BExpr::Neg(a) => Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                operand: Box::new(bexpr_to_ast(a)),
+            },
+            BExpr::AndC(flip, c, a) => {
+                let (lhs, rhs) = if *flip {
+                    (Spanned::dummy(Expr::IntLit(*c)), bexpr_to_ast(a))
+                } else {
+                    (bexpr_to_ast(a), Spanned::dummy(Expr::IntLit(*c)))
+                };
+                Expr::BinOp { op: BinOp::BitAnd, lhs: Box::new(lhs), rhs: Box::new(rhs) }
+            }
+            BExpr::ModC(a, c) => Expr::BinOp {
+                op: BinOp::Mod,
+                lhs: Box::new(bexpr_to_ast(a)),
+                rhs: Box::new(Spanned::dummy(Expr::IntLit(*c))),
+            },
+        };
+        Spanned::dummy(node)
+    }
+
+    /// Runtime-faithful evaluation; `None` models a trap (`% 0`). Values in
+    /// this model stay far inside i64, so i128 `&` and `%` agree exactly
+    /// with the lowered i64 `band` / `srem` (Rust's `%` is truncated, like
+    /// srem).
+    fn bexpr_eval(e: &BExpr, asg: &[i64; 3]) -> Option<i128> {
+        match e {
+            BExpr::Var(v) => Some(asg[*v] as i128),
+            BExpr::Const(c) => Some(*c as i128),
+            BExpr::Add(a, b) => Some(bexpr_eval(a, asg)? + bexpr_eval(b, asg)?),
+            BExpr::Sub(a, b) => Some(bexpr_eval(a, asg)? - bexpr_eval(b, asg)?),
+            BExpr::MulC(c, a) => Some((*c as i128) * bexpr_eval(a, asg)?),
+            BExpr::Neg(a) => Some(-bexpr_eval(a, asg)?),
+            BExpr::AndC(_, c, a) => Some(bexpr_eval(a, asg)? & (*c as i128)),
+            BExpr::ModC(a, c) => {
+                let v = bexpr_eval(a, asg)?;
+                if *c == 0 {
+                    None // defect: modulo by zero — no completed value
+                } else {
+                    Some(v % (*c as i128))
+                }
+            }
+        }
+    }
+
+    proptest! {
+        /// SOUNDNESS: `expr_bounds_with` vs brute force. Every assignment
+        /// satisfying the assumed facts whose evaluation completes must
+        /// land inside the computed bounds; `Err(())` (contradiction) is
+        /// only acceptable when NO assignment satisfies the facts.
+        #[test]
+        fn expr_bounds_sound_vs_bruteforce(
+            gfacts in prop::collection::vec(arb_gfact(), 0..4),
+            bexpr in arb_bexpr(),
+        ) {
+            let mut env = FactEnv::new();
+            for f in &gfacts {
+                env.assume(gfact_to_fact(f));
+            }
+            let ast = bexpr_to_ast(&bexpr);
+            let no_extra = |_: &Expr| None;
+            match expr_bounds_with(&ast.node, &ident_resolver, &no_extra, &env) {
+                Ok((lo, hi)) => {
+                    for asg in all_assignments() {
+                        if !gfacts.iter().all(|f| gfact_holds(f, &asg)) {
+                            continue;
+                        }
+                        let Some(v) = bexpr_eval(&bexpr, &asg) else { continue };
+                        prop_assert!(
+                            lo <= v && v <= hi,
+                            "SOUNDNESS BUG: value {} outside [{}, {}] at {:?}\nfacts: {:?}\nexpr: {:?}",
+                            v, lo, hi, asg, gfacts, bexpr
+                        );
+                    }
+                }
+                Err(()) => {
+                    for asg in all_assignments() {
+                        prop_assert!(
+                            !gfacts.iter().all(|f| gfact_holds(f, &asg)),
+                            "SOUNDNESS BUG: Err(contradiction) but {:?} satisfies {:?}",
+                            asg, gfacts
+                        );
+                    }
+                }
             }
         }
     }
