@@ -18,7 +18,7 @@ fn trait_object_wrong_method() { compile_should_fail_with(r#"trait T{fn foo(self
 fn trait_object_wrong_method_sig() { compile_should_fail_with(r#"trait T{fn foo(self)int} class C impl T{x:int
 fn foo(self)int{return 1}}
 fn main(){let t:T=C{x:1}
-let s:string=t.foo()}"#, "type mismatch"); }
+let mut s:string=t.foo()}"#, "type mismatch"); }
 
 // Trait object assignment errors
 #[test]
@@ -117,7 +117,7 @@ fn main(){let mut m:Map<string,T>=Map<string,T>{}
 m["a"]=42}"#, "type mismatch"); }
 #[test]
 fn set_trait_object() { compile_should_fail_with(r#"trait T{} class C impl T{x:int}
-fn main(){let s:Set<T>=Set<T>{}
+fn main(){let mut s:Set<T>=Set<T>{}
 s.insert(42)}"#, "cannot be used as a map/set key"); }
 
 // Trait object with contracts
