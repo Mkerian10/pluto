@@ -1430,6 +1430,20 @@ static void chan_raise_error_typed(const char *type_name, const char *msg) {
 
 // ── Test mode: channel operations (fiber-aware) ──
 
+// Abort for an operation that would block forever under the sequential test
+// scheduler. Blocking here is a property of the scheduler — spawned tasks run
+// inline at spawn, so coordinating tasks never interleave — not necessarily a
+// real deadlock in the program. Point the user at the exploration schedulers.
+static void seq_test_blocked_abort(const char *what) {
+    fprintf(stderr,
+            "pluto: blocked %s in sequential test mode — spawned tasks run inline, "
+            "so coordinating tasks cannot interleave. If this code is correct under "
+            "concurrency, run it under the exploration scheduler: "
+            "tests[scheduler: Exhaustive] { ... }. Strategies: Sequential (default), "
+            "RoundRobin, Random, Exhaustive.\n", what);
+    exit(1);
+}
+
 long __pluto_chan_create(long capacity) {
     long actual_cap = capacity > 0 ? capacity : 1;
     long *ch = (long *)gc_alloc(64, GC_TAG_CHANNEL, 0);
@@ -1485,8 +1499,7 @@ long __pluto_chan_send(long handle, long value) {
         return 0;
     }
     if (ch[3] == ch[2]) {
-        fprintf(stderr, "pluto: deadlock detected — channel send on full buffer in sequential test mode\n");
-        exit(1);
+        seq_test_blocked_abort("channel send on full buffer");
     }
     long *buf = (long *)ch[1];
     buf[ch[5]] = value;
@@ -1534,8 +1547,7 @@ long __pluto_chan_recv(long handle) {
         return 0;
     }
     if (ch[3] == 0) {
-        fprintf(stderr, "pluto: deadlock detected — channel recv on empty buffer in sequential test mode\n");
-        exit(1);
+        seq_test_blocked_abort("channel recv on empty buffer");
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
@@ -2075,8 +2087,8 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
         // scheduler would otherwise report deadlock.
         return -4;
     }
-    fprintf(stderr, "pluto: deadlock detected — select with no ready channels in sequential test mode\n");
-    exit(1);
+    seq_test_blocked_abort("select with no ready channels");
+    return -1;  // unreachable
 }
 
 #else

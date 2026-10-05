@@ -164,7 +164,10 @@ test "full channel deadlocks" {
 }
 "#);
     assert_ne!(code, 0, "Should have exited with non-zero");
-    assert!(stderr.contains("deadlock"), "Expected deadlock message, got stderr: {stderr}");
+    assert!(
+        stderr.contains("blocked channel send on full buffer in sequential test mode"),
+        "Expected blocked-send message, got stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -182,7 +185,44 @@ test "empty channel deadlocks" {
 }
 "#);
     assert_ne!(code, 0, "Should have exited with non-zero");
-    assert!(stderr.contains("deadlock"), "Expected deadlock message, got stderr: {stderr}");
+    assert!(
+        stderr.contains("blocked channel recv on empty buffer in sequential test mode"),
+        "Expected blocked-recv message, got stderr: {stderr}"
+    );
+}
+
+#[test]
+fn sequential_blocked_recv_points_at_exploration_scheduler() {
+    // The sequential-mode abort is a property of the scheduler, not a verdict
+    // on the program: the message must say so and name the way out.
+    let (_stdout, stderr, code) = compile_test_and_run(r#"
+fn try_recv(rx: Receiver<int>) int {
+    return rx.recv()!
+}
+
+test "empty channel recv aborts with guidance" {
+    let (tx, rx) = chan<int>(10)
+    let t = spawn try_recv(rx)
+    t.get() catch 0
+}
+"#);
+    assert_ne!(code, 0, "Should have exited with non-zero");
+    assert!(
+        stderr.contains("blocked channel recv on empty buffer in sequential test mode"),
+        "Expected blocked-recv message, got stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("spawned tasks run inline"),
+        "Expected inline-spawn explanation, got stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("tests[scheduler: Exhaustive]"),
+        "Expected tests[scheduler: Exhaustive] guidance, got stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Sequential (default), RoundRobin, Random, Exhaustive"),
+        "Expected strategy list, got stderr: {stderr}"
+    );
 }
 
 // ── Existing concurrency patterns through test mode ─────────────────────

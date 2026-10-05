@@ -110,3 +110,17 @@ This means each module can have its own test suite, run independently:
 $ pluto test lib.pluto       # runs tests in lib.pluto
 $ pluto test main.pluto      # runs tests in main.pluto (not lib.pluto's tests)
 ```
+
+## Testing Concurrent Code
+
+Tests that use `spawn`, channels, or `select` run under a deterministic test scheduler with four strategies — including an exhaustive mode that runs every meaningfully distinct interleaving. By default, spawned tasks run inline, so tests where tasks coordinate with each other need a `tests[scheduler: ...]` block:
+
+```
+tests[scheduler: Exhaustive] {
+    test "producer and consumer" {
+        // spawn + channel coordination works here
+    }
+}
+```
+
+See [Testing Concurrent Code](testing-concurrency.md) for the strategies, when you need each one, and how to read the scheduler's deadlock reports.
