@@ -1307,7 +1307,22 @@ pub(super) fn is_mutating_builtin(receiver: &PlutoType, method: &str) -> bool {
         ),
         PlutoType::Map(_, _) => matches!(method, "insert" | "remove"),
         PlutoType::Set(_) => matches!(method, "insert" | "remove"),
-        PlutoType::Bytes => matches!(method, "push"),
+        // slice/find/compare/read_* return new values without modifying
+        // the buffer; the bulk ops and fixed-width writes mutate in place.
+        PlutoType::Bytes => matches!(
+            method,
+            "push"
+                | "extend"
+                | "fill"
+                | "copy_from"
+                | "write_u8"
+                | "write_u16_le"
+                | "write_u16_be"
+                | "write_u32_le"
+                | "write_u32_be"
+                | "write_i64_le"
+                | "write_i64_be"
+        ),
         _ => false,
     }
 }

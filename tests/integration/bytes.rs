@@ -173,7 +173,7 @@ fn main() int {
 fn byte_equality() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let a = 42 as byte
+    let mut a = 42 as byte
     let mut b = 42 as byte
     let c = 43 as byte
     if a == b {
@@ -194,7 +194,7 @@ fn main() int {
 fn byte_ordering() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let a = 10 as byte
+    let mut a = 10 as byte
     let mut b = 20 as byte
     if a < b {
         print("lt")
@@ -490,7 +490,7 @@ fn main() int {
 fn bytes_equality_disallowed() {
     compile_should_fail_with(r#"
 fn main() int {
-    let a = bytes_new()
+    let mut a = bytes_new()
     let mut b = bytes_new()
     if a == b {
         print("same")
@@ -504,7 +504,7 @@ fn main() int {
 fn bytes_to_equal_disallowed() {
     compile_test_should_fail_with(r#"
 test "bytes eq" {
-    let a = bytes_new()
+    let mut a = bytes_new()
     expect(a).to_equal(bytes_new())
 }
 "#, "cannot use to_equal() with bytes");
@@ -747,8 +747,8 @@ fn main() {
 fn bytes_slice_basic() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = "Hello, Pluto!".to_bytes()
-    let s = b.slice(7, 12)
+    let mut b = "Hello, Pluto!".to_bytes()
+    let mut s = b.slice(7, 12)
     print(s.to_string())
     print(s.len())
     return 0
@@ -762,7 +762,7 @@ fn bytes_slice_is_a_fresh_copy() {
     // Mutating the slice must not touch the original (no Go-style views).
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = "abcdef".to_bytes()
+    let mut b = "abcdef".to_bytes()
     let mut s = b.slice(0, 3)
     s[0] = 122 as byte
     print(b.to_string())
@@ -777,7 +777,7 @@ fn main() int {
 fn bytes_slice_empty_and_full() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = "abc".to_bytes()
+    let mut b = "abc".to_bytes()
     let empty = b.slice(1, 1)
     print(empty.len())
     let full = b.slice(0, b.len())
@@ -794,8 +794,8 @@ fn main() int {
 fn bytes_slice_oob_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let b = "abc".to_bytes()
-    let s = b.slice(1, 4)
+    let mut b = "abc".to_bytes()
+    let mut s = b.slice(1, 4)
     return 0
 }
 "#);
@@ -807,8 +807,8 @@ fn main() int {
 fn bytes_slice_reversed_bounds_abort() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let b = "abc".to_bytes()
-    let s = b.slice(2, 1)
+    let mut b = "abc".to_bytes()
+    let mut s = b.slice(2, 1)
     return 0
 }
 "#);
@@ -825,7 +825,7 @@ fn main() int {
     let src = "0123456789".to_bytes()
 
     // Push loop (the workaround extend replaces)
-    let via_push = "abc".to_bytes()
+    let mut via_push = "abc".to_bytes()
     let mut i = 0
     while i < src.len() {
         via_push.push(src[i])
@@ -833,7 +833,7 @@ fn main() int {
     }
 
     // extend
-    let via_extend = "abc".to_bytes()
+    let mut via_extend = "abc".to_bytes()
     via_extend.extend(src)
 
     print(via_push.len())
@@ -851,7 +851,7 @@ fn main() int {
 fn bytes_extend_empty_and_self() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = "ab".to_bytes()
+    let mut b = "ab".to_bytes()
     b.extend(bytes_new())
     print(b.to_string())
     b.extend(b)
@@ -866,7 +866,7 @@ fn main() int {
 fn bytes_extend_grows_past_capacity() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = bytes_new()
+    let mut b = bytes_new()
     let chunk = "0123456789abcdef".to_bytes()
     let mut i = 0
     while i < 100 {
@@ -887,7 +887,7 @@ fn main() int {
 fn bytes_filled_and_fill() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = bytes_filled(4, 65 as byte)
+    let mut b = bytes_filled(4, 65 as byte)
     print(b.len())
     print(b.to_string())
     b.fill(66 as byte)
@@ -906,7 +906,7 @@ fn bytes_filled_negative_length_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
     let n = 0 - 1
-    let b = bytes_filled(n, 0 as byte)
+    let mut b = bytes_filled(n, 0 as byte)
     return 0
 }
 "#);
@@ -920,7 +920,7 @@ fn main() int {
 fn bytes_copy_from_distinct_buffers() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let dst = "XXXXXXXX".to_bytes()
+    let mut dst = "XXXXXXXX".to_bytes()
     let src = "abcd".to_bytes()
     dst.copy_from(src, 1, 2, 3)
     print(dst.to_string())
@@ -938,12 +938,12 @@ fn bytes_copy_from_overlap_forward_and_backward() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     // Forward overlap: copy [0, 6) to offset 2 (dst > src)
-    let a = "abcdefgh".to_bytes()
+    let mut a = "abcdefgh".to_bytes()
     a.copy_from(a, 0, 2, 6)
     print(a.to_string())
 
     // Backward overlap: copy [2, 8) to offset 0 (dst < src)
-    let b = "abcdefgh".to_bytes()
+    let mut b = "abcdefgh".to_bytes()
     b.copy_from(b, 2, 0, 6)
     print(b.to_string())
     return 0
@@ -956,7 +956,7 @@ fn main() int {
 fn bytes_copy_from_oob_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let dst = "XXXX".to_bytes()
+    let mut dst = "XXXX".to_bytes()
     let src = "ab".to_bytes()
     dst.copy_from(src, 0, 3, 2)
     return 0
@@ -970,7 +970,7 @@ fn main() int {
 fn bytes_copy_from_negative_n_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let dst = "XXXX".to_bytes()
+    let mut dst = "XXXX".to_bytes()
     let n = 0 - 1
     dst.copy_from(dst, 0, 0, n)
     return 0
@@ -986,7 +986,7 @@ fn main() int {
 fn bytes_find_hit_miss_and_from_offset() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = "Hello, Pluto!".to_bytes()
+    let mut b = "Hello, Pluto!".to_bytes()
     print(b.find(111 as byte, 0))
     print(b.find(111 as byte, 5))
     print(b.find(111 as byte, 12))
@@ -1005,7 +1005,7 @@ fn main() int {
 fn bytes_find_scanning_loop() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = "a,b,,c,".to_bytes()
+    let mut b = "a,b,,c,".to_bytes()
     let mut count = 0
     let mut at = b.find(44 as byte, 0)
     while at != -1 {
@@ -1023,7 +1023,7 @@ fn main() int {
 fn bytes_find_negative_from_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let b = "abc".to_bytes()
+    let mut b = "abc".to_bytes()
     let from = 0 - 1
     let i = b.find(97 as byte, from)
     return 0
@@ -1057,9 +1057,9 @@ fn bytes_compare_unsigned_byte_order() {
     // 0xFF must order above 0x01 (unsigned, not signed char order).
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let hi = bytes_new()
+    let mut hi = bytes_new()
     hi.push(255 as byte)
-    let lo = bytes_new()
+    let mut lo = bytes_new()
     lo.push(1 as byte)
     print(hi.compare(lo))
     print(lo.compare(hi))
@@ -1075,7 +1075,7 @@ fn main() int {
 fn bytes_codec_u8_roundtrip_boundaries() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = bytes_filled(1, 0 as byte)
+    let mut b = bytes_filled(1, 0 as byte)
     b.write_u8(0, 0)
     print(b.read_u8(0))
     b.write_u8(0, 255)
@@ -1092,7 +1092,7 @@ fn main() int {
 fn bytes_codec_u16_roundtrip_both_endiannesses() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = bytes_filled(2, 0 as byte)
+    let mut b = bytes_filled(2, 0 as byte)
     b.write_u16_le(0, 0)
     print(b.read_u16_le(0))
     b.write_u16_le(0, 65535)
@@ -1118,7 +1118,7 @@ fn main() int {
 fn bytes_codec_u32_roundtrip_both_endiannesses() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = bytes_filled(4, 0 as byte)
+    let mut b = bytes_filled(4, 0 as byte)
     b.write_u32_le(0, 0)
     print(b.read_u32_le(0))
     b.write_u32_le(0, 4294967295)
@@ -1146,9 +1146,9 @@ fn main() int {
 fn bytes_codec_i64_roundtrip_both_endiannesses() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = bytes_filled(8, 0 as byte)
-    let lo = -9223372036854775807 - 1
-    let hi = 9223372036854775807
+    let mut b = bytes_filled(8, 0 as byte)
+    let mut lo = -9223372036854775807 - 1
+    let mut hi = 9223372036854775807
 
     b.write_i64_le(0, lo)
     print(b.read_i64_le(0))
@@ -1183,7 +1183,7 @@ fn bytes_codec_endianness_cross_check() {
     // Writing LE and reading BE must byte-swap, proving the lane order.
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let b = bytes_filled(8, 0 as byte)
+    let mut b = bytes_filled(8, 0 as byte)
     b.write_u16_le(0, 1)
     print(b.read_u16_be(0))
     b.write_u32_le(0, 1)
@@ -1201,7 +1201,7 @@ fn bytes_codec_at_nonzero_offsets() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     // A little frame: u8 tag, u16_be length, u32_be value, i64_le payload
-    let b = bytes_filled(15, 0 as byte)
+    let mut b = bytes_filled(15, 0 as byte)
     b.write_u8(0, 7)
     b.write_u16_be(1, 513)
     b.write_u32_be(3, 70000)
@@ -1222,7 +1222,7 @@ fn main() int {
 fn bytes_codec_read_oob_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let b = bytes_filled(4, 0 as byte)
+    let mut b = bytes_filled(4, 0 as byte)
     let v = b.read_u32_le(1)
     return 0
 }
@@ -1235,7 +1235,7 @@ fn main() int {
 fn bytes_codec_read_i64_from_short_buffer_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let b = bytes_filled(7, 0 as byte)
+    let mut b = bytes_filled(7, 0 as byte)
     let v = b.read_i64_be(0)
     return 0
 }
@@ -1248,7 +1248,7 @@ fn main() int {
 fn bytes_codec_write_oob_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let b = bytes_filled(2, 0 as byte)
+    let mut b = bytes_filled(2, 0 as byte)
     b.write_u16_be(1, 1)
     return 0
 }
@@ -1261,7 +1261,7 @@ fn main() int {
 fn bytes_codec_write_negative_offset_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let b = bytes_filled(4, 0 as byte)
+    let mut b = bytes_filled(4, 0 as byte)
     let off = 0 - 1
     b.write_u8(off, 1)
     return 0
@@ -1277,7 +1277,7 @@ fn main() int {
 fn bytes_write_u8_out_of_range_traps() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let b = bytes_filled(1, 0 as byte)
+    let mut b = bytes_filled(1, 0 as byte)
     b.write_u8(0, 256)
     return 0
 }
@@ -1290,7 +1290,7 @@ fn main() int {
 fn bytes_write_u16_negative_value_traps() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let b = bytes_filled(2, 0 as byte)
+    let mut b = bytes_filled(2, 0 as byte)
     let v = 0 - 1
     b.write_u16_le(0, v)
     return 0
@@ -1304,7 +1304,7 @@ fn main() int {
 fn bytes_write_u32_out_of_range_traps() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let b = bytes_filled(4, 0 as byte)
+    let mut b = bytes_filled(4, 0 as byte)
     b.write_u32_be(0, 4294967296)
     return 0
 }
@@ -1319,7 +1319,7 @@ fn main() int {
 fn bytes_read_u64_rejected_with_guidance() {
     compile_should_fail_with(r#"
 fn main() int {
-    let b = bytes_filled(8, 0 as byte)
+    let mut b = bytes_filled(8, 0 as byte)
     let v = b.read_u64_le(0)
     return 0
 }
@@ -1332,8 +1332,8 @@ fn main() int {
 fn bytes_slice_wrong_arg_type() {
     compile_should_fail_with(r#"
 fn main() int {
-    let b = bytes_new()
-    let s = b.slice(0 as byte, 1)
+    let mut b = bytes_new()
+    let mut s = b.slice(0 as byte, 1)
     return 0
 }
 "#, "expected int, found byte");
@@ -1343,7 +1343,7 @@ fn main() int {
 fn bytes_extend_wrong_arg_type() {
     compile_should_fail_with(r#"
 fn main() int {
-    let b = bytes_new()
+    let mut b = bytes_new()
     b.extend("abc")
     return 0
 }
@@ -1354,7 +1354,7 @@ fn main() int {
 fn bytes_fill_wrong_arg_type() {
     compile_should_fail_with(r#"
 fn main() int {
-    let b = bytes_new()
+    let mut b = bytes_new()
     b.fill(65)
     return 0
 }
@@ -1365,7 +1365,7 @@ fn main() int {
 fn bytes_find_wrong_needle_type() {
     compile_should_fail_with(r#"
 fn main() int {
-    let b = bytes_new()
+    let mut b = bytes_new()
     let i = b.find(65, 0)
     return 0
 }
@@ -1376,7 +1376,7 @@ fn main() int {
 fn bytes_filled_wrong_value_type() {
     compile_should_fail_with(r#"
 fn main() int {
-    let b = bytes_filled(4, 65)
+    let mut b = bytes_filled(4, 65)
     return 0
 }
 "#, "expected byte, found int");
@@ -1386,7 +1386,7 @@ fn main() int {
 fn bytes_write_wrong_arity() {
     compile_should_fail_with(r#"
 fn main() int {
-    let b = bytes_filled(4, 0 as byte)
+    let mut b = bytes_filled(4, 0 as byte)
     b.write_u32_le(0)
     return 0
 }

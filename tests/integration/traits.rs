@@ -408,7 +408,7 @@ class Manager {
 }
 
 fn main() {
-    let w = FastWorker { speed: 10 }
+    let mut w = FastWorker { speed: 10 }
     let m = Manager { employee: w, bonus: 5 }
     print(m.employee.work())
     print(m.bonus)
@@ -537,7 +537,7 @@ class BangFormatter impl Formatter {
 }
 
 fn main() {
-    let f = BangFormatter { tag: "!!!" }
+    let mut f = BangFormatter { tag: "!!!" }
     print(f.format("hello"))
 }
 "#);
@@ -1022,7 +1022,7 @@ trait Worker {
 }
 
 fn main() {
-    let w: Worker = 42
+    let mut w: Worker = 42
 }
 "#, "type mismatch: expected trait Worker, found int");
 }
@@ -1040,7 +1040,7 @@ class NotWorker {
 }
 
 fn main() {
-    let w: Worker = NotWorker { val: 1 }
+    let mut w: Worker = NotWorker { val: 1 }
 }
 "#, "type mismatch: expected trait Worker, found NotWorker");
 }
@@ -1066,7 +1066,7 @@ fn show(b: Bar) {
 }
 
 fn main() {
-    let f = Foo { val: 7 }
+    let mut f = Foo { val: 7 }
     show(f)
 }
 "#, "trait 'Bar' appears multiple times in impl list for class 'Foo'");
@@ -1122,7 +1122,7 @@ fn run(p: Producer) {
 }
 
 fn main() {
-    let f = Factory { base: 5 }
+    let mut f = Factory { base: 5 }
     run(f)
 }
 "#);
@@ -1387,7 +1387,7 @@ fn make_fn(mut s: Speaker) fn() int {
 
 fn main() {
     let d = Dog { volume: 42 }
-    let f = make_fn(d)
+    let mut f = make_fn(d)
     print(f())
 }
 "#);
@@ -1415,7 +1415,7 @@ fn do_work(w: Worker) int {
 }
 
 fn main() {
-    let w = FastWorker { val: 21 }
+    let mut w = FastWorker { val: 21 }
     let t = spawn do_work(w)
     print(t.get())
 }
@@ -1491,7 +1491,7 @@ fn run(f: Factory) {
 }
 
 fn main() {
-    let f = ValFactory { base: 99 }
+    let mut f = ValFactory { base: 99 }
     run(f)
 }
 "#);
@@ -1610,7 +1610,7 @@ fn show(g: Greeter) {
 }
 
 fn main() {
-    let f = FormalGreeter { name: "Alice" }
+    let mut f = FormalGreeter { name: "Alice" }
     let c = CasualGreeter { name: "Bob" }
     show(f)
     show(c)
@@ -1784,7 +1784,7 @@ fn use_dog(d: Dog) {
 }
 
 fn main() {
-    let w: Worker = Dog { val: 1 }
+    let mut w: Worker = Dog { val: 1 }
     use_dog(w)
 }
 "#, "argument 1 of 'use_dog': expected Dog, found trait Worker");
@@ -2343,7 +2343,7 @@ fn search(f: Finder, key: int) int? {
 }
 
 fn main() {
-    let f = SimpleFinder { target: 5 }
+    let mut f = SimpleFinder { target: 5 }
     let r1 = search(f, 5)
     if r1 != none {
         print(r1?)
@@ -2410,7 +2410,7 @@ class X impl Worker {
 }
 
 fn main() {
-    let w: Worker = X { val: 1 }
+    let mut w: Worker = X { val: 1 }
     print(w)
 }
 "#, "print() does not support type trait Worker");
@@ -3522,7 +3522,7 @@ class X impl Valued {
 
 fn main() {
     let v: Valued = X { n: 5 }
-    let f = v.val() as float
+    let mut f = v.val() as float
     print(f)
 }
 "#);
@@ -3835,7 +3835,7 @@ fn show(h: HasLen) {
 }
 
 fn main() {
-    let w = Wrapper<string> { items: [1, 2, 3] }
+    let mut w = Wrapper<string> { items: [1, 2, 3] }
     show(w)
 }
 "#);
@@ -4411,7 +4411,7 @@ fn make_fn(v: Valued) fn() int {
 
 fn main() {
     let x = X { n: 99 }
-    let f = make_fn(x)
+    let mut f = make_fn(x)
     print(f())
 }
 "#);
@@ -4991,7 +4991,7 @@ fn main() {
     total = a.id() + b.id() + c.id() + d.id()
     print(total)
     let e: Id = E { val: 0 }
-    let f: Id = F { val: 0 }
+    let mut f: Id = F { val: 0 }
     let g: Id = G { val: 0 }
     let h: Id = H { val: 0 }
     total = e.id() + f.id() + g.id() + h.id()
@@ -6956,7 +6956,7 @@ class SimpleWorker impl Worker {
 }
 
 fn main() {
-    let w: Worker = SimpleWorker { n: 42 }
+    let mut w: Worker = SimpleWorker { n: 42 }
     w.do_work()
     print(w.status())
 }
@@ -8777,7 +8777,7 @@ trait Foo {
 }
 
 fn main() {
-    let f: Foo = 42
+    let mut f: Foo = 42
 }
 "#, "type mismatch: expected trait Foo, found int");
 }
@@ -8791,7 +8791,7 @@ trait Foo {
 }
 
 fn main() {
-    let f: Foo = "hello"
+    let mut f: Foo = "hello"
 }
 "#, "type mismatch: expected trait Foo, found string");
 }
@@ -9680,7 +9680,7 @@ fn show(c: Container) {
 }
 
 fn main() {
-    let w = Wrapper<IntItem> { item: IntItem { v: 42 } }
+    let mut w = Wrapper<IntItem> { item: IntItem { v: 42 } }
     show(w)
 }
 "#);
@@ -10319,7 +10319,7 @@ class NotFoo {
 }
 
 fn main() {
-    let f: Foo = NotFoo { val: 1 }
+    let mut f: Foo = NotFoo { val: 1 }
 }
 "#, "type mismatch: expected trait Foo, found NotFoo");
 }
@@ -10353,7 +10353,7 @@ fn count_accepted(f: Filter, mut arr: [int]) int {
 }
 
 fn main() {
-    let f = RangeFilter { low: 3, high: 7 }
+    let mut f = RangeFilter { low: 3, high: 7 }
     let data: [int] = [1, 3, 5, 7, 9]
     print(count_accepted(f, data))
 }
@@ -10883,7 +10883,7 @@ class Ten impl Numberer {
 }
 
 fn main() {
-    let f: Numberer = Five { tag: 0 }
+    let mut f: Numberer = Five { tag: 0 }
     let t: Numberer = Ten { tag: 0 }
     let mut arr: [int] = []
     arr.push(f.num())
@@ -11116,7 +11116,7 @@ class SeqFiller impl Filler {
 
 fn main() {
     let mut arr: [int] = []
-    let f: Filler = SeqFiller { start: 10 }
+    let mut f: Filler = SeqFiller { start: 10 }
     f.fill(arr, 3)
     let mut i = 0
     while i < arr.len() {
@@ -12249,7 +12249,7 @@ class RestrictedWorker impl Worker__ {
 }
 
 fn main() {
-    let w: Worker__ = RestrictedWorker { tag: 1 }
+    let mut w: Worker__ = RestrictedWorker { tag: 1 }
     print(w.work(5))
 }
 "#, "cannot add 'requires' clauses");
@@ -12296,7 +12296,7 @@ class FixedSource impl IntSource {
 
 fn main() {
     let mut s: IntSource = FixedSource { val: 7 }
-    let f = s.get() as float
+    let mut f = s.get() as float
     print(f)
 }
 "#);
@@ -12317,7 +12317,7 @@ class ReadWrite impl Flags {
 }
 
 fn main() {
-    let f: Flags = ReadWrite { tag: 0 }
+    let mut f: Flags = ReadWrite { tag: 0 }
     let val = f.flags()
     print(val & 2)
     print(val | 1)
@@ -12344,7 +12344,7 @@ class DefaultWriter impl MapWriter {
 }
 
 fn main() {
-    let w: MapWriter = DefaultWriter { val: 5 }
+    let mut w: MapWriter = DefaultWriter { val: 5 }
     let mut m = Map<string, int> {}
     w.fill(m)
     print(m["a"])
@@ -12853,7 +12853,7 @@ class Adder_ impl ClosureMaker {
 
 fn main() {
     let m: ClosureMaker = Adder_ { amount: 10 }
-    let f = m.make()
+    let mut f = m.make()
     print(f(5))
     print(f(20))
 }
@@ -13529,7 +13529,7 @@ fn do_fill(f: Filler, mut arr: [int]) {
 
 fn main() {
     let mut arr: [int] = []
-    let f: Filler = TripleFiller { base: 10 }
+    let mut f: Filler = TripleFiller { base: 10 }
     do_fill(f, arr)
     print(arr.len())
     print(arr[0])
@@ -13773,7 +13773,7 @@ fn show(h: HasLength) {
 }
 
 fn main() {
-    let w: HasLength = Wrapper { data: "hello" }
+    let mut w: HasLength = Wrapper { data: "hello" }
     show(w)
 }
 "#);
@@ -13839,7 +13839,7 @@ trait Foo {
 }
 
 fn main() {
-    let f = Foo { }
+    let mut f = Foo { }
 }
 "#, "unknown class 'Foo'");
 }
@@ -13989,7 +13989,7 @@ fn use_maker(pm: PointMaker) {
 }
 
 fn main() {
-    let f: PointMaker = Factory { dx: 10, dy: 20 }
+    let mut f: PointMaker = Factory { dx: 10, dy: 20 }
     use_maker(f)
 }
 "#);
@@ -14257,7 +14257,7 @@ fn run(p: PrintTrait, f: FormatTrait) {
 }
 
 fn main() {
-    let f: FormatTrait = SimpleFormat { tag: 0 }
+    let mut f: FormatTrait = SimpleFormat { tag: 0 }
     let p: PrintTrait = ConsolePrint { tag: 0 }
     run(p, f)
 }
@@ -15256,7 +15256,7 @@ class Box {
 fn main() {
     let a = Box { w: W {} }
     let b = a
-    let w: Worker? = b.w
+    let mut w: Worker? = b.w
     if w != none { print(w.work()) }
 }
 "#);

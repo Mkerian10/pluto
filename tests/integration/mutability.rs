@@ -537,6 +537,83 @@ fn main() {
 }
 
 #[test]
+fn fail_bytes_extend_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let buf = bytes_new()
+    let mut other = bytes_new()
+    other.push(1 as byte)
+    buf.extend(other)
+}
+"#,
+        "cannot call mutating method 'extend' on immutable variable 'buf'",
+    );
+}
+
+#[test]
+fn fail_bytes_fill_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let buf = bytes_new()
+    buf.fill(0 as byte)
+}
+"#,
+        "cannot call mutating method 'fill' on immutable variable 'buf'",
+    );
+}
+
+#[test]
+fn fail_bytes_write_u8_on_non_mut_param() {
+    compile_should_fail_with(
+        r#"
+fn stamp(buf: bytes) {
+    buf.write_u8(0, 7)
+}
+
+fn main() {
+    let mut buf = bytes_new()
+    buf.push(0 as byte)
+    stamp(buf)
+}
+"#,
+        "cannot call mutating method 'write_u8' on immutable variable 'buf'",
+    );
+}
+
+#[test]
+fn fail_bytes_copy_from_on_immutable_local() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let mut src = bytes_new()
+    src.push(1 as byte)
+    let dst = bytes_new()
+    dst.copy_from(src, 0, 0, 1)
+}
+"#,
+        "cannot call mutating method 'copy_from' on immutable variable 'dst'",
+    );
+}
+
+#[test]
+fn bytes_read_methods_on_immutable_binding_allowed() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let mut src = bytes_filled(8, 0 as byte)
+    src.write_i64_le(0, 7)
+    let buf = src
+    let part = buf.slice(0, 4)
+    print(f"{buf.read_u8(0)} {buf.read_i64_le(0)} {buf.find(7 as byte, 0)} {buf.compare(src)} {part.len()}")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "7 7 0 0 4");
+}
+
+#[test]
 fn fail_array_push_on_non_mut_param() {
     compile_should_fail_with(
         r#"
