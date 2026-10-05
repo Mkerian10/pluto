@@ -2959,6 +2959,22 @@ long __pluto_fs_recv_from_socket(long file_fd, long sock_fd, long max_bytes) {
     return total;
 }
 
+// Set the file's length to exactly len bytes (ftruncate(2), issue #397):
+// shrinking discards the tail, extending zero-fills. The seek cursor is
+// not moved. Returns 0 or -errno. Negative len is rejected here too
+// (defense in depth; the stdlib raises before the syscall).
+long __pluto_fs_truncate(long fd, long len) {
+    if (len < 0) return -(long)EINVAL;
+    __pluto_gc_enter_safe_region();
+    int rc;
+    do {
+        rc = ftruncate((int)fd, (off_t)len);
+    } while (rc != 0 && errno == EINTR);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return rc == 0 ? 0 : -err;
+}
+
 // whence_tag: 0 = Start (SEEK_SET), 1 = Current (SEEK_CUR), 2 = End (SEEK_END).
 long __pluto_fs_seek(long fd, long offset, long whence_tag) {
     int whence = whence_tag == 0 ? SEEK_SET : (whence_tag == 1 ? SEEK_CUR : SEEK_END);
@@ -3523,6 +3539,21 @@ long __pluto_fs_remove_dir_all(void *path_str) {
     long result = __pluto_fs_remove_tree(path);
     __pluto_gc_leave_safe_region();
     return result;
+}
+
+// Path-level one-shot (truncate(2), issue #397): same length semantics as
+// __pluto_fs_truncate, no descriptor at the boundary. Returns 0 or -errno.
+long __pluto_fs_truncate_path(void *path_str, long len) {
+    if (len < 0) return -(long)EINVAL;
+    const char *path = __pluto_string_to_cstr(path_str);
+    __pluto_gc_enter_safe_region();
+    int rc;
+    do {
+        rc = truncate(path, (off_t)len);
+    } while (rc != 0 && errno == EINTR);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    return rc == 0 ? 0 : -err;
 }
 
 long __pluto_fs_rename(void *from_str, void *to_str) {

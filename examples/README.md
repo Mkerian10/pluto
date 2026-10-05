@@ -18,7 +18,7 @@ cargo run -- run examples/paths/main.pt --stdlib stdlib
 
 ## file_io
 
-Demonstrates `std.fs`: one-shot helpers (`write_all`, `read_all`, `append_all`, `copy`, `rename`), metadata (`exists`, `is_file`, `file_size`), directory operations (`mkdir`, `list_dir`), error handling with `catch`, the typestated file handle — `open_read` mints a `File<Read, Open>` that must be closed (forgetting `close()` is a compile error), with `seek` driven by the `Seek` enum — and binary file I/O (issue #368): an all-256-byte-values payload round-trips exactly through `write_all_bytes`/`read_all_bytes`, with positional `read_at` (pread) reading at an absolute offset without touching the descriptor's cursor.
+Demonstrates `std.fs`: one-shot helpers (`write_all`, `read_all`, `append_all`, `copy`, `rename`), metadata (`exists`, `is_file`, `file_size`), directory operations (`mkdir`, `list_dir`), error handling with `catch`, the typestated file handle — `open_read` mints a `File<Read, Open>` that must be closed (forgetting `close()` is a compile error), with `seek` driven by the `Seek` enum — and binary file I/O (issue #368): an all-256-byte-values payload round-trips exactly through `write_all_bytes`/`read_all_bytes`, with positional `read_at` (pread) reading at an absolute offset without touching the descriptor's cursor. Also truncation (issue #397): `File.truncate` (ftruncate — the WAL-recovery shape: cut a torn tail in one syscall, then `sync()` to make the shrink durable) and the path-level one-shot `fs.truncate(path, len)`.
 
 ```bash
 cargo run -- run examples/file_io/main.pt --stdlib stdlib
