@@ -14,14 +14,12 @@
    range, its result narrows from `T?` to `T` — the same mechanism as nullable
    narrowing. Guards and `assert` are how a programmer explains; no annotation
    language.
-3. **Width types.** `int(8/16/32/64)`, `uint(8/16/32)`, `float(32)` are
-   storage shapes: packed in arrays, widened to `int`/`float` on read, written
-   through checked (proof-narrowed) conversions. All arithmetic stays `int`;
-   `byte` becomes `uint(8)`.
-4. **Collection facts.** Element facts live in element types (`[uint(8)]`);
+3. **Collection facts.** Element facts live in element types (`[byte]`);
    length facts become ghost int fields of invariant-bearing classes, made
    sound by closing three aliasing doors. This answers most of #398 without a
    runtime-checked tier.
+4. **Deferred:** width types and the number-type family (§3) — efficient byte
+   handling comes from #393's runtime bulk operations, not from new types.
 5. **Rejected:** range (refinement) types, user-defined operator overloading,
    downcasting from traits to classes, user-defined conversions.
 
@@ -160,62 +158,28 @@ rfc-verification.md already does for invariants), and prover changes may only
 - Interval rules for `x & c` (`[0, c]` for constant `c >= 0`) and `x % c`
   (`[0, c-1]` for non-negative `x`, constant `c > 0`), so the existing
   masking idioms are proven.
-- Width-typed values (`byte`/`uint(8)`, elements read from `bytes` or a
-  packed array) carry their width's range as a fact.
+- `byte`-typed values (including elements read from `bytes`) carry 0..255
+  as a fact.
 - Loop entry currently drops all facts (`facts.rs`, phase 1). Not required for
   this RFC, but it is the largest practical limit on narrowing.
 
-### 3. Width types (storage, not arithmetic)
+### 3. Deferred: width types
 
-```pluto
-let frame: [int(8)] = decode(buf)    // packed: 1 byte per element
-let port: uint(16) = 8080            // literal checked at compile time
-```
+An earlier revision of this draft specified width types (`int(8/16/32/64)`,
+`uint(8/16/32)`, `float(32)`) as packed storage shapes with all arithmetic in
+`int`. Punted 2026-10-04: not needed yet, and the ideal shape deserves a
+first-principles pass of its own rather than arriving as a rider on the
+conversions design. `byte` remains the one narrow storage type and `bytes`
+its packed array. What the discussion settled survives here:
 
-A width type is a **storage shape** for an int, not a second arithmetic.
-Widths follow what the hardware does natively: `int(8/16/32/64)` signed,
-`uint(8/16/32)` unsigned. There is no `uint(64)`: it cannot widen into `int`
-(i64), and a 64-bit unsigned domain would fork every arithmetic rule.
-
-- **All arithmetic is `int`.** Reading a width-typed location widens to `int`
-  and yields the width's range as a flow fact for free. Writing into one is a
-  conversion (`x.to_uint8()` → `uint(8)?`), proof-narrowed exactly as §2. No
-  mixed-width arithmetic or promotion rules exist because no width arithmetic
-  exists.
-- **Literals** check at compile time: `let p: uint(16) = 8080` is fine,
-  `70000` is a compile error.
-- `byte` becomes `uint(8)` (current name kept); `bytes` stays the packed
-  `[uint(8)]`.
-- **Arrays pack:** `[int(16)]` stores 2 bytes per element. Today every array
-  element occupies 8 bytes regardless of type (`__pluto_array_new` allocates
-  `cap * 8`), so a `[byte]` wastes 8× the cache of `bytes`.
-- `float(32)` is the same move for floats (widen on read, round on store;
-  `float` = `float(64)`). Store semantics are an open question.
-- Java's wart (`b1 + b2` is an int that needs a cast to store back) is
-  answered by narrowing: when facts prove the sum fits, the store narrows
-  silently; when they cannot, bits were about to be lost and the program must
-  say which way (`to_uint8()` handling, or `low_byte()`).
-
-Arbitrary-range invariants (0..100) get no type; they are use-site facts via
-guards and `assert`, which §2 already handles. The first draft's range types
-are recorded under Rejected alternatives.
-
-#### Performance: why storage-only costs nothing
-
-A scalar `i8 + i8` costs exactly what `i64 + i64` costs on a 64-bit core —
-per-width scalar arithmetic is semantic surface with no speed payoff. The
-wins are **cache density** (packing, above) and **SIMD** (one NEON/SSE2
-instruction adds 16 packed bytes), and SIMD is reached through bulk
-operations over packed memory, not through scalar types:
-
-- **Now:** bulk `bytes`/array operations in the C runtime (#393 — slice,
-  copy, fill, compare, search, and fixed-width codecs like `read_u32_le`).
-  `cc -O2` auto-vectorizes these today; zero Cranelift work.
-- **Deferred:** compiler-emitted Cranelift SIMD for operations the compiler
-  itself generates (bytes/array `==`, marshaling copies). Cranelift supports
-  128-bit vectors; punted until profiles justify it.
-- **Out of scope:** auto-vectorizing user loops. Cranelift does no
-  auto-vectorization, and growing one is an LLVM-sized project.
+- **Efficient byte handling does not wait on new types.** Scalar narrow
+  arithmetic is no faster than i64 arithmetic on a 64-bit core; the wins are
+  cache density and SIMD, reached through offset-based bulk operations in
+  the C runtime (#393 — slice, copy, fill, compare, search, and fixed-width
+  codecs like `read_u32_le` returning plain `int`). `cc -O2` auto-vectorizes
+  these today, with zero Cranelift work.
+- **Compiler-emitted Cranelift SIMD:** punted until profiles justify it.
+  **Auto-vectorizing user loops:** out of scope (Cranelift does none).
 - SIMD arithmetic never traps (vector adds wrap), so a loop is vectorizable
   only where overflow checks are **elided by proof** (#444/#452) — the trap
   doctrine and SIMD coexist through the existing elision gate.
@@ -225,17 +189,12 @@ operations over packed memory, not through scalar types:
 #### Element facts live in element types
 
 "Every element of `xs` is in 0..255" is not tracked about the collection — it
-is the element type `[uint(8)]`, and the type system already enforces it at
-every write through every alias. Width types generalize this: a port list is
-exactly `[uint(16)]`, whose elements carry 0..65535 on every read while every
-write is a proven or checked conversion. Aliasing is irrelevant because every
-reference to the array has the same element type. Ranges that are not width
-boundaries (0..100) are not carried by element types; they remain use-site
-facts.
-
-One rule is needed: `[uint(8)]` does not coerce to a mutable `[int]`
-(otherwise a push of 70000 through the wider view breaks it — Java's
-`ArrayStoreException` problem). Converting between them copies.
+is the element type `[byte]`, and the type system already enforces it at
+every write through every alias. Aliasing is irrelevant because every
+reference to the array has the same element type. Today `byte` is the only
+type carrying a range this way; a future refined storage type (§3, deferred)
+would extend this for free. Other ranges (0..100) are not carried by element
+types; they remain use-site facts via guards and `assert`.
 
 #### Length facts become ghost int fields
 
@@ -304,11 +263,12 @@ arbitrary ordering facts," which can be decided separately.
 Range types are one member of a family of *declared* number types whose
 operators the compiler defines once and the prover understands:
 
-```pluto
-wrapping(uint(32))    // modular arithmetic for hash/checksum loops; subsumes wrapping_*
-saturating(uint(8))   // clamps at the width bounds
-fixed<2>              // decimal: int scaled by 100
-```
+- **wrapping / saturating arithmetic** — modular or clamping; subsumes the
+  `wrapping_*` builtins.
+- **`fixed<2>`** — decimal as a scaled int; most of what BigDecimal is used
+  for.
+- **`integer`** — arbitrary precision: a new heap-backed base type, the one
+  type where codegen matches the prover's mathematical-integer model exactly.
 
 - **Wrapping** types replace the `wrapping_add`/`wrapping_sub`/`wrapping_mul`
   builtins and are closed under arithmetic.
@@ -319,8 +279,8 @@ fixed<2>              // decimal: int scaled by 100
   library — a new base type, not a refinement. It is the one type where codegen
   matches the prover's mathematical-integer model exactly.
 
-This section is direction, not proposal; it exists to check that width types
-do not paint the family into a corner.
+This section is direction, not proposal; it exists to check that nothing in
+this RFC paints the family into a corner.
 
 ## Rejected alternatives
 
@@ -393,15 +353,13 @@ fabricated-value defect #416 set out to eliminate.
 3. **Remove `as`:** migrate stdlib, examples, tests; deprecation error with a
    fix-it pointing at the replacement method.
 4. **#395 strict** (prerequisite for 6).
-5. **Width types:** spelling decision, literals, `to_*` conversions,
-   widen-on-read facts, `byte` re-expressed as `uint(8)`, packed array layout
-   (GC + marshal interaction).
-6. **#393:** offset-based bulk `bytes`/array operations and fixed-width
+5. **#393:** offset-based bulk `bytes`/array operations and fixed-width
    codecs in the C runtime. Independent of every other phase and the largest
    near-term performance item — can land first.
-7. **Collection facts:** ghost `len`/`last`, aliasing rules, invariant
+6. **Collection facts:** ghost `len`/`last`, aliasing rules, invariant
    discharge over them. Resolves most of #398.
-8. **Number-type family** (§5): separate RFC.
+7. **Width types / number-type family:** deferred; first-principles design in
+   a separate RFC when needed.
 
 ## Open questions
 
@@ -409,20 +367,11 @@ fabricated-value defect #416 set out to eliminate.
    copy, or compile error?
 2. **`low_byte()` naming** — or `wrapping_to_byte()`, to match the future
    wrapping family?
-3. **Spelling** — `int(8)` reads as a parameterized type and invites
-   `int(12)` and `fn f<N>(x: int(N))`; if widths are a closed set, plain
-   nominal names (`i8`-style) avoid implying a generics dimension that does
-   not exist.
-4. **Do width types map onto wire-format widths directly?** Decoding would
-   validate the width (consistent with existing wire decode validation).
-4b. **`float(32)` store semantics** — f64→f32 rounds to nearest; a finite
-   value beyond f32 range becomes ±inf. Acceptable (infinity is a float
-   value), or a defect?
-5. **`std.json` `get_int()`** on a non-integral or out-of-range number: raise a
+3. **`std.json` `get_int()`** on a non-integral or out-of-range number: raise a
    JSON error, or return `int?`?
-6. **Specifying the provable fragment** for narrowing: one shared definition
+4. **Specifying the provable fragment** for narrowing: one shared definition
    with invariant discharge, or a separate (smaller) one?
-7. **Zero-copy views.** #393's operations are offset-based
+5. **Zero-copy views.** #393's operations are offset-based
    (`read_u32_le(buf, off)`, `copy(dst, doff, src, soff, n)`), which covers
    zero-copy *reads* with no new type — under strict #395 a non-`mut` `bytes`
    parameter plus offsets is a compiler-enforced read-only view. Is a
