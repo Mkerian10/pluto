@@ -482,3 +482,296 @@ fn main() {
     );
     assert_eq!(out.trim(), "15\n0");
 }
+
+// ── Narrowing through && / || (short-circuit, #450) ──────────────────────────
+
+#[test]
+fn narrow_in_rhs_of_and() {
+    // `v != none` on the left of `&&` narrows v in the right operand: the
+    // rhs only evaluates when the lhs is true.
+    let out = compile_and_run_stdout(
+        r#"
+fn describe(v: int?) string {
+    if v != none && v > 3 {
+        return "big"
+    }
+    return "small or missing"
+}
+
+fn main() {
+    print(describe(7))
+    print(describe(1))
+    print(describe(none))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "big\nsmall or missing\nsmall or missing");
+}
+
+#[test]
+fn narrow_in_rhs_of_or() {
+    // De Morgan: the rhs of `||` only evaluates when the lhs is false, so
+    // `v == none` on the left proves v non-none on the right.
+    let out = compile_and_run_stdout(
+        r#"
+fn flag(v: int?) string {
+    if v == none || v > 3 {
+        return "missing or big"
+    }
+    return "small"
+}
+
+fn main() {
+    print(flag(none))
+    print(flag(7))
+    print(flag(1))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "missing or big\nmissing or big\nsmall");
+}
+
+#[test]
+fn narrow_chained_conjuncts() {
+    // Left-associative chain: both earlier conjuncts narrow in the last.
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let a: int? = 2
+    let b: int? = 3
+    if a != none && b != none && a + b > 4 {
+        print(a + b)
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "5");
+}
+
+#[test]
+fn then_branch_keeps_all_conjunct_narrowings() {
+    let out = compile_and_run_stdout(
+        r#"
+fn add(a: int?, b: int?) int {
+    if a != none && b != none {
+        return a + b
+    }
+    return -1
+}
+
+fn main() {
+    print(add(20, 22))
+    print(add(20, none))
+    print(add(none, 22))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\n-1\n-1");
+}
+
+#[test]
+fn else_branch_narrows_all_disjuncts() {
+    // `a == none || b == none` false means BOTH are non-none in the else.
+    let out = compile_and_run_stdout(
+        r#"
+fn add(a: int?, b: int?) int {
+    if a == none || b == none {
+        return -1
+    } else {
+        return a + b
+    }
+}
+
+fn main() {
+    print(add(20, 22))
+    print(add(none, 22))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\n-1");
+}
+
+#[test]
+fn disjunctive_guard_narrows_rest_of_block() {
+    // The common early-exit idiom with two nullables at once.
+    let out = compile_and_run_stdout(
+        r#"
+fn add(a: int?, b: int?) int {
+    if a == none || b == none {
+        return -1
+    }
+    return a + b
+}
+
+fn main() {
+    print(add(20, 22))
+    print(add(20, none))
+}
+"#,
+    );
+    assert_eq!(out.trim(), "42\n-1");
+}
+
+#[test]
+fn narrow_in_while_condition_and_body() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let mut c: int? = 3
+    while c != none && c > 0 {
+        print(c)
+        if c == 1 {
+            c = none
+        } else {
+            c = c - 1
+        }
+    }
+    print("done")
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3\n2\n1\ndone");
+}
+
+#[test]
+fn narrow_through_negated_none_check() {
+    // `!(v == none)` is `v != none` — `!` flips the sense.
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let v: int? = 5
+    if !(v == none) && v > 3 {
+        print("big")
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "big");
+}
+
+#[test]
+fn narrow_in_and_float_and_string() {
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let f: float? = 2.5
+    if f != none && f > 1.5 {
+        print(f + 0.5)
+    }
+    let s: string? = "hey"
+    if s != none && s.len() > 2 {
+        print(s.len())
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "3\n3");
+}
+
+#[test]
+fn redundant_question_on_rhs_narrowed_still_works() {
+    // The pre-narrowing idiom keeps compiling inside the rhs of `&&`.
+    let out = compile_and_run_stdout(
+        r#"
+class Foo {
+    x: int
+}
+
+fn main() {
+    let f: Foo? = Foo { x: 10 }
+    if f != none && f?.x > 3 {
+        print(f.x)
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "10");
+}
+
+#[test]
+fn int_fact_guard_shape_with_index() {
+    // The facts-engine twin of the nullable shape: a bound on the left of
+    // `&&` guarding an index on the right (issue #450's facts note).
+    let out = compile_and_run_stdout(
+        r#"
+fn main() {
+    let xs = [10, 20, 30]
+    let j = 1
+    if j >= 0 && xs[j] > 15 {
+        print("yes")
+    }
+}
+"#,
+    );
+    assert_eq!(out.trim(), "yes");
+}
+
+#[test]
+fn no_narrowing_in_lhs_of_and() {
+    // Order matters: the FIRST operand evaluates unconditionally, so the
+    // check on the right narrows nothing on the left.
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let v: int? = 7
+    if v > 3 && v != none {
+        print("no")
+    }
+}
+"#,
+        "cannot compare int? with int",
+    );
+}
+
+#[test]
+fn and_narrows_only_the_checked_variable() {
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let v: int? = 7
+    let w: int? = 1
+    if v != none && w > 3 {
+        print("no")
+    }
+}
+"#,
+        "cannot compare int? with int",
+    );
+}
+
+#[test]
+fn or_with_none_check_true_sense_narrows_nothing() {
+    // `v != none || v > 3`: the rhs runs when the check FAILED — v may be
+    // none there, so no narrowing.
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let v: int? = 7
+    if v != none || v > 3 {
+        print("no")
+    }
+}
+"#,
+        "cannot compare int? with int",
+    );
+}
+
+#[test]
+fn and_condition_false_does_not_narrow_else_branch() {
+    // `v != none && w > 0` can be false with v non-none, so the else
+    // branch must not treat v as narrowed.
+    compile_should_fail_with(
+        r#"
+fn main() {
+    let v: int? = 7
+    let w = 1
+    if v != none && w > 0 {
+        print("yes")
+    } else {
+        print(v + 1)
+    }
+}
+"#,
+        "operand type mismatch: int? vs int",
+    );
+}
