@@ -115,7 +115,45 @@ static struct {
     int enabled;        // 1 when scheduler is active
 } gc_fiber_stacks = { .current_fiber = -1, .enabled = 0 };
 
+// Lowest live main-thread stack address while a fiber runs: scheduler_run
+// records its own frame before swapping into a fiber, so a fiber-triggered
+// collection can scan the frozen main stack [floor, gc_stack_bottom)
+// without guessing the extent from inside the fiber.
+static void *gc_main_stack_floor = NULL;
+
+void __pluto_gc_set_main_stack_floor(void *floor) {
+    gc_main_stack_floor = floor;
+}
+
+// The Scheduler allocation is a GC root region: it is the ONLY holder of
+// some references — fibers[i].task for un-awaited tasks, closure_ptr of a
+// spawned-but-not-yet-started fiber, blocked_value of a parked sender,
+// saved TLS, and each suspended fiber's callee-saved registers inside its
+// ucontext_t. Scanned conservatively like a stack. (Before this existed,
+// those refs survived only because the broken fiber-triggered stack scan
+// happened to sweep the malloc region containing the Scheduler.)
+static void *gc_scheduler_region = NULL;
+static size_t gc_scheduler_region_size = 0;
+
+void __pluto_gc_set_scheduler_region(void *base, size_t size) {
+    gc_scheduler_region = base;
+    gc_scheduler_region_size = size;
+}
+
 // Fiber stack API for scheduler (test mode only)
+//
+// The registry is RUN-SCOPED: test_run_single frees every fiber stack at the
+// end of a schedule run, so entries must not survive into the next run. The
+// scheduler resets before registering fiber 0. Without the reset the registry
+// fills with dangling pointers across schedule re-runs (a collection then
+// scans freed stacks), registration silently stops at the cap, and
+// mark_fiber_complete's per-run fiber id misindexes the cumulative array.
+void __pluto_gc_reset_fiber_stacks(void) {
+    gc_fiber_stacks.count = 0;
+    gc_fiber_stacks.current_fiber = -1;
+    gc_fiber_stacks.enabled = 0;
+}
+
 void __pluto_gc_register_fiber_stack(char *base, size_t size) {
     if (gc_fiber_stacks.count < GC_MAX_FIBER_STACKS) {
         gc_fiber_stacks.stacks[gc_fiber_stacks.count].base = base;
@@ -943,7 +981,14 @@ void __pluto_gc_collect(void) {
 
     // 3. Scan the GC-initiating thread's own stack.
     // In production mode, we find this thread's registered stack_hi.
-    // In test mode, we use gc_stack_bottom (always main thread, single-threaded).
+    // In test mode the initiating context may be a FIBER running on a
+    // malloc'd 64 KiB heap block, not the main thread stack: scanning
+    // [&anchor, gc_stack_bottom) from there walks from the heap across
+    // whatever address space separates it from the main stack — unmapped
+    // holes → SEGFAULT (it only ever worked when the intervening range
+    // happened to be mapped). Scan the fiber's own live stack instead,
+    // plus the frozen main stack above the scheduler's switch point
+    // (recorded by scheduler_run via __pluto_gc_set_main_stack_floor).
     {
         void *stack_top;
         volatile long anchor = 0;
@@ -960,14 +1005,49 @@ void __pluto_gc_collect(void) {
         // On most platforms stacks grow down, so stack_top < stack_hi.
         // Handle either direction just in case.
         if (lo > hi) { void *tmp = lo; lo = hi; hi = tmp; }
-#else
-        void *lo = stack_top < gc_stack_bottom ? stack_top : gc_stack_bottom;
-        void *hi = stack_top < gc_stack_bottom ? gc_stack_bottom : stack_top;
-#endif
         lo = (void *)(((size_t)lo) & ~7UL);
         for (long *p = (long *)lo; (void *)p < hi; p++) {
             gc_mark_candidate((void *)*p);
         }
+#else
+        int on_fiber = 0;
+        if (gc_fiber_stacks.enabled && gc_fiber_stacks.current_fiber >= 0 &&
+            gc_fiber_stacks.current_fiber < gc_fiber_stacks.count) {
+            GCFiberStack *cf = &gc_fiber_stacks.stacks[gc_fiber_stacks.current_fiber];
+            if (cf->base && (char *)stack_top >= cf->base &&
+                (char *)stack_top < cf->base + cf->size) {
+                // On the current fiber's stack: its live extent is
+                // [stack_top, base + size). The region below SP is dead.
+                void *flo = (void *)(((size_t)stack_top) & ~7UL);
+                void *fhi = (void *)(cf->base + cf->size);
+                for (long *p = (long *)flo; (void *)p < fhi; p++) {
+                    gc_mark_candidate((void *)*p);
+                }
+                // Plus the main thread's frames frozen at the scheduler's
+                // swap point: everything above the recorded floor is live
+                // (main → __pluto_test_run → test_run_single → scheduler_run);
+                // below it sit only swapcontext internals, which hold no
+                // GC references.
+                if (gc_main_stack_floor && gc_main_stack_floor < gc_stack_bottom) {
+                    void *mlo = (void *)(((size_t)gc_main_stack_floor) & ~7UL);
+                    for (long *p = (long *)mlo; (void *)p < gc_stack_bottom; p++) {
+                        gc_mark_candidate((void *)*p);
+                    }
+                }
+                on_fiber = 1;
+            }
+        }
+        if (!on_fiber) {
+            // On the real main thread stack (scheduler context, or
+            // sequential mode with no fibers at all).
+            void *lo = stack_top < gc_stack_bottom ? stack_top : gc_stack_bottom;
+            void *hi = stack_top < gc_stack_bottom ? gc_stack_bottom : stack_top;
+            lo = (void *)(((size_t)lo) & ~7UL);
+            for (long *p = (long *)lo; (void *)p < hi; p++) {
+                gc_mark_candidate((void *)*p);
+            }
+        }
+#endif
     }
 
 #ifdef PLUTO_TEST_MODE
@@ -992,6 +1072,17 @@ void __pluto_gc_collect(void) {
             for (long *p = (long *)flo; (void *)p < fhi; p++) {
                 gc_mark_candidate((void *)*p);
             }
+        }
+    }
+
+    // 3b'. Scan the Scheduler allocation (sole holder of un-awaited task
+    // handles, pending spawn closures, parked send values, and suspended
+    // fibers' register state — see __pluto_gc_set_scheduler_region).
+    if (gc_scheduler_region && gc_scheduler_region_size > 0) {
+        long *sbase = (long *)gc_scheduler_region;
+        size_t swords = gc_scheduler_region_size / sizeof(long);
+        for (size_t si = 0; si < swords; si++) {
+            gc_mark_candidate((void *)sbase[si]);
         }
     }
 #endif
@@ -1112,18 +1203,20 @@ void __pluto_gc_collect(void) {
                 if ((void *)sh[2]) free((void *)sh[2]);  // keys
                 if ((void *)sh[3]) free((void *)sh[3]);  // meta
             }
-            // Free task sync resources
+            // Free task sync resources. Test mode: slots[4] holds the FIBER
+            // ID, not a TaskSync pointer — freeing it would be free(small
+            // int). Nothing to release there.
+#ifndef PLUTO_TEST_MODE
             if (h->type_tag == GC_TAG_TASK && h->size >= 56) {
                 long *slots = (long *)((char *)h + sizeof(GCHeader));
                 void *sync = (void *)slots[4];
                 if (sync) {
-#ifndef PLUTO_TEST_MODE
                     pthread_mutex_destroy((pthread_mutex_t *)sync);
                     pthread_cond_destroy((pthread_cond_t *)((char *)sync + sizeof(pthread_mutex_t)));
-#endif
                     free(sync);
                 }
             }
+#endif
             // Free channel sync + buffer
             if (h->type_tag == GC_TAG_CHANNEL && h->size >= 56) {
                 long *ch = (long *)((char *)h + sizeof(GCHeader));

@@ -439,6 +439,27 @@ fn main() {
             }
 
             if !status.success() {
+                // A None exit code means the test binary died on a signal
+                // (e.g. a segfault in the runtime or explorer). Say so —
+                // a silent exit 1 is indistinguishable from a test failure
+                // that already printed its own message.
+                if status.code().is_none() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::ExitStatusExt;
+                        let sig = status.signal().unwrap_or(0);
+                        let name = match sig {
+                            4 => " (SIGILL)",
+                            6 => " (SIGABRT)",
+                            8 => " (SIGFPE)",
+                            11 => " (SIGSEGV)",
+                            _ => "",
+                        };
+                        eprintln!("error: test binary crashed with signal {sig}{name}");
+                    }
+                    #[cfg(not(unix))]
+                    eprintln!("error: test binary terminated abnormally");
+                }
                 std::process::exit(status.code().unwrap_or(1));
             }
         }

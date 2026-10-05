@@ -96,6 +96,16 @@ GCHeader *__pluto_gc_get_head(void) {
 
 #ifdef PLUTO_TEST_MODE
 
+void __pluto_gc_reset_fiber_stacks(void) {}
+
+void __pluto_gc_set_main_stack_floor(void *floor) {
+    (void)floor;
+}
+
+void __pluto_gc_set_scheduler_region(void *base, size_t size) {
+    (void)base; (void)size;
+}
+
 void __pluto_gc_register_fiber_stack(char *base, size_t size) {
     (void)base; (void)size;
 }
