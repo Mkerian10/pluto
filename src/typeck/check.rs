@@ -1402,6 +1402,23 @@ fn check_field_assign(
             field.span,
         ));
     }
+    // Module privacy (rfc-module-semantics.md section 1): priv fields are
+    // unwritable outside their module — otherwise a legitimately-obtained
+    // value could be tampered into a forged one (`g.token = epoch_now()`),
+    // and provenance would close only half its door.
+    if env.priv_barrier(&class_name)
+        && env.priv_fields_of(&class_name).is_some_and(|p| p.contains(&field.node))
+    {
+        return Err(CompileError::type_err(
+            format!(
+                "field '{}' of '{class_name}' is priv and cannot be written outside \
+                 module '{}'",
+                field.node,
+                env.declaring_module_of_class(&class_name),
+            ),
+            field.span,
+        ));
+    }
     // Check caller-side mutability
     if let Some(root) = root_variable(&object.node) && root != "self" && env.is_immutable(root) {
         return Err(CompileError::type_err(

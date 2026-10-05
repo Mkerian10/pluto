@@ -287,6 +287,10 @@ pub struct TypeEnv {
     /// re-parsing the mangled string corrupts positions after a nested
     /// generic argument (issue #412).
     pub class_instance_args: HashMap<String, (String, Vec<PlutoType>)>,
+    /// class name -> names of its `priv` fields (rfc-module-semantics.md
+    /// section 1). Keyed by the flattened declaration name; monomorphized
+    /// instances resolve through class_instance_args to their base.
+    pub class_priv_fields: HashMap<String, HashSet<String>>,
     pub generic_rewrites: HashMap<(usize, usize), String>,
     /// Method resolutions recorded during type inference, keyed by (current_fn_mangled_name, method.span.start)
     pub method_resolutions: HashMap<(String, usize), MethodResolution>,
@@ -562,6 +566,7 @@ impl TypeEnv {
             generic_enums: HashMap::new(),
             instantiations: HashSet::new(),
             class_instance_args: HashMap::new(),
+            class_priv_fields: HashMap::new(),
             generic_rewrites: HashMap::new(),
             method_resolutions: HashMap::new(),
             remote_types: HashSet::new(),
@@ -816,6 +821,67 @@ impl TypeEnv {
 
     pub fn is_immutable(&self, name: &str) -> bool {
         self.immutable_vars.contains(name)
+    }
+
+    /// The `priv` field names of `class_name`, if it has any — resolving a
+    /// monomorphized instance ("geo.Pair$$int") to its base template through
+    /// `class_instance_args` (never by re-parsing the mangled string — the
+    /// #412 lesson).
+    pub fn priv_fields_of(&self, class_name: &str) -> Option<&HashSet<String>> {
+        if let Some(set) = self.class_priv_fields.get(class_name) {
+            return Some(set);
+        }
+        if let Some((base, _)) = self.class_instance_args.get(class_name) {
+            return self.class_priv_fields.get(base);
+        }
+        None
+    }
+
+    /// The module that declared `class_name`: the dotted prefix of its base
+    /// name ("blob.WriteGrant" → "blob", "Pair" → ""). Mangled instance
+    /// names resolve through their recorded base first.
+    pub fn declaring_module_of_class(&self, class_name: &str) -> String {
+        let base = self
+            .class_instance_args
+            .get(class_name)
+            .map(|(b, _)| b.as_str())
+            .unwrap_or(class_name);
+        module_prefix_of(base)
+    }
+
+    /// The module whose code is currently being checked, derived from the
+    /// flattened name of the enclosing function ("blob.create" → "blob",
+    /// "blob.BlobAuthority$apply" → "blob", entry-file items → ""). Returns
+    /// None for compiler-generated bodies (names starting with "__" —
+    /// marshalers, wire wrappers), which are exempt from module privacy:
+    /// generated decode IS the sanctioned external constructor
+    /// (rfc-module-semantics.md section 4).
+    pub fn current_module(&self) -> Option<String> {
+        let f = self.current_fn.as_deref()?;
+        if f.starts_with("__") {
+            return None;
+        }
+        // A method name is "Class$method"; the class part carries the module.
+        let head = f.split('$').next().unwrap_or(f);
+        Some(module_prefix_of(head))
+    }
+
+    /// True when code in the current context may not touch `priv` members of
+    /// `class_name`: there is a current (non-generated) function and its
+    /// module differs from the class's declaring module.
+    pub fn priv_barrier(&self, class_name: &str) -> bool {
+        match self.current_module() {
+            Some(m) => m != self.declaring_module_of_class(class_name),
+            None => false,
+        }
+    }
+}
+
+/// Dotted module prefix of a flattened item name ("a.b.C" → "a.b", "C" → "").
+fn module_prefix_of(name: &str) -> String {
+    match name.rfind('.') {
+        Some(i) => name[..i].to_string(),
+        None => String::new(),
     }
 }
 

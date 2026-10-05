@@ -701,9 +701,16 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
                 }
             }
             let mut fields = Vec::new();
+            let mut priv_fields = HashSet::new();
             for f in &c.fields {
                 let ty = resolve_type_with_params(&f.ty, env, &tp_names)?;
                 fields.push((f.name.node.clone(), ty, f.is_injected));
+                if f.is_priv {
+                    priv_fields.insert(f.name.node.clone());
+                }
+            }
+            if !priv_fields.is_empty() {
+                env.class_priv_fields.insert(c.name.node.clone(), priv_fields);
             }
             let method_names: Vec<String> = c.methods.iter().map(|m| m.node.name.node.clone()).collect();
             // Build method signatures with TypeParam types
@@ -813,9 +820,16 @@ pub(crate) fn resolve_class_fields(program: &Program, env: &mut TypeEnv) -> Resu
             }
         }
         let mut fields = Vec::new();
+        let mut priv_fields = HashSet::new();
         for f in &c.fields {
             let ty = resolve_type(&f.ty, env)?;
             fields.push((f.name.node.clone(), ty, f.is_injected));
+            if f.is_priv {
+                priv_fields.insert(f.name.node.clone());
+            }
+        }
+        if !priv_fields.is_empty() {
+            env.class_priv_fields.insert(c.name.node.clone(), priv_fields);
         }
 
         // Validate trait names
