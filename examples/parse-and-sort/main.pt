@@ -56,7 +56,7 @@ fn main() {
     // ─── Discover segments: parse names, skip junk ───────────────────
     print("--- segments ---")
     let listing = ["4096.seg", "0.seg", "README", "1024.seg", "2048.seg", "tmp.seg"]
-    let segments: [Segment] = []
+    let mut segments: [Segment] = []
     for name in listing {
         if !strings.ends_with(name, ".seg") {
             continue

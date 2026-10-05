@@ -2089,6 +2089,23 @@ fn infer_method_call(
             span,
         ));
     }
+    // Mutating builtins (push, pop, insert, remove, ...) require a mutable
+    // receiver — the same rule as index assignment and user-defined
+    // `mut self` methods (#395). `self` receivers are governed by the
+    // mut-self pass (enforce_mut_self), mirroring the checks above.
+    if super::check::is_mutating_builtin(&obj_type, &method.node)
+        && let Some(root) = super::check::root_variable(&object.node)
+        && root != "self"
+        && env.is_immutable(root)
+    {
+        return Err(CompileError::type_err(
+            format!(
+                "cannot call mutating method '{}' on immutable variable '{}'; declare with 'let mut' to allow mutation",
+                method.node, root
+            ),
+            method.span,
+        ));
+    }
     if let PlutoType::Array(elem) = &obj_type {
         match method.node.as_str() {
             "len" => {

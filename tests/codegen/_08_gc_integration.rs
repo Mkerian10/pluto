@@ -81,7 +81,7 @@ fn test_allocate_nested_class_instances() {
 fn test_allocate_array() {
     let src = r#"
         fn main() {
-            let arr = [1, 2, 3, 4, 5]
+            let mut arr = [1, 2, 3, 4, 5]
             print(arr.len())
         }
     "#;
@@ -92,7 +92,7 @@ fn test_allocate_array() {
 fn test_allocate_empty_array() {
     let src = r#"
         fn main() {
-            let arr: [int] = []
+            let mut arr: [int] = []
             print(arr.len())
         }
     "#;
@@ -103,7 +103,7 @@ fn test_allocate_empty_array() {
 fn test_allocate_array_of_strings() {
     let src = r#"
         fn main() {
-            let arr = ["hello", "world", "pluto"]
+            let mut arr = ["hello", "world", "pluto"]
             print(arr[1])
         }
     "#;
@@ -186,11 +186,11 @@ fn test_allocate_10000_objects() {
 
 #[test]
 fn test_allocate_large_array() {
-    // FIXED: Changed from `let arr: [int] = []` which had syntax error
+    // FIXED: Changed from `let mut arr: [int] = []` which had syntax error
     // push() mutates the array in place, doesn't return a value
     let src = r#"
         fn main() {
-            let arr = [0]
+            let mut arr = [0]
             let mut i = 1
             while i < 1000 {
                 arr.push(i)
@@ -264,7 +264,7 @@ fn test_object_reachable_through_array() {
     // Objects in arrays should not be collected
     let src = r#"
         fn main() {
-            let arr = ["keep", "these", "strings"]
+            let mut arr = ["keep", "these", "strings"]
             let mut sum = 0
             let mut i = 0
             while i < arr.len() {
@@ -354,7 +354,7 @@ fn test_object_survival_across_allocations() {
 fn test_array_elements_survive_gc() {
     let src = r#"
         fn main() {
-            let arr = ["a", "b", "c", "d", "e"]
+            let mut arr = ["a", "b", "c", "d", "e"]
             // Trigger some allocations
             let mut i = 0
             while i < 100 {
@@ -447,7 +447,7 @@ fn test_mixed_type_allocations() {
 
         fn main() {
             let s = "string"
-            let arr = [1, 2, 3]
+            let mut arr = [1, 2, 3]
             let p = Point { x: 10, y: 20 }
             let m = Map<int, int> { 1: 100 }
 

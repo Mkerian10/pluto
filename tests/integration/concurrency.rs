@@ -343,10 +343,10 @@ fn main() {
     let t = spawn foo()
     if true {
         let t2 = spawn foo()
-        let inner = t2.get()
+        let mut inner = t2.get()
         print(inner)
     }
-    let outer = t.get()
+    let mut outer = t.get()
     print(outer)
 }
 "#);
@@ -517,12 +517,12 @@ fn main() {
 fn spawn_deep_copy_array_isolation() {
     // Task gets a deep copy of an array — parent's array unchanged.
     let out = compile_and_run_stdout(r#"
-fn modify_array(arr: [int]) {
+fn modify_array(mut arr: [int]) {
     arr.push(999)
 }
 
 fn main() {
-    let arr = [1, 2, 3]
+    let mut arr = [1, 2, 3]
     let t = spawn modify_array(arr)
     t.get()
     print(arr.len())
@@ -549,8 +549,8 @@ fn modify_inner(o: Outer) {
 }
 
 fn main() {
-    let inner = Inner { value: 42 }
-    let outer = Outer { inner: inner }
+    let mut inner = Inner { value: 42 }
+    let mut outer = Outer { inner: inner }
     let t = spawn modify_inner(outer)
     t.get()
     let result = outer.inner
@@ -582,12 +582,12 @@ fn main() {
 fn spawn_deep_copy_set_isolation() {
     // Task gets a deep copy of a set — parent's set unchanged.
     let out = compile_and_run_stdout(r#"
-fn modify_set(s: Set<int>) {
+fn modify_set(mut s: Set<int>) {
     s.insert(999)
 }
 
 fn main() {
-    let s = Set<int> { 1, 2, 3 }
+    let mut s = Set<int> { 1, 2, 3 }
     let t = spawn modify_set(s)
     t.get()
     print(s.len())
@@ -600,12 +600,12 @@ fn main() {
 fn spawn_strings_safe_without_deep_copy() {
     // Strings are immutable — no deep copy needed, still safe.
     let out = compile_and_run_stdout(r#"
-fn use_string(s: string) string {
+fn use_string(mut s: string) string {
     return s + " world"
 }
 
 fn main() {
-    let s = "hello"
+    let mut s = "hello"
     let t = spawn use_string(s)
     let result = t.get()
     print(s)
@@ -623,12 +623,12 @@ class Container {
     items: [int]
 }
 
-fn modify_container(c: Container) {
+fn modify_container(mut c: Container) {
     c.items.push(999)
 }
 
 fn main() {
-    let c = Container { items: [1, 2, 3] }
+    let mut c = Container { items: [1, 2, 3] }
     let t = spawn modify_container(c)
     t.get()
     print(c.items.len())
@@ -694,7 +694,7 @@ fn stress_gc_pressure_under_suppression() {
 fn allocate_strings(n: int) {
     let mut i = 0
     while i < n {
-        let s = f"item number {i}"
+        let mut s = f"item number {i}"
         i = i + 1
     }
 }
@@ -973,7 +973,7 @@ class Calculator {
 }
 
 fn main() {
-    let c = Calculator { base: 10 }
+    let mut c = Calculator { base: 10 }
     let t = spawn c.add(32)
     let result = t.get()
     print(result)
@@ -998,8 +998,8 @@ class Outer {
 }
 
 fn main() {
-    let inner = Inner { value: 21 }
-    let outer = Outer { inner: inner }
+    let mut inner = Inner { value: 21 }
+    let mut outer = Outer { inner: inner }
     let t = spawn outer.inner.compute()
     let result = t.get()
     print(result)
@@ -1078,7 +1078,7 @@ class Service {
 }
 
 fn main() {
-    let s = Service { fail_flag: 0 }
+    let mut s = Service { fail_flag: 0 }
     let t = spawn s.process()
     let result = t.get() catch err {
         print("caught error")
@@ -1109,7 +1109,7 @@ class Service {
 }
 
 fn main() {
-    let s = Service { fail_flag: 1 }
+    let mut s = Service { fail_flag: 1 }
     let t = spawn s.process()
     let result = t.get() catch err {
         print("caught")
@@ -1243,7 +1243,7 @@ app MyApp[store: Store] {
         let t3 = spawn self.store.get()
         let a = t1.get()
         let b = t2.get()
-        let c = t3.get()
+        let mut c = t3.get()
         print(a + b + c)
     }
 }
@@ -1460,7 +1460,7 @@ fn gc_stress_concurrent_arrays() {
     // Tasks build large arrays to force GC during concurrent execution
     let out = compile_and_run_stdout(r#"
 fn build_array(n: int) [int] {
-    let arr: [int] = []
+    let mut arr: [int] = []
     let mut i = 0
     while i < n {
         arr.push(i * 2)
@@ -1542,10 +1542,10 @@ fn gc_stress_concurrent_nested_arrays() {
     // Tasks build arrays of arrays (nested heap objects)
     let out = compile_and_run_stdout(r#"
 fn build_nested(rows: int, cols: int) int {
-    let outer: [[int]] = []
+    let mut outer: [[int]] = []
     let mut r = 0
     while r < rows {
-        let inner: [int] = []
+        let mut inner: [int] = []
         let mut c = 0
         while c < cols {
             inner.push(r * cols + c)
@@ -1577,7 +1577,7 @@ fn make_string(n: int) string {
 }
 
 fn main() {
-    let results: [string] = []
+    let mut results: [string] = []
     let mut i = 0
     while i < 20 {
         let t = spawn make_string(i)

@@ -1011,7 +1011,7 @@ fn main() {
     let tmp = fs.temp_dir()
     let path = tmp + "/handle.bin"
 
-    let payload = bytes_new()
+    let mut payload = bytes_new()
     let mut i = 0
     while i < 256 {
         payload.push(i as byte)
@@ -1023,7 +1023,7 @@ fn main() {
     w.close()!
 
     let r = fs.open_read(path)!
-    let got = bytes_new()
+    let mut got = bytes_new()
     while true {
         let chunk = r.read_bytes(64)!
         if chunk.len() == 0 {
@@ -1063,7 +1063,7 @@ fn main() {
     let tmp = fs.temp_dir()
     let path = tmp + "/oneshot.bin"
 
-    let payload = bytes_new()
+    let mut payload = bytes_new()
     let mut i = 0
     while i < 256 {
         payload.push(i as byte)
@@ -1097,7 +1097,7 @@ fn main() {
     print(ok2)
 
     // write_all_bytes truncates like write_all.
-    let two = bytes_new()
+    let mut two = bytes_new()
     two.push(0 as byte)
     two.push(255 as byte)
     fs.write_all_bytes(path, two)!
@@ -1377,7 +1377,7 @@ fn drain_check(fd: int) int {
 fn main() {
     let tmp = fs.temp_dir()
     let path = tmp + "/payload.bin"
-    let payload = bytes_new()
+    let mut payload = bytes_new()
     let mut i = 0
     while i < 1048613 {
         payload.push((i % 256) as byte)
@@ -1527,7 +1527,7 @@ fn feed_file(path: string, total: int, sock_fd: int) int {
 fn main() {
     let tmp = fs.temp_dir()
     let path = tmp + "/payload.bin"
-    let payload = bytes_new()
+    let mut payload = bytes_new()
     let mut i = 0
     while i < 1048613 {
         payload.push((i % 256) as byte)

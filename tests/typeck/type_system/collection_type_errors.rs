@@ -9,15 +9,15 @@ fn array_elem_type_mismatch() { compile_should_fail_with(r#"fn main(){let arr:[i
 
 // Map key type mismatch
 #[test]
-fn map_key_type_mismatch() { compile_should_fail_with(r#"fn main(){let m:Map<int,string>={1:"a","b":"c"}}"#, "unexpected token { in expression"); }
+fn map_key_type_mismatch() { compile_should_fail_with(r#"fn main(){let mut m:Map<int,string>={1:"a","b":"c"}}"#, "unexpected token { in expression"); }
 
 // Map value type mismatch
 #[test]
-fn map_value_type_mismatch() { compile_should_fail_with(r#"fn main(){let m:Map<string,int>={"a":1,"b":"c"}}"#, "unexpected token { in expression"); }
+fn map_value_type_mismatch() { compile_should_fail_with(r#"fn main(){let mut m:Map<string,int>={"a":1,"b":"c"}}"#, "unexpected token { in expression"); }
 
 // Set element type mismatch
 #[test]
-fn set_elem_type_mismatch() { compile_should_fail_with(r#"fn main(){let s:Set<int>={1,2,"hi"}}"#, "unexpected token { in expression"); }
+fn set_elem_type_mismatch() { compile_should_fail_with(r#"fn main(){let mut s:Set<int>={1,2,"hi"}}"#, "unexpected token { in expression"); }
 
 // Array generic wrong type arg
 #[test]
@@ -37,11 +37,11 @@ fn nested_array_mismatch() { compile_should_fail_with(r#"fn main(){let arr:[[int
 
 // Map with array values wrong type
 #[test]
-fn map_array_value_mismatch() { compile_should_fail_with(r#"fn main(){let m:Map<string,Array<int>>={"a":[1,2],"b":["hi"]}}"#, "unexpected token { in expression"); }
+fn map_array_value_mismatch() { compile_should_fail_with(r#"fn main(){let mut m:Map<string,Array<int>>={"a":[1,2],"b":["hi"]}}"#, "unexpected token { in expression"); }
 
 // Set of maps wrong type
 #[test]
-fn set_map_mismatch() { compile_should_fail_with(r#"fn main(){let s:Set<Map<string,int>>={{"a":1},{"b":"hi"}}}"#, "unexpected token { in expression"); }
+fn set_map_mismatch() { compile_should_fail_with(r#"fn main(){let mut s:Set<Map<string,int>>={{"a":1},{"b":"hi"}}}"#, "unexpected token { in expression"); }
 
 // Array method return type mismatch
 #[test]

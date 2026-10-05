@@ -20,7 +20,7 @@ fn frame_tag(frame: bytes) int
 fn main() {
     // Build a frame holding every byte value 0..256 — bytes is the honest
     // type for binary data: no encoding, no interpolation, just octets.
-    let frame = bytes_new()
+    let mut frame = bytes_new()
     frame.push(7 as byte)   // tag
     frame.push(0 as byte)   // reserved
     frame.push(1 as byte)   // length hi
@@ -39,7 +39,7 @@ fn main() {
     print(f"wrote {wrote} bytes to the socket")
 
     let conn = server.accept()
-    let got = bytes_new()
+    let mut got = bytes_new()
     while got.len() < 260 {
         let chunk = conn.read_bytes(260 - got.len())
         if chunk.len() == 0 {

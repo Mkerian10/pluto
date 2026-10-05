@@ -717,7 +717,7 @@ fn test_class_memory_layout_field_order() {
 fn test_array_empty() {
     let src = r#"
         fn main() {
-            let arr: [int] = []
+            let mut arr: [int] = []
             print(arr.len())
         }
     "#;
@@ -727,7 +727,7 @@ fn test_array_empty() {
 #[test]
 fn test_array_empty_as_function_arg() {
     let src = r#"
-        fn sum_array(arr: [int]) int {
+        fn sum_array(mut arr: [int]) int {
             let mut total = 0
             let mut i = 0
             while i < arr.len() {
@@ -753,7 +753,7 @@ fn test_array_empty_as_return_value() {
         }
 
         fn main() {
-            let arr = get_empty()
+            let mut arr = get_empty()
             print(arr.len())
         }
     "#;
@@ -764,7 +764,7 @@ fn test_array_empty_as_return_value() {
 fn test_array_int_one_element() {
     let src = r#"
         fn main() {
-            let arr = [42]
+            let mut arr = [42]
             print(arr[0])
         }
     "#;
@@ -775,7 +775,7 @@ fn test_array_int_one_element() {
 fn test_array_int_ten_elements() {
     let src = r#"
         fn main() {
-            let arr = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+            let mut arr = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
             print(arr.len())
             print(arr[5])
         }
@@ -789,7 +789,7 @@ fn test_array_int_ten_elements() {
 fn test_array_int_1000_elements() {
     let src = r#"
         fn main() {
-            let arr: [int] = []
+            let mut arr: [int] = []
             let mut i = 0
             while i < 1000 {
                 arr.push(i)
@@ -808,7 +808,7 @@ fn test_array_int_1000_elements() {
 fn test_array_float() {
     let src = r#"
         fn main() {
-            let arr = [1.1, 2.2, 3.3]
+            let mut arr = [1.1, 2.2, 3.3]
             print(arr[1])
         }
     "#;
@@ -819,7 +819,7 @@ fn test_array_float() {
 fn test_array_bool() {
     let src = r#"
         fn main() {
-            let arr = [true, false, true]
+            let mut arr = [true, false, true]
             if arr[0] {
                 print("first is true")
             }
@@ -842,7 +842,7 @@ fn test_array_nullable() {
             let val2: int? = 42
             let val3: int? = none
             let val4: int? = 99
-            let arr = [val1, val2, val3, val4]
+            let mut arr = [val1, val2, val3, val4]
             if arr[0] == none {
                 print("first is none")
             }

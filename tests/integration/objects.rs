@@ -137,7 +137,7 @@ fn generic_object_identity_per_instantiation() {
 
         fn main() {
             let mut a = Topic<int> { name: "a", count: 0 }
-            let b = Topic<int> { name: "a", count: 0 }
+            let mut b = Topic<int> { name: "a", count: 0 }
             let alias = a
             print(a == b)
             print(a == alias)
@@ -186,7 +186,7 @@ fn generic_object_cross_instantiation_eq_is_type_error() {
 
         fn main() {
             let a = Cell<int> { v: 1 }
-            let b = Cell<string> { v: "x" }
+            let mut b = Cell<string> { v: "x" }
             print(a == b)
         }
         "#,
@@ -476,9 +476,9 @@ fn value_equality_split() {
             print(arr1 == [1, 2, 3])
             print(arr1 == [1, 2, 4])
 
-            let m1 = Map<string, int> {}
+            let mut m1 = Map<string, int> {}
             m1.insert("a", 1)
-            let m2 = Map<string, int> {}
+            let mut m2 = Map<string, int> {}
             m2.insert("a", 1)
             print(m1 == m2)
 

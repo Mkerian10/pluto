@@ -2,7 +2,7 @@ import std.hash
 
 // Helpers -------------------------------------------------------------------
 
-fn repeat_byte(b: int, count: int) bytes {
+fn repeat_byte(mut b: int, count: int) bytes {
     let mut out = bytes_new()
     let mut i = 0
     while i < count {
@@ -173,7 +173,7 @@ test "sha256 many small updates equal one-shot" {
 test "sha256 finish is a non-destructive snapshot" {
     let mut h = hash.new_sha256()
     h.update("abc".to_bytes())
-    let first = hash.to_hex(h.finish())
+    let mut first = hash.to_hex(h.finish())
     expect(first).to_equal("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     // finishing again changes nothing, and the stream can continue
     expect(hash.to_hex(h.finish())).to_equal(first)

@@ -2783,7 +2783,7 @@ fn header_tag(frame: bytes) int
 }
 
 fn main() {
-    let frame = bytes_new()
+    let mut frame = bytes_new()
     frame.push(7 as byte)
     frame.push(0 as byte)
     frame.push(0 as byte)
@@ -2806,7 +2806,7 @@ fn header_tag(frame: bytes) int
 }
 
 fn main() {
-    let frame = bytes_new()
+    let mut frame = bytes_new()
     frame.push(7 as byte)
     print(header_tag(frame))
 }

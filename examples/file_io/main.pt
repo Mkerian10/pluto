@@ -66,7 +66,7 @@ fn main() {
     // through the one-shots, and read_at/write_at (pread/pwrite) address
     // the file positionally without touching the descriptor's cursor.
     let bin = tmp + "/payload.bin"
-    let payload = bytes_new()
+    let mut payload = bytes_new()
     let mut i = 0
     while i < 256 {
         payload.push(i as byte)

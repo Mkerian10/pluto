@@ -9,7 +9,7 @@ fn sum_array(a: [int]) int {
 }
 
 fn main() {
-    let numbers = [10, 20, 30, 40, 50]
+    let mut numbers = [10, 20, 30, 40, 50]
     print(numbers.len())
     print(sum_array(numbers))
     numbers.push(60)

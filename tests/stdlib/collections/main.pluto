@@ -143,7 +143,7 @@ test "flat_map expands" {
 
 test "for_each runs on all elements" {
     let nums = [10, 20, 30]
-    let seen: [int] = []
+    let mut seen: [int] = []
     collections.for_each(nums, (x: int) => { seen.push(x) })
     expect(seen.len()).to_equal(3)
     expect(seen[0]).to_equal(10)
@@ -429,7 +429,7 @@ test "try_for_each propagates callback error" {
 
 // -- sort --
 
-fn ints_to_string(xs: [int]) string {
+fn ints_to_string(mut xs: [int]) string {
     let mut out = ""
     for x in xs {
         out = out + f"{x},"
@@ -456,12 +456,12 @@ test "sort with duplicates" {
 }
 
 test "sort extreme values" {
-    let xs = [9223372036854775807, 0, -9223372036854775807 - 1, 5]
+    let mut xs = [9223372036854775807, 0, -9223372036854775807 - 1, 5]
     expect(ints_to_string(collections.sort(xs))).to_equal("-9223372036854775808,0,5,9223372036854775807,")
 }
 
 test "sort leaves the input untouched" {
-    let xs = [3, 1, 2]
+    let mut xs = [3, 1, 2]
     let sorted = collections.sort(xs)
     expect(ints_to_string(xs)).to_equal("3,1,2,")
     expect(ints_to_string(sorted)).to_equal("1,2,3,")
@@ -469,7 +469,7 @@ test "sort leaves the input untouched" {
 
 test "sort larger non-power-of-two input" {
     // 0..37 scrambled deterministically.
-    let xs: [int] = []
+    let mut xs: [int] = []
     for i in 0..37 {
         xs.push((i * 17) % 37)
     }

@@ -6,7 +6,7 @@ pub class Pair<A, B> {
 }
 
 pub fn map<T, U>(arr: [T], f: fn(T) U) [U] {
-    let result: [U] = []
+    let mut result: [U] = []
     for item in arr {
         result.push(f(item))
     }
@@ -14,7 +14,7 @@ pub fn map<T, U>(arr: [T], f: fn(T) U) [U] {
 }
 
 pub fn filter<T>(arr: [T], f: fn(T) bool) [T] {
-    let result: [T] = []
+    let mut result: [T] = []
     for item in arr {
         if f(item) {
             result.push(item)
@@ -66,7 +66,7 @@ pub fn for_each<T>(arr: [T], f: fn(T)) {
 }
 
 pub fn flat_map<T, U>(arr: [T], f: fn(T) [U]) [U] {
-    let result: [U] = []
+    let mut result: [U] = []
     for item in arr {
         let sub = f(item)
         for x in sub {
@@ -87,7 +87,7 @@ pub fn count<T>(arr: [T], f: fn(T) bool) int {
 }
 
 pub fn reverse<T>(arr: [T]) [T] {
-    let result: [T] = []
+    let mut result: [T] = []
     let mut i = arr.len() - 1
     while i >= 0 {
         result.push(arr[i])
@@ -97,7 +97,7 @@ pub fn reverse<T>(arr: [T]) [T] {
 }
 
 pub fn take<T>(arr: [T], n: int) [T] {
-    let result: [T] = []
+    let mut result: [T] = []
     let mut limit = n
     if limit > arr.len() {
         limit = arr.len()
@@ -111,7 +111,7 @@ pub fn take<T>(arr: [T], n: int) [T] {
 }
 
 pub fn drop<T>(arr: [T], n: int) [T] {
-    let result: [T] = []
+    let mut result: [T] = []
     let mut start = n
     if start > arr.len() {
         start = arr.len()
@@ -125,7 +125,7 @@ pub fn drop<T>(arr: [T], n: int) [T] {
 }
 
 pub fn zip<A, B>(a: [A], b: [B]) [Pair<A, B>] {
-    let result: [Pair<A, B>] = []
+    let mut result: [Pair<A, B>] = []
     let mut limit = a.len()
     if b.len() < limit {
         limit = b.len()
@@ -139,7 +139,7 @@ pub fn zip<A, B>(a: [A], b: [B]) [Pair<A, B>] {
 }
 
 pub fn enumerate<T>(arr: [T]) [Pair<int, T>] {
-    let result: [Pair<int, T>] = []
+    let mut result: [Pair<int, T>] = []
     let mut i = 0
     while i < arr.len() {
         result.push(Pair<int, T> { first: i, second: arr[i] })
@@ -149,7 +149,7 @@ pub fn enumerate<T>(arr: [T]) [Pair<int, T>] {
 }
 
 pub fn flatten<T>(arr: [[T]]) [T] {
-    let result: [T] = []
+    let mut result: [T] = []
     for sub in arr {
         for item in sub {
             result.push(item)
@@ -270,7 +270,7 @@ pub fn sort_strings(arr: [string]) [string] {
 // but calls to try_* must always be handled with `!` or `catch`.
 
 pub fn try_map<T, U>(arr: [T], f: fn(T) U!) [U] {
-    let result: [U] = []
+    let mut result: [U] = []
     for item in arr {
         result.push(f(item)!)
     }
@@ -278,7 +278,7 @@ pub fn try_map<T, U>(arr: [T], f: fn(T) U!) [U] {
 }
 
 pub fn try_filter<T>(arr: [T], f: fn(T) bool!) [T] {
-    let result: [T] = []
+    let mut result: [T] = []
     for item in arr {
         if f(item)! {
             result.push(item)

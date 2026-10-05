@@ -409,7 +409,7 @@ fn main() {
     let s = j.to_string()
     let j2 = json.parse(s)!
     print(j2.get("a").get_int())
-    let arr = j2.get("b")
+    let mut arr = j2.get("b")
     print(arr.at(0).get_bool())
     print(arr.at(1).is_null())
     print(arr.at(2).get_string())

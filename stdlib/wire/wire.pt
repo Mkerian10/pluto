@@ -144,7 +144,7 @@ pub class WireValueEncoder impl Encoder {
     }
 
     fn encode_array_start(mut self, len: int) {
-        let elements: [WireValue] = []
+        let mut elements: [WireValue] = []
         let frame = EncoderFrame.ArrayFrame { elements: elements }
         self.stack.push(frame)
     }
@@ -163,8 +163,8 @@ pub class WireValueEncoder impl Encoder {
     }
 
     fn encode_map_start(mut self, len: int) {
-        let keys: [string] = []
-        let values: [WireValue] = []
+        let mut keys: [string] = []
+        let mut values: [WireValue] = []
         let frame = EncoderFrame.RecordFrame { keys: keys, values: values, next_field: "" }
         self.stack.push(frame)
     }
@@ -183,8 +183,8 @@ pub class WireValueEncoder impl Encoder {
     }
 
     fn encode_record_start(mut self, type_name: string, num_fields: int) {
-        let keys: [string] = []
-        let values: [WireValue] = []
+        let mut keys: [string] = []
+        let mut values: [WireValue] = []
         let frame = EncoderFrame.RecordFrame { keys: keys, values: values, next_field: "" }
         self.stack.push(frame)
     }
@@ -220,8 +220,8 @@ pub class WireValueEncoder impl Encoder {
     }
 
     fn encode_variant_start(mut self, type_name: string, variant_name: string, variant_index: int, num_fields: int) {
-        let keys: [string] = []
-        let values: [WireValue] = []
+        let mut keys: [string] = []
+        let mut values: [WireValue] = []
         let frame = EncoderFrame.VariantFrame { variant_name: variant_name, keys: keys, values: values, next_field: "" }
         self.stack.push(frame)
     }
@@ -249,20 +249,27 @@ pub class WireValueEncoder impl Encoder {
         let frame = self.stack[len - 1]
         match frame {
             EncoderFrame.ArrayFrame { elements } {
-                elements.push(value)
-                let new_frame = EncoderFrame.ArrayFrame { elements: elements }
+                // Match bindings are immutable views; arrays are heap
+                // references, so a mut rebinding mutates the same array.
+                let mut elems = elements
+                elems.push(value)
+                let new_frame = EncoderFrame.ArrayFrame { elements: elems }
                 self.stack[len - 1] = new_frame
             }
             EncoderFrame.RecordFrame { keys, values, next_field } {
-                keys.push(next_field)
-                values.push(value)
-                let new_frame = EncoderFrame.RecordFrame { keys: keys, values: values, next_field: next_field }
+                let mut ks = keys
+                let mut vs = values
+                ks.push(next_field)
+                vs.push(value)
+                let new_frame = EncoderFrame.RecordFrame { keys: ks, values: vs, next_field: next_field }
                 self.stack[len - 1] = new_frame
             }
             EncoderFrame.VariantFrame { variant_name, keys, values, next_field } {
-                keys.push(next_field)
-                values.push(value)
-                let new_frame = EncoderFrame.VariantFrame { variant_name: variant_name, keys: keys, values: values, next_field: next_field }
+                let mut ks = keys
+                let mut vs = values
+                ks.push(next_field)
+                vs.push(value)
+                let new_frame = EncoderFrame.VariantFrame { variant_name: variant_name, keys: ks, values: vs, next_field: next_field }
                 self.stack[len - 1] = new_frame
             }
         }
@@ -708,7 +715,7 @@ fn json_to_wire(j: json.Json) WireValue {
         return wire_string(j.get_string())
     }
     if j.is_array() {
-        let elems: [WireValue] = []
+        let mut elems: [WireValue] = []
         let mut i = 0
         while i < j.len() {
             elems.push(json_to_wire(j.at(i)))
@@ -729,8 +736,8 @@ fn json_to_wire(j: json.Json) WireValue {
             return wire_variant(name, data)
         }
         // Regular record
-        let keys: [string] = []
-        let vals: [WireValue] = []
+        let mut keys: [string] = []
+        let mut vals: [WireValue] = []
         let mut i = 0
         while i < j.len() {
             keys.push(j.keys[i])

@@ -305,7 +305,7 @@ stage Api {
     }
 
     fn main(self) {
-        let b = Box<int> { value: 99 }
+        let mut b = Box<int> { value: 99 }
         let enc = wire.wire_value_encoder()
         __marshal_Box__int(b, enc)
         let value = enc.result()
@@ -341,7 +341,7 @@ stage Api {
     }
 
     fn main(self) {
-        let b = Box<int> { value: 7 }
+        let mut b = Box<int> { value: 7 }
         let s = __wire_encode_Box__int(b)
         let decoded = __wire_decode_Box__int(s) catch err {
             print("decode failed")
@@ -620,7 +620,7 @@ stage Api {
     }
 
     fn main(self) {
-        let buf = bytes_new()
+        let mut buf = bytes_new()
         let mut i = 0
         while i < 256 {
             buf.push(i as byte)
@@ -660,7 +660,7 @@ stage Api {
     }
 
     fn main(self) {
-        let buf = bytes_new()
+        let mut buf = bytes_new()
         buf.push(255 as byte)
         buf.push(0 as byte)
         let some = self.echo(Chunk { data: buf })
@@ -701,9 +701,9 @@ stage Api {
     }
 
     fn main(self) {
-        let a = bytes_new()
+        let mut a = bytes_new()
         a.push(1 as byte)
-        let b = bytes_new()
+        let mut b = bytes_new()
         b.push(2 as byte)
         b.push(3 as byte)
         let chunks = [a, b]

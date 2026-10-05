@@ -230,7 +230,7 @@ import std.wire
 
 fn main() {
     let fmt = wire.json_wire_format()
-    let elems: [wire.WireValue] = []
+    let mut elems: [wire.WireValue] = []
     elems.push(wire.wire_int(1))
     elems.push(wire.wire_int(2))
     elems.push(wire.wire_int(3))
@@ -263,7 +263,7 @@ import std.wire
 
 fn main() {
     let fmt = wire.json_wire_format()
-    let elems: [wire.WireValue] = []
+    let mut elems: [wire.WireValue] = []
     let v = wire.wire_array(elems)
     let s = fmt.serialize(v)
     print(s)
@@ -294,10 +294,10 @@ import std.wire
 
 fn main() {
     let fmt = wire.json_wire_format()
-    let keys: [string] = []
+    let mut keys: [string] = []
     keys.push("name")
     keys.push("age")
-    let vals: [wire.WireValue] = []
+    let mut vals: [wire.WireValue] = []
     vals.push(wire.wire_string("Alice"))
     vals.push(wire.wire_int(30))
     let v = wire.wire_record(keys, vals)
@@ -332,8 +332,8 @@ import std.wire
 
 fn main() {
     let fmt = wire.json_wire_format()
-    let keys: [string] = []
-    let vals: [wire.WireValue] = []
+    let mut keys: [string] = []
+    let mut vals: [wire.WireValue] = []
     let v = wire.wire_record(keys, vals)
     let s = fmt.serialize(v)
     print(s)
@@ -408,13 +408,13 @@ import std.wire
 
 fn main() {
     let fmt = wire.json_wire_format()
-    let items: [wire.WireValue] = []
+    let mut items: [wire.WireValue] = []
     items.push(wire.wire_int(10))
     items.push(wire.wire_int(20))
-    let keys: [string] = []
+    let mut keys: [string] = []
     keys.push("items")
     keys.push("count")
-    let vals: [wire.WireValue] = []
+    let mut vals: [wire.WireValue] = []
     vals.push(wire.wire_array(items))
     vals.push(wire.wire_int(2))
     let v = wire.wire_record(keys, vals)
@@ -459,7 +459,7 @@ import std.wire
 
 fn main() {
     let fmt = wire.json_wire_format()
-    let elems: [wire.WireValue] = []
+    let mut elems: [wire.WireValue] = []
     elems.push(wire.wire_int(1))
     elems.push(wire.wire_string("two"))
     elems.push(wire.wire_bool(true))
@@ -592,7 +592,7 @@ fn main() {
     enc.encode_variant_end()
     let wv = enc.result()
 
-    let names: [string] = []
+    let mut names: [string] = []
     names.push("Active")
     names.push("Suspended")
 
@@ -618,7 +618,7 @@ fn main() {
     enc.encode_variant_end()
     let wv = enc.result()
 
-    let names: [string] = []
+    let mut names: [string] = []
     names.push("Active")
     names.push("Suspended")
 
@@ -1005,7 +1005,7 @@ stage Api {
     }
 
     pub fn get_order_list(self) OrderList {
-        let items: [Order] = []
+        let mut items: [Order] = []
         return OrderList { items: items, total: 0 }
     }
 
@@ -1108,7 +1108,7 @@ fn wire_bytes_json_round_trip_all_values() {
 import std.wire
 
 fn main() {
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     let mut i = 0
     while i < 256 {
         buf.push(i as byte)
@@ -1156,7 +1156,7 @@ fn main() {
     }
 
     // decode_int on a Bytes value
-    let buf = bytes_new()
+    let mut buf = bytes_new()
     buf.push(1 as byte)
     let mut dec2 = wire.wire_value_decoder(wire.wire_bytes(buf))
     let n = dec2.decode_int() catch err: wire.WireError {

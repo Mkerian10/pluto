@@ -1295,6 +1295,38 @@ pub(super) fn root_variable(expr: &Expr) -> Option<&str> {
     }
 }
 
+/// Builtin collection methods that mutate their receiver in place. Calling
+/// one requires a mutable binding — the same rule as index assignment and
+/// user-defined `mut self` methods (#395). Everything else on these types
+/// (len, contains, slice, keys, ...) reads without modifying.
+pub(super) fn is_mutating_builtin(receiver: &PlutoType, method: &str) -> bool {
+    match receiver {
+        PlutoType::Array(_) => matches!(
+            method,
+            "push" | "pop" | "clear" | "reverse" | "remove_at" | "insert_at"
+        ),
+        PlutoType::Map(_, _) => matches!(method, "insert" | "remove"),
+        PlutoType::Set(_) => matches!(method, "insert" | "remove"),
+        // slice/find/compare/read_* return new values without modifying
+        // the buffer; the bulk ops and fixed-width writes mutate in place.
+        PlutoType::Bytes => matches!(
+            method,
+            "push"
+                | "extend"
+                | "fill"
+                | "copy_from"
+                | "write_u8"
+                | "write_u16_le"
+                | "write_u16_be"
+                | "write_u32_le"
+                | "write_u32_be"
+                | "write_i64_le"
+                | "write_i64_be"
+        ),
+        _ => false,
+    }
+}
+
 /// Collect all `Expr::Ident` names referenced in a block.
 struct IdentCollector<'a> {
     idents: &'a mut std::collections::HashSet<String>,
@@ -1791,6 +1823,42 @@ fn is_mutation_on_self(expr: &Expr) -> bool {
     }
 }
 
+/// Resolve the type of an access chain rooted at `self` (self.xs,
+/// self.inner.buf, self.matrix[0], ...) using registered class/app/stage
+/// field info. Returns None for shapes it cannot type (the caller then
+/// skips the check — conservative allow).
+fn self_chain_type(expr: &Expr, class_name: &str, env: &TypeEnv) -> Option<PlutoType> {
+    match expr {
+        Expr::Ident(name) if name == "self" => Some(PlutoType::Class(class_name.to_string())),
+        Expr::FieldAccess { object, field } => {
+            let obj_ty = self_chain_type(&object.node, class_name, env)?;
+            let PlutoType::Class(cn) = obj_ty else { return None };
+            let info = if let Some(ci) = env.classes.get(&cn) {
+                ci
+            } else if let Some((app_name, ci)) = &env.app
+                && app_name == &cn
+            {
+                ci
+            } else if let Some((_, ci)) = env.stages.iter().find(|(n, _)| n == &cn) {
+                ci
+            } else {
+                return None;
+            };
+            info.fields
+                .iter()
+                .find(|(n, _, _)| n == &field.node)
+                .map(|(_, t, _)| t.clone())
+        }
+        Expr::Index { object, .. } => match self_chain_type(&object.node, class_name, env)? {
+            PlutoType::Array(elem) => Some(*elem),
+            PlutoType::Map(_, val) => Some(*val),
+            PlutoType::Bytes => Some(PlutoType::Byte),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Check if an expression contains a mut self method call on self.
 fn check_expr_for_mut_method_call(
     expr: &Expr,
@@ -1811,6 +1879,21 @@ fn check_expr_for_mut_method_call(
                         span,
                     ));
                 }
+            }
+            // A mutating builtin on a collection reached through self
+            // (self.xs.push(...)) modifies self's data — rejected in a
+            // non-mut method exactly like `self.xs[i] = v` (#395).
+            if is_mutation_on_self(&object.node)
+                && let Some(recv_ty) = self_chain_type(&object.node, class_name, env)
+                && is_mutating_builtin(&recv_ty, &method.node)
+            {
+                return Err(CompileError::type_err(
+                    format!(
+                        "cannot call mutating method '{}' on self's data in a non-mut method; declare 'mut self'",
+                        method.node
+                    ),
+                    span,
+                ));
             }
             // Recurse into args
             for arg in args {

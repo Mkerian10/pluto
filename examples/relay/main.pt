@@ -52,7 +52,7 @@ fn main() {
     // non-power-of-two tail.
     let size = 1048613
     let src = tmp + "/blob.bin"
-    let payload = bytes_new()
+    let mut payload = bytes_new()
     let mut i = 0
     while i < size {
         payload.push((i % 256) as byte)

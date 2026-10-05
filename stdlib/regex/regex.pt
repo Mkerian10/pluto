@@ -26,7 +26,7 @@ pub fn find(pattern: string, text: string) int {
 }
 
 pub fn find_all(pattern: string, text: string) [int] {
-    let results: [int] = []
+    let mut results: [int] = []
     let mut pos = 0
     while pos <= text.len() {
         let mut result = pattern_at(pattern, 0, text, pos)
@@ -76,7 +76,7 @@ pub fn replace_all(pattern: string, replacement: string, text: string) string {
 }
 
 pub fn split(pattern: string, text: string) [string] {
-    let results: [string] = []
+    let mut results: [string] = []
     let mut pos = 0
     let mut prev = 0
     while pos <= text.len() {

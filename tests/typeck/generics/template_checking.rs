@@ -235,13 +235,13 @@ fn set_of_type_param_deferred_to_instantiation() {
     let out = compile_and_run_stdout(
         r#"
 fn singleton<T>(val: T) Set<T> {
-    let s = Set<T> {}
+    let mut s = Set<T> {}
     s.insert(val)
     return s
 }
 
 fn main() {
-    let s = singleton(42)
+    let mut s = singleton(42)
     print(s.contains(42))
 }
 "#,
