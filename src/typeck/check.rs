@@ -1414,6 +1414,16 @@ fn check_field_assign(
             field.span,
         ));
     }
+    // Same rule for a NESTED lvalue path that reaches this field through an
+    // index rooted in an entity's container field: `e.a[0].b = v` writes
+    // entity state (an element of e's array) but its immediate object is the
+    // element, not the entity, so the check above can't see it (#440 gap 2).
+    // A direct value-field chain without an index (`e.cfg.x = 1`) is #440
+    // gap 3 (value-reference aliasing) and is NOT rejected here — pending an
+    // owner decision.
+    if let Some((entity, via_field, span)) = entity_hop_under_index(object, env) {
+        return Err(entity_path_write_error(&entity, &via_field, span));
+    }
     // Module privacy (rfc-module-semantics.md section 1): priv fields are
     // unwritable outside their module — otherwise a legitimately-obtained
     // value could be tampered into a forged one (`g.token = epoch_now()`),
@@ -1457,6 +1467,16 @@ fn check_index_assign(
     value: &Spanned<Expr>,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // An indexed write whose path traverses an entity's field from outside
+    // the entity (`e.arr[0] = 1`, `e.m["k"] = v`, `e.arr[0][1] = v`)
+    // mutates entity state without the per-instance lock: the assignment's
+    // immediate object is the container, not the entity, so the #427
+    // field-write rejection doesn't fire on its own (#440 gap 2). Checked
+    // before caller-side mutability: no amount of `let mut` makes this
+    // legal, so the "declare with 'let mut'" advice would mislead.
+    if let Some((entity, via_field, span)) = entity_hop_in_lvalue_path(object, env) {
+        return Err(entity_path_write_error(&entity, &via_field, span));
+    }
     // Element assignment mutates the container, so the binding it reaches
     // through must be mutable — same rule as field assignment and mut-self
     // method calls (`self` is governed by the mut-self checks).
@@ -1529,6 +1549,70 @@ fn check_index_assign(
         }
     }
     Ok(())
+}
+
+/// Finds a step in an lvalue path that traverses an entity's field from
+/// outside the entity's own methods: a `FieldAccess` whose object is an
+/// entity other than `self`. Returns the OUTERMOST such hop — the entity
+/// field the write actually flows through — as
+/// `(entity_name, field_name, field_span)`.
+///
+/// Used on the OBJECT expression of index/field assignments, where the
+/// immediate object of the assignment is a container or element rather than
+/// the entity itself, so the #427 immediate-object rejection can't see the
+/// entity (#440 gap 2). Inference failures on sub-paths are swallowed here:
+/// the regular assignment checks re-infer the full path and surface them
+/// with their own diagnostics.
+fn entity_hop_in_lvalue_path(
+    expr: &Spanned<Expr>,
+    env: &mut TypeEnv,
+) -> Option<(String, String, Span)> {
+    match &expr.node {
+        Expr::FieldAccess { object, field } => {
+            if !matches!(&object.node, Expr::Ident(name) if name == "self")
+                && let Ok(PlutoType::Class(name)) =
+                    infer_expr(&object.node, object.span, env, None)
+                && env.object_types.contains(&name)
+            {
+                return Some((name, field.node.clone(), field.span));
+            }
+            entity_hop_in_lvalue_path(object, env)
+        }
+        Expr::Index { object, .. } => entity_hop_in_lvalue_path(object, env),
+        _ => None,
+    }
+}
+
+/// Like `entity_hop_in_lvalue_path`, but only reports hops that feed an
+/// INDEX step. Used for field assignments: `e.a[0].b = v` writes an element
+/// of the entity's array and is rejected, while a direct value-field chain
+/// without an index (`e.cfg.x = 1`) is #440 gap 3 (value-reference
+/// aliasing), pending an owner decision, and stays legal for now.
+fn entity_hop_under_index(
+    expr: &Spanned<Expr>,
+    env: &mut TypeEnv,
+) -> Option<(String, String, Span)> {
+    match &expr.node {
+        Expr::Index { object, .. } => entity_hop_in_lvalue_path(object, env),
+        Expr::FieldAccess { object, .. } => entity_hop_under_index(object, env),
+        _ => None,
+    }
+}
+
+/// The diagnostic for an indexed/nested write through an entity's field
+/// from outside the entity — same contract as the #427 direct-field
+/// rejection: entity state is only mutable through the entity's methods.
+fn entity_path_write_error(entity: &str, via_field: &str, span: Span) -> CompileError {
+    CompileError::type_err(
+        format!(
+            "cannot assign through field '{via_field}' of entity '{entity}' from \
+             outside its own methods: entities serialize methods, not field pokes — \
+             an external write through an entity's field mutates entity state \
+             without the per-instance lock; mutate through a method instead \
+             (e.g. a `mut self` setter)"
+        ),
+        span,
+    )
 }
 
 fn check_match_stmt(
