@@ -1471,3 +1471,163 @@ fn main() {
 "#, 10);
     assert_eq!(out.trim(), "11");
 }
+
+// ── Value copy semantics at the send boundary (#429) ───────────────────────
+//
+// Channels carry VALUES by copy (matching spawn's capture-by-value): send
+// deep-copies the payload at the boundary, so sender and receiver never
+// share mutable state. Entities (objects) are the deliberate exception —
+// see tests/integration/objects.rs.
+
+#[test]
+fn chan_send_class_value_copies_mutate_original_after_send() {
+    // Mutating the original AFTER send must not affect what the receiver
+    // sees: the copy is taken at the send boundary.
+    let out = compile_and_run_stdout(r#"
+class Point {
+    x: int
+    y: int
+}
+
+fn main() {
+    let (tx, rx) = chan<Point>(1)
+    let mut p = Point { x: 1, y: 2 }
+    tx.send(p)!
+    p.x = 100
+    let got = rx.recv()!
+    print(got.x)
+    print(p.x)
+}
+"#);
+    assert_eq!(out.trim(), "1\n100");
+}
+
+#[test]
+fn chan_recv_mutate_copy_leaves_sender_original_unaffected() {
+    let out = compile_and_run_stdout(r#"
+class Point {
+    x: int
+    y: int
+}
+
+fn main() {
+    let (tx, rx) = chan<Point>(1)
+    let p = Point { x: 7, y: 8 }
+    tx.send(p)!
+    let mut got = rx.recv()!
+    got.x = 999
+    print(p.x)
+    print(got.x)
+}
+"#);
+    assert_eq!(out.trim(), "7\n999");
+}
+
+#[test]
+fn chan_send_array_copies() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<[int]>(1)
+    let mut a = [1, 2, 3]
+    tx.send(a)!
+    a[0] = 100
+    let got = rx.recv()!
+    print(got[0])
+    print(a[0])
+}
+"#);
+    assert_eq!(out.trim(), "1\n100");
+}
+
+#[test]
+fn chan_send_map_copies() {
+    let out = compile_and_run_stdout(r#"
+fn main() {
+    let (tx, rx) = chan<Map<string, int>>(1)
+    let mut m = Map<string, int> { "a": 1 }
+    tx.send(m)!
+    m["a"] = 100
+    let got = rx.recv()!
+    print(got["a"])
+    print(m["a"])
+}
+"#);
+    assert_eq!(out.trim(), "1\n100");
+}
+
+#[test]
+fn chan_try_send_class_value_copies() {
+    let out = compile_and_run_stdout(r#"
+class Point {
+    x: int
+    y: int
+}
+
+fn main() {
+    let (tx, rx) = chan<Point>(1)
+    let mut p = Point { x: 5, y: 6 }
+    tx.try_send(p)!
+    p.x = 100
+    let got = rx.recv()!
+    print(got.x)
+}
+"#);
+    assert_eq!(out.trim(), "5");
+}
+
+#[test]
+fn select_send_class_value_copies() {
+    // The select send-arm path stores the value into the select buffer —
+    // it must be copied there too, not just in sender.send().
+    let out = compile_and_run_stdout(r#"
+class Point {
+    x: int
+    y: int
+}
+
+fn main() {
+    let (tx, rx) = chan<Point>(1)
+    let mut p = Point { x: 3, y: 4 }
+    select {
+        tx.send(p) {
+            p.x = 100
+        }
+    }
+    let got = rx.recv()!
+    print(got.x)
+    print(p.x)
+}
+"#);
+    assert_eq!(out.trim(), "3\n100");
+}
+
+#[test]
+fn chan_send_class_cross_task_no_shared_state() {
+    // Receiver runs in a spawned task and mutates its copy; the sender's
+    // original is untouched — no cross-thread shared mutable state for
+    // value types.
+    let out = compile_and_run_stdout(r#"
+class Counter {
+    n: int
+}
+
+fn bump(rx: Receiver<Counter>, done: Sender<int>) {
+    let mut c = rx.recv()!
+    c.n = c.n + 1000
+    done.send(c.n)!
+}
+
+fn main() {
+    let (tx, rx) = chan<Counter>(1)
+    let (dtx, drx) = chan<int>(1)
+    let c = Counter { n: 1 }
+    let t = spawn bump(rx, dtx)
+    tx.send(c)!
+    let theirs = drx.recv()!
+    t.get()!
+    print(theirs)
+    print(c.n)
+}
+"#);
+    assert_eq!(out.trim(), "1001\n1");
+}

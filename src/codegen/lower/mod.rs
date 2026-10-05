@@ -2477,6 +2477,28 @@ impl<'a> LowerContext<'a> {
         Ok(())
     }
 
+    /// Deep-copy a value crossing a channel boundary (send/try_send/select
+    /// send arms), mirroring spawn's capture copy: values are copied at the
+    /// boundary so sender and receiver never share mutable state, while
+    /// entities (objects), DI singletons, and the app instance cross as
+    /// shared identity handles. __pluto_deep_copy itself shares nested
+    /// entities inside a copied value, so the static entity check here is an
+    /// optimization (skip the call), not the correctness guarantee.
+    fn copy_for_channel_send(&mut self, val: Value, ty: &PlutoType) -> Value {
+        let is_shared_entity = if let PlutoType::Class(name) = ty {
+            self.env.di_order.contains(name)
+                || self.env.object_types.contains(name)
+                || self.env.app.as_ref().map_or(false, |(app_name, _)| app_name == name)
+        } else {
+            false
+        };
+        if !is_shared_entity && needs_deep_copy(ty) {
+            self.call_runtime("__pluto_deep_copy", &[val])
+        } else {
+            val
+        }
+    }
+
     fn lower_select(
         &mut self,
         arms: &[SelectArm],
@@ -2513,7 +2535,13 @@ impl<'a> LowerContext<'a> {
                     let op_val = self.builder.ins().iconst(types::I64, 1); // 1 = send
                     self.builder.ins().store(MemFlags::new(), op_val, buffer, Offset32::new(op_offset));
                     let send_val = self.lower_expr(&value.node)?;
-                    let slot = to_array_slot(send_val, &infer_type_for_expr(&value.node, self.env, &self.var_types), &mut self.builder);
+                    let send_ty = infer_type_for_expr(&value.node, self.env, &self.var_types);
+                    // Copy at the boundary, same as sender.send(): the value
+                    // in the select buffer must be isolated from the sender
+                    // even if another arm fires first (the copy is then
+                    // simply dropped for the GC to reclaim).
+                    let send_val = self.copy_for_channel_send(send_val, &send_ty);
+                    let slot = to_array_slot(send_val, &send_ty, &mut self.builder);
                     self.builder.ins().store(MemFlags::new(), slot, buffer, Offset32::new(val_offset));
                 }
             }
@@ -4651,6 +4679,7 @@ impl<'a> LowerContext<'a> {
                 "send" => {
                     let inner = inner.clone();
                     let arg_val = self.lower_expr(&args[0].node)?;
+                    let arg_val = self.copy_for_channel_send(arg_val, &inner);
                     let slot = to_array_slot(arg_val, &inner, &mut self.builder);
                     self.call_runtime("__pluto_chan_send", &[obj_ptr, slot]);
                     return Ok(self.builder.ins().iconst(types::I64, 0));
@@ -4658,6 +4687,7 @@ impl<'a> LowerContext<'a> {
                 "try_send" => {
                     let inner = inner.clone();
                     let arg_val = self.lower_expr(&args[0].node)?;
+                    let arg_val = self.copy_for_channel_send(arg_val, &inner);
                     let slot = to_array_slot(arg_val, &inner, &mut self.builder);
                     self.call_runtime("__pluto_chan_try_send", &[obj_ptr, slot]);
                     return Ok(self.builder.ins().iconst(types::I64, 0));
@@ -6696,7 +6726,8 @@ fn infer_type_for_expr_match(
     PlutoType::Void
 }
 
-/// Whether a type needs deep-copying at spawn sites.
+/// Whether a type needs deep-copying at concurrency boundaries (spawn
+/// captures and channel sends).
 /// Heap-allocated mutable types need copying; primitives, immutable strings,
 /// and shared-by-reference types (tasks, channels) do not.
 fn needs_deep_copy(ty: &PlutoType) -> bool {
