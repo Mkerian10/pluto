@@ -1289,7 +1289,7 @@ fn object_external_nested_path_assign_rejected() {
             b.pts[0].x = 5
         }
         "#,
-        "cannot assign through field 'pts' of entity 'Board' from outside its own methods",
+        "cannot read field 'pts' of entity 'Board' from outside its own methods",
     );
 }
 
@@ -1411,6 +1411,10 @@ fn object_self_index_writes_still_work() {
                 self.m["k"] = 7
                 self.rows[0][1] = 9
             }
+
+            fn a0(self) int { return self.arr[0] }
+            fn mk(self) int { return self.m["k"] }
+            fn r01(self) int { return self.rows[0][1] }
         }
 
         fn main() {
@@ -1420,9 +1424,11 @@ fn object_self_index_writes_still_work() {
                 rows: [[1, 2]]
             }
             c.bump()
-            print(c.arr[0])
-            print(c.m["k"])
-            print(c.rows[0][1])
+            // Verification goes through methods: external reads of
+            // reference-shaped entity fields are rejected (section 3).
+            print(c.a0())
+            print(c.mk())
+            print(c.r01())
         }
         "#,
     );
@@ -1462,4 +1468,241 @@ fn class_index_assign_shapes_unaffected() {
         "#,
     );
     assert_eq!(out.trim(), "10\n2\n5");
+}
+
+// ── Entity field reads (rfc-module-semantics.md section 3) ──────────────────
+//
+// Writes never (pinned above, #427/#432); scalar-shaped reads are allowed
+// and loaded under the instance read lock; reference-shaped reads go
+// through methods returning deliberate copies; cross-field consistency is
+// a method, by doctrine.
+
+/// Scalar-shaped fields read externally: int, string, unit enum, nullable
+/// scalar, and an entity handle (identity is meant to be shared).
+#[test]
+fn entity_scalar_field_reads_allowed() {
+    let out = compile_and_run_stdout(
+        r#"
+        enum Mode {
+            Idle
+            Busy
+        }
+
+        object Peer {
+            id: int
+        }
+
+        object Server {
+            port: int
+            name: string
+            mode: Mode
+            limit: int?
+            peer: Peer
+
+            fn noop(self) int {
+                return 0
+            }
+        }
+
+        fn main() {
+            let s = Server { port: 8080, name: "api", mode: Mode.Idle, limit: none, peer: Peer { id: 7 } }
+            print(s.port)
+            print(s.name)
+            let l = s.limit ?? 0 - 1
+            print(l)
+            print(s.peer.id)
+        }
+        "#,
+    );
+    assert_eq!(out, "8080\napi\n-1\n7\n");
+}
+
+/// Reference-shaped fields are unreadable from outside: the raw read would
+/// hand out a live reference into lock-serialized state.
+#[test]
+fn entity_array_field_read_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Log {
+            entries: [string]
+            fn add(mut self, e: string) { self.entries.push(e) }
+        }
+
+        fn main() {
+            let l = Log { entries: [] }
+            print(l.entries.len())
+        }
+        "#,
+        "reference-shaped",
+    );
+}
+
+#[test]
+fn entity_map_field_read_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Registry {
+            names: Map<string, int>
+        }
+
+        fn main() {
+            let r = Registry { names: Map<string, int> {} }
+            let n = r.names
+            print(1)
+        }
+        "#,
+        "reference-shaped",
+    );
+}
+
+#[test]
+fn entity_bytes_field_read_rejected() {
+    compile_should_fail_with(
+        r#"
+        object Buffer {
+            data: bytes
+        }
+
+        fn main() {
+            let b = Buffer { data: bytes_new() }
+            print(b.data.len())
+        }
+        "#,
+        "reference-shaped",
+    );
+}
+
+/// A value-class field is the `e.cfg.x = 1` aliasing hole: rejected.
+#[test]
+fn entity_value_class_field_read_rejected() {
+    compile_should_fail_with(
+        r#"
+        class Config {
+            retries: int
+        }
+
+        object Service {
+            cfg: Config
+        }
+
+        fn main() {
+            let s = Service { cfg: Config { retries: 3 } }
+            print(s.cfg.retries)
+        }
+        "#,
+        "reference-shaped",
+    );
+}
+
+/// Data-carrying enums are heap state; unit enums are tags (allowed above).
+#[test]
+fn entity_data_enum_field_read_rejected() {
+    compile_should_fail_with(
+        r#"
+        enum State {
+            Empty
+            Holding { what: string }
+        }
+
+        object Slot {
+            state: State
+        }
+
+        fn main() {
+            let s = Slot { state: State.Empty }
+            let st = s.state
+            print(1)
+        }
+        "#,
+        "reference-shaped",
+    );
+}
+
+/// Inside the entity's own methods, self reads of reference-shaped fields
+/// are untouched — the method holds the lock and the copy discipline is
+/// the method author's to apply.
+#[test]
+fn entity_self_reads_unrestricted_in_methods() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Log {
+            entries: [string]
+
+            fn add(mut self, e: string) {
+                self.entries.push(e)
+            }
+
+            fn count(self) int {
+                return self.entries.len()
+            }
+        }
+
+        fn main() {
+            let mut l = Log { entries: [] }
+            l.add("a")
+            l.add("b")
+            print(l.count())
+        }
+        "#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// The owner-aware lock: a method reading a scalar field through an alias
+/// of its own instance re-acquires on the same thread and proceeds.
+#[test]
+fn entity_alias_to_self_scalar_read_in_method() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Counter {
+            count: int
+
+            fn read_via(self, other: Counter) int {
+                return other.count
+            }
+        }
+
+        fn main() {
+            let c = Counter { count: 41 }
+            print(c.read_via(c))
+        }
+        "#,
+    );
+    assert_eq!(out, "41\n");
+}
+
+/// Scalar reads after spawned mutation observe the joined state — the
+/// locked read orders with the serialized methods' stores.
+#[test]
+fn entity_scalar_read_after_spawned_mutation() {
+    let out = compile_and_run_stdout(
+        r#"
+        object Counter {
+            count: int
+
+            fn bump_n(mut self, n: int) {
+                let mut i = 0
+                while i < n {
+                    self.count = self.count + 1
+                    i = i + 1
+                }
+            }
+        }
+
+        fn work(mut c: Counter) int {
+            c.bump_n(1000)
+            return 0
+        }
+
+        fn main() {
+            let c = Counter { count: 0 }
+            let t = spawn work(c)
+            let u = spawn work(c)
+            t.get()
+            u.get()
+            print(c.count)
+        }
+        "#,
+    );
+    assert_eq!(out, "2000\n");
 }
