@@ -52,7 +52,7 @@ pub error StaleGrant {
 // belief the world can falsify between any two instructions, so only the
 // authority's fence may judge it. Copyable, comparable, wire-shaped.
 pub class WriteGrant {
-    token: int
+    priv token: int
 }
 
 // The authority — one referent, everyone shares it, every interaction is a

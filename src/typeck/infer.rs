@@ -284,6 +284,21 @@ pub(crate) fn infer_expr(
                         ))
                 }
                 PlutoType::Class(class_name) => {
+                    // Module privacy (rfc-module-semantics.md section 1):
+                    // priv fields are unreadable outside their module.
+                    if env.priv_barrier(class_name)
+                        && env.priv_fields_of(class_name).is_some_and(|p| p.contains(&field.node))
+                    {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "field '{}' of '{}' is priv and cannot be read outside module '{}'",
+                                field.node,
+                                class_name,
+                                env.declaring_module_of_class(class_name),
+                            ),
+                            field.span,
+                        ));
+                    }
                     let class_info = env.classes.get(class_name).ok_or_else(|| {
                         CompileError::type_err(
                             format!("unknown class '{class_name}'"),
@@ -1570,6 +1585,31 @@ fn infer_struct_lit(
         })?.clone();
         (ci, name.node.clone())
     };
+
+    // Module privacy (rfc-module-semantics.md section 1): a literal must
+    // name every field, so any priv field makes external construction
+    // impossible — creation flows through the module's own functions, which
+    // is what provenance means. Generated marshalers are exempt (decode is
+    // the sanctioned external constructor; its trust is predicate-grade,
+    // re-established by decode-time invariant validation).
+    if env.priv_barrier(&effective_name)
+        && let Some(privs) = env.priv_fields_of(&effective_name)
+        && !privs.is_empty()
+    {
+        let mut names: Vec<&str> = privs.iter().map(String::as_str).collect();
+        names.sort();
+        return Err(CompileError::type_err(
+            format!(
+                "cannot construct '{}' here: field '{}' is priv, so instances \
+                 are only created inside module '{}' — use the module's own \
+                 constructor functions",
+                effective_name,
+                names.join("', '"),
+                env.declaring_module_of_class(&effective_name),
+            ),
+            span,
+        ));
+    }
 
     // Block construction of classes with injected dependencies
     // In scope-seed position a literal for a dep-bearing scoped class is

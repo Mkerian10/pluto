@@ -295,6 +295,15 @@ pub struct Field {
     /// value of the binder type. Checked in src/typeck/dominance.rs.
     #[serde(default)]
     pub guarded_by: Option<GuardClause>,
+    /// `priv token: int` — module-private field (rfc-module-semantics.md §1).
+    /// Outside the declaring module the field cannot be read or written, and
+    /// since a struct literal must name every field, any priv field makes
+    /// external literal construction impossible: creation flows through the
+    /// module's own functions, which is what provenance means. Privacy is
+    /// not secrecy: the field still crosses the wire in a wire-shaped type
+    /// (decode is the sanctioned constructor).
+    #[serde(default)]
+    pub is_priv: bool,
 }
 
 /// The clause of a `guarded_by` field annotation: a typed binder plus a

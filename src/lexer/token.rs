@@ -79,6 +79,8 @@ pub enum Token {
     SelfVal,
     #[token("pub")]
     Pub,
+    #[token("priv")]
+    Priv,
     #[token("for")]
     For,
     #[token("in")]
@@ -340,7 +342,7 @@ pub enum Token {
 pub fn is_keyword(s: &str) -> bool {
     matches!(s, "fn" | "let" | "mut" | "return" | "if" | "else" | "while" | "true" | "false"
         | "class" | "trait" | "app" | "inject" | "error" | "raise" | "catch" | "spawn" | "serve"
-        | "enum" | "impl" | "self" | "pub" | "for" | "in" | "break" | "continue"
+        | "enum" | "impl" | "self" | "pub" | "priv" | "for" | "in" | "break" | "continue"
         | "match" | "import" | "as" | "extern" | "uses" | "ambient" | "tests" | "test"
         | "invariant" | "requires" | "assert" | "select" | "default"
         | "scope" | "scoped" | "transient" | "none" | "system" | "stage" | "override"
@@ -372,6 +374,7 @@ impl std::fmt::Display for Token {
             Token::Impl => write!(f, "impl"),
             Token::SelfVal => write!(f, "self"),
             Token::Pub => write!(f, "pub"),
+            Token::Priv => write!(f, "priv"),
             Token::For => write!(f, "for"),
             Token::In => write!(f, "in"),
             Token::Break => write!(f, "break"),
