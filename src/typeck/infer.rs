@@ -1010,7 +1010,23 @@ fn infer_binop(
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
     let lt = infer_expr(&lhs.node, lhs.span, env, None)?;
-    let rt = infer_expr(&rhs.node, rhs.span, env, None)?;
+    // `&&`/`||` short-circuit, so the rhs only evaluates when the lhs came
+    // out true (`&&`) / false (`||`) — null checks in the lhs narrow
+    // nullable variables while inferring the rhs (#450): `v != none && v >
+    // 3`, and by De Morgan `v == none || v > 3`.
+    let rt = if matches!(op, BinOp::And | BinOp::Or) {
+        let mut narrow = Vec::new();
+        super::check::null_narrows(&lhs.node, *op == BinOp::And, env, &mut narrow);
+        env.push_scope();
+        for (name, inner) in narrow {
+            env.narrowed_vars.insert(name, inner);
+        }
+        let rt = infer_expr(&rhs.node, rhs.span, env, None);
+        env.pop_scope();
+        rt?
+    } else {
+        infer_expr(&rhs.node, rhs.span, env, None)?
+    };
 
     match op {
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {

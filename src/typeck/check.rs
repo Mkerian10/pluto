@@ -32,6 +32,48 @@ fn null_check_target(cond: &Expr, env: &TypeEnv) -> Option<(String, bool, PlutoT
     }
 }
 
+/// Collect the nullable variables proven non-none when `cond` evaluates to
+/// `truth`, as (name, inner_type) pairs.
+///
+/// Since `&&`/`||` short-circuit, conditions decompose (#450):
+/// - a true conjunction proves both conjuncts (`x != none && y != none`
+///   narrows both),
+/// - a false disjunction refutes both disjuncts — De Morgan (`x == none ||
+///   y == none` narrows both when false),
+/// - `!` flips the sense,
+/// - a bare null check narrows its variable (`x != none` when true,
+///   `x == none` when false).
+///
+/// Anything else contributes nothing — conservative, mirroring
+/// `condition_facts` in facts.rs for the integer domain.
+pub(crate) fn null_narrows(
+    cond: &Expr,
+    truth: bool,
+    env: &TypeEnv,
+    out: &mut Vec<(String, PlutoType)>,
+) {
+    match cond {
+        Expr::BinOp { op: BinOp::And, lhs, rhs } if truth => {
+            null_narrows(&lhs.node, true, env, out);
+            null_narrows(&rhs.node, true, env, out);
+        }
+        Expr::BinOp { op: BinOp::Or, lhs, rhs } if !truth => {
+            null_narrows(&lhs.node, false, env, out);
+            null_narrows(&rhs.node, false, env, out);
+        }
+        Expr::UnaryOp { op: UnaryOp::Not, operand } => {
+            null_narrows(&operand.node, !truth, env, out);
+        }
+        _ => {
+            if let Some((name, is_neq, inner)) = null_check_target(cond, env) {
+                if is_neq == truth {
+                    out.push((name, inner));
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn check_function(func: &Function, env: &mut TypeEnv, class_name: Option<&str>) -> Result<(), CompileError> {
     let prev_fn = env.current_fn.take();
     env.current_fn = Some(if let Some(cn) = class_name {
@@ -404,7 +446,12 @@ fn check_stmt(
             // branch; `x == none` proves it in the else branch; a guard
             // (`if x == none { return }` with no else, or `if x != none`
             // whose else terminates) proves it for the rest of the block.
-            let null_check = null_check_target(&condition.node, env);
+            // Conjunctions decompose: every `!= none` conjunct narrows in
+            // the then branch, every `== none` disjunct in the else branch.
+            let mut then_narrow = Vec::new();
+            null_narrows(&condition.node, true, env, &mut then_narrow);
+            let mut else_narrow = Vec::new();
+            null_narrows(&condition.node, false, env, &mut else_narrow);
             // Flow facts (facts.rs): extract int-comparison facts from the
             // condition — unless it contains a call, which could mutate
             // state between evaluation and use.
@@ -450,10 +497,8 @@ fn check_stmt(
                 .as_ref()
                 .is_some_and(|eb| super::block_always_terminates(&eb.node));
             env.push_scope();
-            if let Some((ref name, is_neq, ref inner)) = null_check {
-                if is_neq {
-                    env.narrowed_vars.insert(name.clone(), inner.clone());
-                }
+            for (name, inner) in &then_narrow {
+                env.narrowed_vars.insert(name.clone(), inner.clone());
             }
             for f in &cond_facts.then_facts {
                 env.facts.assume(f.clone());
@@ -480,10 +525,8 @@ fn check_stmt(
             if let Some(else_blk) = else_block {
                 super::discharge::branch_restore(env, &disc_snap);
                 env.push_scope();
-                if let Some((ref name, is_neq, ref inner)) = null_check {
-                    if !is_neq {
-                        env.narrowed_vars.insert(name.clone(), inner.clone());
-                    }
+                for (name, inner) in &else_narrow {
+                    env.narrowed_vars.insert(name.clone(), inner.clone());
                 }
                 for f in &cond_facts.else_facts {
                     env.facts.assume(f.clone());
@@ -523,15 +566,17 @@ fn check_stmt(
             )?;
             // Guard idiom: the branch that sees `none` never falls through,
             // so the variable is non-none for the rest of the current block.
-            if let Some((name, is_neq, inner)) = null_check {
-                let none_path_dead = if is_neq {
-                    // `if x != none { ... } else { <terminates> }`
-                    else_terminates
-                } else {
-                    // `if x == none { <terminates> }` (with or without else)
-                    then_terminates
-                };
-                if none_path_dead {
+            if else_terminates {
+                // `if cond { ... } else { <terminates> }` — only the
+                // cond-true path falls through.
+                for (name, inner) in then_narrow {
+                    env.narrowed_vars.insert(name, inner);
+                }
+            }
+            if then_terminates {
+                // `if cond { <terminates> }` (with or without else) — only
+                // the cond-false path falls through.
+                for (name, inner) in else_narrow {
                     env.narrowed_vars.insert(name, inner);
                 }
             }
@@ -603,6 +648,16 @@ fn check_stmt(
                 for f in &guard_facts.then_facts {
                     env.facts.assume(f.clone());
                 }
+            }
+            // Null checks in the guard narrow the same way (`while x != none
+            // && ...`): the guard was just evaluated true at every body
+            // entry, and a body reassignment re-widens (the Assign arm
+            // overwrites the narrowed entry with the declared nullable
+            // type).
+            let mut guard_narrow = Vec::new();
+            null_narrows(&condition.node, true, env, &mut guard_narrow);
+            for (name, inner) in guard_narrow {
+                env.narrowed_vars.insert(name, inner);
             }
             env.loop_depth += 1;
             check_block(&body.node, env, return_type)?;

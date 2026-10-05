@@ -228,6 +228,29 @@ fn main() {
     );
 }
 
+#[test]
+fn and_guard_before_index_in_rhs_compiles_clean() {
+    // #450 facts note: a bound on the left of `&&` guarding a use on the
+    // right (`j >= 0 && xs[j] > v`). Type-checks and produces no
+    // degenerate-condition warnings. (The arith-fit/shift elision scan
+    // stays conservative inside a single `&&` expression — runtime checks
+    // remain; this guards against regressions in the checked behavior.)
+    assert_no_warnings(
+        r#"
+fn f(xs: [int], j: int, v: int) int {
+    if j >= 0 && xs[j] > v {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    print(f([10, 20, 30], 1, 15))
+}
+"#,
+    );
+}
+
 // ── Variable-variable relations ──────────────────────────────────────────────
 
 #[test]
