@@ -111,16 +111,20 @@ fn generic_explicit_call_with_expr() {
 
 #[test]
 fn generic_comparison_ambiguity() {
-    // x < y > z should parse as (x < y) > z (comparison), NOT as generic type args
-    // This should fail because you can't compare bool > int
-    compile_should_fail_with(r#"
+    // x < y > z must parse as comparisons, NOT as generic type args.
+    // Since #451 the comparison reading is the chain x < y && y > z.
+    let stdout = compile_and_run_stdout(r#"
         fn main() {
             let x = 1
             let y = 2
             let z = 3
             let result = x < y > z
+            print(result)
+            print(x < z > y)
         }
-    "#, "cannot compare bool with int");
+    "#);
+    // 1 < 2 && 2 > 3 = false; 1 < 3 && 3 > 2 = true
+    assert_eq!(stdout.trim(), "false\ntrue");
 }
 
 #[test]

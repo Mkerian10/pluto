@@ -912,6 +912,7 @@ fn syntactic_type(
             syntactic_type(&operand.node, env, leaf_ty)
         }
         Expr::UnaryOp { op: UnaryOp::Not, .. } => Some(PlutoType::Bool),
+        Expr::CompareChain { .. } => Some(PlutoType::Bool),
         Expr::BinOp { op, lhs, rhs } => {
             if is_comparison(*op) || matches!(op, BinOp::And | BinOp::Or) {
                 return Some(PlutoType::Bool);
@@ -1567,6 +1568,20 @@ pub fn eval_condition_with(cond: &Expr, resolve: &AffineResolver, facts: &FactEn
         Expr::BinOp { op, lhs, rhs } if is_comparison(*op) => {
             eval_comparison(*op, &lhs.node, &rhs.node, resolve, facts)
         }
+        // A chained comparison is the conjunction of its adjacent pairs
+        // (same combination rule as `&&` above).
+        Expr::CompareChain { operands, ops } => {
+            let mut verdict = Verdict::Proven;
+            for (i, op) in ops.iter().enumerate() {
+                let v = eval_comparison(*op, &operands[i].node, &operands[i + 1].node, resolve, facts);
+                verdict = match (verdict, v) {
+                    (Verdict::Refuted, _) | (_, Verdict::Refuted) => return Verdict::Refuted,
+                    (Verdict::Proven, Verdict::Proven) => Verdict::Proven,
+                    _ => Verdict::Unknown,
+                };
+            }
+            verdict
+        }
         _ => Verdict::Unknown,
     }
 }
@@ -1740,16 +1755,36 @@ pub fn condition_facts_with(cond: &Expr, resolve: &AffineResolver) -> CondFacts 
             }
         }
         Expr::BinOp { op, lhs, rhs } if is_comparison(*op) => {
-            let Some(l) = to_affine_with(&lhs.node, resolve) else { return CondFacts::default() };
-            let Some(r) = to_affine_with(&rhs.node, resolve) else { return CondFacts::default() };
-            let Some(neg_r) = r.checked_neg() else { return CondFacts::default() };
-            let Some(d) = l.checked_add(&neg_r) else { return CondFacts::default() };
-            CondFacts {
-                then_facts: facts_from_diff(*op, &d),
-                else_facts: facts_from_diff(negate_cmp(*op), &d),
+            comparison_facts(*op, &lhs.node, &rhs.node, resolve)
+        }
+        // A chained comparison is the conjunction of its adjacent pairs:
+        // every pair holds in the then-branch; the negation is a
+        // disjunction, which yields no usable facts — except for a lone
+        // pair, which can't happen (the parser keeps single comparisons
+        // as BinOp).
+        Expr::CompareChain { operands, ops } => {
+            let mut then_facts = Vec::new();
+            for (i, op) in ops.iter().enumerate() {
+                then_facts.extend(
+                    comparison_facts(*op, &operands[i].node, &operands[i + 1].node, resolve)
+                        .then_facts,
+                );
             }
+            CondFacts { then_facts, else_facts: Vec::new() }
         }
         _ => CondFacts::default(),
+    }
+}
+
+/// Facts from a single comparison `lhs <op> rhs` in the affine fragment.
+fn comparison_facts(op: BinOp, lhs: &Expr, rhs: &Expr, resolve: &AffineResolver) -> CondFacts {
+    let Some(l) = to_affine_with(lhs, resolve) else { return CondFacts::default() };
+    let Some(r) = to_affine_with(rhs, resolve) else { return CondFacts::default() };
+    let Some(neg_r) = r.checked_neg() else { return CondFacts::default() };
+    let Some(d) = l.checked_add(&neg_r) else { return CondFacts::default() };
+    CondFacts {
+        then_facts: facts_from_diff(op, &d),
+        else_facts: facts_from_diff(negate_cmp(op), &d),
     }
 }
 

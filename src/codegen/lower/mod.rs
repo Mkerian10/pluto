@@ -3281,6 +3281,7 @@ impl<'a> LowerContext<'a> {
                 Ok(self.builder.use_var(*var))
             }
             Expr::BinOp { op, lhs, rhs } => self.lower_binop(op, lhs, rhs),
+            Expr::CompareChain { operands, ops } => self.lower_compare_chain(operands, ops),
             Expr::UnaryOp { op, operand } => {
                 let val = self.lower_expr(&operand.node)?;
                 let operand_type = infer_type_for_expr(&operand.node, self.env, &self.var_types);
@@ -3615,20 +3616,7 @@ impl<'a> LowerContext<'a> {
         let lhs_type = infer_type_for_expr(&lhs.node, self.env, &self.var_types);
         let is_float = lhs_type == PlutoType::Float;
         let is_string = lhs_type == PlutoType::String;
-        let is_byte = lhs_type == PlutoType::Byte;
         let is_int = lhs_type == PlutoType::Int;
-        // Classes are DATA: == compares structure (recursively, through
-        // arrays/maps/sets/enums/nullables). Objects are ENTITIES: ==
-        // compares identity, so they stay on the pointer-icmp path — as do
-        // trait objects (dynamic type unknown) and task/channel handles.
-        let is_structural = match &lhs_type {
-            PlutoType::Class(n) | PlutoType::Enum(n) => !self.env.object_types.contains(n),
-            PlutoType::Array(_)
-            | PlutoType::Map(..)
-            | PlutoType::Set(_)
-            | PlutoType::Nullable(_) => true,
-            _ => false,
-        };
 
         let result = match op {
             BinOp::Add if is_string => self.call_runtime("__pluto_string_concat", &[l, r]),
@@ -3698,42 +3686,9 @@ impl<'a> LowerContext<'a> {
                 self.builder.ins().srem(l, r)
             }
             BinOp::Mod => self.builder.ins().srem(l, r),
-            BinOp::Eq if is_string => {
-                let i32_result = self.call_runtime("__pluto_string_eq", &[l, r]);
-                self.builder.ins().ireduce(types::I8, i32_result)
+            BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+                self.emit_comparison(op, l, r, &lhs_type)
             }
-            BinOp::Eq if is_float => self.builder.ins().fcmp(FloatCC::Equal, l, r),
-            BinOp::Eq if is_structural => {
-                let raw = self.call_runtime("__pluto_deep_eq", &[l, r]);
-                let z = self.builder.ins().iconst(types::I64, 0);
-                self.builder.ins().icmp(IntCC::NotEqual, raw, z)
-            }
-            BinOp::Eq => self.builder.ins().icmp(IntCC::Equal, l, r),
-            BinOp::Neq if is_string => {
-                let i32_result = self.call_runtime("__pluto_string_eq", &[l, r]);
-                let i8_result = self.builder.ins().ireduce(types::I8, i32_result);
-                let one = self.builder.ins().iconst(types::I8, 1);
-                self.builder.ins().bxor(i8_result, one)
-            }
-            BinOp::Neq if is_float => self.builder.ins().fcmp(FloatCC::NotEqual, l, r),
-            BinOp::Neq if is_structural => {
-                let raw = self.call_runtime("__pluto_deep_eq", &[l, r]);
-                let z = self.builder.ins().iconst(types::I64, 0);
-                self.builder.ins().icmp(IntCC::Equal, raw, z)
-            }
-            BinOp::Neq => self.builder.ins().icmp(IntCC::NotEqual, l, r),
-            BinOp::Lt if is_float => self.builder.ins().fcmp(FloatCC::LessThan, l, r),
-            BinOp::Lt if is_byte => self.builder.ins().icmp(IntCC::UnsignedLessThan, l, r),
-            BinOp::Lt => self.builder.ins().icmp(IntCC::SignedLessThan, l, r),
-            BinOp::Gt if is_float => self.builder.ins().fcmp(FloatCC::GreaterThan, l, r),
-            BinOp::Gt if is_byte => self.builder.ins().icmp(IntCC::UnsignedGreaterThan, l, r),
-            BinOp::Gt => self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
-            BinOp::LtEq if is_float => self.builder.ins().fcmp(FloatCC::LessThanOrEqual, l, r),
-            BinOp::LtEq if is_byte => self.builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, l, r),
-            BinOp::LtEq => self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
-            BinOp::GtEq if is_float => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
-            BinOp::GtEq if is_byte => self.builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, l, r),
-            BinOp::GtEq => self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r),
             BinOp::And | BinOp::Or => unreachable!("short-circuit ops lowered above"),
             BinOp::BitAnd => self.builder.ins().band(l, r),
             BinOp::BitOr => self.builder.ins().bor(l, r),
@@ -3788,6 +3743,107 @@ impl<'a> LowerContext<'a> {
         self.builder.seal_block(rhs_bb);
         let r = self.lower_expr(&rhs.node)?;
         self.builder.ins().jump(merge_bb, &[r]);
+
+        self.builder.switch_to_block(merge_bb);
+        self.builder.seal_block(merge_bb);
+        Ok(self.builder.block_params(merge_bb)[0])
+    }
+
+    /// Emit the machine comparison `l <op> r`, where both sides have type
+    /// `operand_ty` (typeck guarantees the pair agrees). Shared by
+    /// [`Self::lower_binop`] and each link of [`Self::lower_compare_chain`].
+    fn emit_comparison(&mut self, op: &BinOp, l: Value, r: Value, operand_ty: &PlutoType) -> Value {
+        let is_float = *operand_ty == PlutoType::Float;
+        let is_string = *operand_ty == PlutoType::String;
+        let is_byte = *operand_ty == PlutoType::Byte;
+        // Classes are DATA: == compares structure (recursively, through
+        // arrays/maps/sets/enums/nullables). Objects are ENTITIES: ==
+        // compares identity, so they stay on the pointer-icmp path — as do
+        // trait objects (dynamic type unknown) and task/channel handles.
+        let is_structural = match operand_ty {
+            PlutoType::Class(n) | PlutoType::Enum(n) => !self.env.object_types.contains(n),
+            PlutoType::Array(_)
+            | PlutoType::Map(..)
+            | PlutoType::Set(_)
+            | PlutoType::Nullable(_) => true,
+            _ => false,
+        };
+
+        match op {
+            BinOp::Eq if is_string => {
+                let i32_result = self.call_runtime("__pluto_string_eq", &[l, r]);
+                self.builder.ins().ireduce(types::I8, i32_result)
+            }
+            BinOp::Eq if is_float => self.builder.ins().fcmp(FloatCC::Equal, l, r),
+            BinOp::Eq if is_structural => {
+                let raw = self.call_runtime("__pluto_deep_eq", &[l, r]);
+                let z = self.builder.ins().iconst(types::I64, 0);
+                self.builder.ins().icmp(IntCC::NotEqual, raw, z)
+            }
+            BinOp::Eq => self.builder.ins().icmp(IntCC::Equal, l, r),
+            BinOp::Neq if is_string => {
+                let i32_result = self.call_runtime("__pluto_string_eq", &[l, r]);
+                let i8_result = self.builder.ins().ireduce(types::I8, i32_result);
+                let one = self.builder.ins().iconst(types::I8, 1);
+                self.builder.ins().bxor(i8_result, one)
+            }
+            BinOp::Neq if is_float => self.builder.ins().fcmp(FloatCC::NotEqual, l, r),
+            BinOp::Neq if is_structural => {
+                let raw = self.call_runtime("__pluto_deep_eq", &[l, r]);
+                let z = self.builder.ins().iconst(types::I64, 0);
+                self.builder.ins().icmp(IntCC::Equal, raw, z)
+            }
+            BinOp::Neq => self.builder.ins().icmp(IntCC::NotEqual, l, r),
+            BinOp::Lt if is_float => self.builder.ins().fcmp(FloatCC::LessThan, l, r),
+            BinOp::Lt if is_byte => self.builder.ins().icmp(IntCC::UnsignedLessThan, l, r),
+            BinOp::Lt => self.builder.ins().icmp(IntCC::SignedLessThan, l, r),
+            BinOp::Gt if is_float => self.builder.ins().fcmp(FloatCC::GreaterThan, l, r),
+            BinOp::Gt if is_byte => self.builder.ins().icmp(IntCC::UnsignedGreaterThan, l, r),
+            BinOp::Gt => self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
+            BinOp::LtEq if is_float => self.builder.ins().fcmp(FloatCC::LessThanOrEqual, l, r),
+            BinOp::LtEq if is_byte => self.builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, l, r),
+            BinOp::LtEq => self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
+            BinOp::GtEq if is_float => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
+            BinOp::GtEq if is_byte => self.builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, l, r),
+            BinOp::GtEq => self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r),
+            _ => unreachable!("emit_comparison called with non-comparison operator"),
+        }
+    }
+
+    /// Chained comparison `a < b <= c` (spec: Comparison Chaining), the
+    /// short-circuit conjunction `a < b && b <= c` with each operand
+    /// evaluated exactly once: operands evaluate left to right, and operand
+    /// `i + 1` / comparison `i` only run when comparisons `0..i` were all
+    /// true. The first false comparison decides the result.
+    fn lower_compare_chain(
+        &mut self,
+        operands: &[crate::span::Spanned<Expr>],
+        ops: &[BinOp],
+    ) -> Result<Value, CompileError> {
+        debug_assert_eq!(operands.len(), ops.len() + 1);
+
+        let merge_bb = self.builder.create_block();
+        self.builder.append_block_param(merge_bb, types::I8);
+
+        let mut prev = self.lower_expr(&operands[0].node)?;
+        for (i, op) in ops.iter().enumerate() {
+            let cur = self.lower_expr(&operands[i + 1].node)?;
+            // Typeck made the pair agree, so operand i's type dispatches
+            // the comparison (same convention as lower_binop's lhs).
+            let ty = infer_type_for_expr(&operands[i].node, self.env, &self.var_types);
+            let cmp = self.emit_comparison(op, prev, cur, &ty);
+            if i + 1 == ops.len() {
+                self.builder.ins().jump(merge_bb, &[cmp]);
+            } else {
+                // Later blocks are dominated by this one, so `cur` stays
+                // usable as the next link's left value.
+                let next_bb = self.builder.create_block();
+                self.builder.ins().brif(cmp, next_bb, &[], merge_bb, &[cmp]);
+                self.builder.switch_to_block(next_bb);
+                self.builder.seal_block(next_bb);
+            }
+            prev = cur;
+        }
 
         self.builder.switch_to_block(merge_bb);
         self.builder.seal_block(merge_bb);
@@ -6830,6 +6886,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 _ => infer_type_for_expr(&lhs.node, env, var_types),
             }
         }
+        Expr::CompareChain { .. } => PlutoType::Bool,
         Expr::UnaryOp { op, operand } => {
             match op {
                 UnaryOp::Not => PlutoType::Bool,

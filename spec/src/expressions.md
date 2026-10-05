@@ -39,15 +39,22 @@ Range operators (`..` and `..=`) bind looser than arithmetic, so `1 + 2..10` par
 
 Comparison operators can be chained. The expression `a < b < c` is equivalent to `a < b && b < c`, with `b` evaluated only once.
 
-Any combination of comparison operators can be chained:
+Any combination of comparison operators from the same precedence level can be chained, to any length:
 
 ```
 0 < x <= 100         // 0 < x && x <= 100
 a == b == c           // a == b && b == c
 x >= 0 < y            // x >= 0 && 0 < y (unusual but valid)
+a <= b < c <= d       // a <= b && b < c && c <= d
 ```
 
 Chaining only applies to comparison operators (`<`, `>`, `<=`, `>=`, `==`, `!=`). Other binary operators cannot be chained.
+
+Evaluation is left to right and short-circuits like the equivalent `&&`: each operand is evaluated exactly once, and an operand (and its comparison) is only evaluated when every earlier comparison in the chain came out true. In `a < f() < g()`, `a` and `f()` always evaluate; `g()` evaluates only when `a < f()` is true.
+
+Chaining follows the precedence table: equality (`==`, `!=`) and relational (`<`, `>`, `<=`, `>=`) operators sit at different levels, so a mixed sequence does not chain — `flag == x < y` parses as `flag == (x < y)` as the table dictates. Each neighbor pair of a chain must be comparable under the ordinary rules for its operator, so a relational chain over non-numeric operands is a type error.
+
+Chaining is syntactic: a parenthesized comparison is an ordinary operand, so `(a == b) == c` compares the boolean result of `a == b` with `c` and does not chain. A boolean comparison like `(a < b) < c` has no meaning (relational operators do not apply to `bool`), and the unparenthesized `a < b < c` always means the chain.
 
 ## Arithmetic Operators
 
@@ -101,7 +108,7 @@ All logical operators require `bool` operands and produce `bool` results.
 
 Bitwise operators only accept `int` operands. In particular there are no `byte` shifts: convert to `int` first, shift, and convert back.
 
-Right shift (`>>`) is an arithmetic shift that preserves the sign bit. It is parsed as two consecutive `>` tokens to avoid ambiguity with nested generic type arguments.
+Right shift (`>>`) is an arithmetic shift that preserves the sign bit. It is parsed as two *adjacent* `>` tokens to avoid ambiguity with nested generic type arguments. Adjacency is what disambiguates it from a comparison chain: `a >> b` (adjacent) is a shift, while `a > b > c` (separated `>` tokens) is the chained comparison `a > b && b > c`.
 
 The shift amount (right operand of `<<` and `>>`) must lie in `0..63`. An amount outside that range — negative, or 64 and above — is a defect: a constant amount (an integer literal, optionally negated) is rejected at compile time (`shift amount 64 is out of range 0..63`), and a non-constant amount aborts the program at runtime with `pluto: defect: shift amount 70 out of range 0..63`. The amount is never silently masked. The runtime check is omitted when the compiler can prove from flow facts that the amount is in range (for example inside `if n >= 0 && n < 64 { ... 1 << n ... }`). Bits shifted out of the value are *not* a defect: `1 << 63` is `int.min`, `255 << 60` keeps only the low four bits of `255` in the top nibble, and `<<` never reports overflow.
 

@@ -40,7 +40,8 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// v18: DerivedInfo.arith_sites_checked / arith_sites_elided (#416 phase 2).
 /// v19: DerivedInfo.shift_sites_checked / shift_sites_elided (#441).
 /// v20: Field.is_priv — module-private fields (rfc-module-semantics.md section 1).
-const SCHEMA_VERSION: u32 = 20;
+/// v21: Expr::CompareChain — chained comparisons `a < b < c` (#451).
+const SCHEMA_VERSION: u32 = 21;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;

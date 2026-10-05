@@ -2043,6 +2043,16 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
             resolve_qualified_access_in_expr(&mut lhs.node, lhs.span, module_names, enum_name_map);
             resolve_qualified_access_in_expr(&mut rhs.node, rhs.span, module_names, enum_name_map);
         }
+        Expr::CompareChain { operands, .. } => {
+            for operand in operands {
+                resolve_qualified_access_in_expr(
+                    &mut operand.node,
+                    operand.span,
+                    module_names,
+                    enum_name_map,
+                );
+            }
+        }
         Expr::NullPropagate { expr: inner } => {
             resolve_qualified_access_in_expr(&mut inner.node, inner.span, module_names, enum_name_map);
         }

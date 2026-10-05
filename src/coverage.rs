@@ -463,6 +463,11 @@ impl<'a> CoverageScanner<'a> {
                 self.scan_expr(&lhs.node);
                 self.scan_expr(&rhs.node);
             }
+            Expr::CompareChain { operands, .. } => {
+                for operand in operands {
+                    self.scan_expr(&operand.node);
+                }
+            }
             Expr::At { domain, args, .. } => {
                 self.scan_expr(&domain.node);
                 for a in args {

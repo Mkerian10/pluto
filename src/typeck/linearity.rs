@@ -1733,6 +1733,12 @@ impl Visitor for Linearity<'_> {
                 self.visit_expr(rhs);
                 self.check_discarded_temp(rhs);
             }
+            Expr::CompareChain { operands, .. } => {
+                for operand in operands {
+                    self.visit_expr(operand);
+                    self.check_discarded_temp(operand);
+                }
+            }
             Expr::UnaryOp { op: _, operand } => {
                 self.visit_expr(operand);
                 self.check_discarded_temp(operand);

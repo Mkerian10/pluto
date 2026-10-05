@@ -610,6 +610,11 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
             substitute_in_expr(&mut lhs.node, bindings);
             substitute_in_expr(&mut rhs.node, bindings);
         }
+        Expr::CompareChain { operands, .. } => {
+            for operand in operands {
+                substitute_in_expr(&mut operand.node, bindings);
+            }
+        }
         Expr::At { domain, args, .. } => {
             substitute_in_expr(&mut domain.node, bindings);
             for a in args {
