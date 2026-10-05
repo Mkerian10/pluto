@@ -29,6 +29,7 @@
 - [Nullable Types](language/nullable.md)
 - [Modules and Packages](language/modules-and-packages.md)
 - [Testing](language/testing.md)
+- [Testing Concurrent Code](language/testing-concurrency.md)
 
 # The Vision
 
