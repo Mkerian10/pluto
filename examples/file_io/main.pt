@@ -92,6 +92,22 @@ fn main() {
     b.close()!
     fs.remove(bin)!
 
+    // Truncation (issue #397): cut a file to an exact length in one
+    // syscall — the WAL-recovery shape (drop a torn tail) without
+    // read-all + rewrite + rename. Shrinking discards the tail,
+    // extending zero-fills. The handle form composes with sync() when
+    // the shrink must be durable; the path form is the one-shot.
+    let wal = tmp + "/wal.log"
+    fs.write_all(wal, "good entry|torn ent")!
+    let w = fs.open_append(wal)!
+    w.truncate(10)!                        // keep the valid prefix
+    w.sync()!                              // the shrink is now warranted durable
+    w.close()!
+    print(f"after truncate: {fs.read_all(wal)!}")
+    fs.truncate(wal, 4)!                   // path-level one-shot
+    print(f"after path truncate: {fs.read_all(wal)!} (size {fs.file_size(wal)!})")
+    fs.remove(wal)!
+
     // Cleanup
     fs.remove(sub + "/a.txt")!
     fs.remove(sub + "/b.txt")!

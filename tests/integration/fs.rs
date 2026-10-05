@@ -1757,3 +1757,187 @@ fn main() {
         "method 'write_bytes' does not exist on 'fs.File<fs.Write, fs.Poisoned>'",
     );
 }
+
+// ============================================================
+// Truncation (issue #397): File.truncate (ftruncate) and the
+// path-level one-shot fs.truncate (truncate(2)). Shrinking discards
+// the tail, extending zero-fills — syscall-faithful POSIX semantics,
+// documented rather than restricted. Negative len is a condition on
+// caller input: it raises FileError with the handle still sound,
+// before any syscall. A failed ftruncate degrades like a failed
+// write. Wrong mode/state are compile errors, as everywhere else.
+// ============================================================
+
+#[test]
+fn fs_truncate_shrinks() {
+    // The WAL-recovery shape the issue asks for: cut the torn tail to
+    // the valid prefix in one syscall, sync so the shrink is durable,
+    // and read back exactly the prefix.
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/wal.log"
+    fs.write_all(path, "good entry|torn ent")!
+    let w = fs.open_append(path)!
+    w.truncate(10)!
+    w.sync()!
+    w.close()!
+    print(fs.read_all(path)!)
+    print(fs.file_size(path)!)
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "good entry\n10\n");
+}
+
+#[test]
+fn fs_truncate_to_zero() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/empty_me.txt"
+    fs.write_all(path, "contents")!
+    let w = fs.open_append(path)!
+    w.truncate(0)!
+    w.close()!
+    print(fs.file_size(path)!)
+    let back = fs.read_all(path)!
+    print(back.len())
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "0\n0\n");
+}
+
+#[test]
+fn fs_truncate_extends_zero_fills() {
+    // Growth is allowed and means what ftruncate means: the new tail
+    // reads back as zero bytes.
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/grow.bin"
+    fs.write_all(path, "ab")!
+    let w = fs.open_append(path)!
+    w.truncate(5)!
+    w.close()!
+    let b = fs.read_all_bytes(path)!
+    print(b.len())
+    print(b[0] as int)
+    print(b[1] as int)
+    print(b[2] as int)
+    print(b[4] as int)
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    // 'a' = 97, 'b' = 98, zero-filled tail.
+    assert_eq!(out, "5\n97\n98\n0\n0\n");
+}
+
+#[test]
+fn fs_truncate_negative_len_raises_file_error() {
+    // Negative length is caller input, not corruption: FileError (code
+    // 0, checked before any syscall), NOT Degraded — the same
+    // sound-file/destroyed-warrant split receive_from draws. The
+    // linearity checker is per-call, so both arms terminate (any error
+    // path of a Degraded-raising call consumes the binding).
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/neg.txt"
+    let w = fs.open_write(path)!
+    w.write("intact")!
+    w.truncate(-1) catch e: fs.FileError {
+        print(f"rejected: {e.message}")
+        print(f"code: {e.code}")
+        print(fs.read_all(path)!)
+        fs.remove_dir_all(tmp)!
+        return
+    } catch e: fs.Degraded {
+        print("wrong error")
+        let p = e.file
+        p.discard()
+        fs.remove_dir_all(tmp)!
+        return
+    }
+    print("not rejected")
+    w.close()!
+}
+"#,
+    )]);
+    assert_eq!(out, "rejected: truncate: negative length\ncode: 0\nintact\n");
+}
+
+#[test]
+fn fs_truncate_path_level() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/oneshot.txt"
+    fs.write_all(path, "keep|drop")!
+    fs.truncate(path, 4)!
+    print(fs.read_all(path)!)
+    fs.truncate(path, -5) catch e: fs.FileError {
+        print(f"rejected: {e.message}")
+    } catch e: fs.NotFound {
+        print("wrong error")
+    }
+    fs.truncate(tmp + "/missing.txt", 3) catch e: fs.NotFound {
+        print("not found")
+    } catch e: fs.FileError {
+        print("wrong error")
+    }
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "keep\nrejected: truncate: negative length\nnot found\n");
+}
+
+#[test]
+fn fs_reject_truncate_on_read_handle() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_read("/etc/hosts")!
+    f.truncate(0)!
+    f.close()!
+}
+"#,
+        "method 'truncate' does not exist on 'fs.File<fs.Read, fs.Open>'",
+    );
+}
+
+#[test]
+fn fs_reject_truncate_after_close() {
+    compile_with_stdlib_should_fail(
+        r#"import std.fs
+
+fn main() {
+    let f = fs.open_write("/tmp/reject_probe.txt")!
+    f.close()!
+    f.truncate(0)!
+}
+"#,
+        "'f' was consumed by the transition '.close()'",
+    );
+}

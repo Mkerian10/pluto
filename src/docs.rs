@@ -868,6 +868,7 @@ class File<M, S> {
     fn write(self, data: string)           // where M == Write, S == Open; loops to completion; raises Degraded
     fn write_bytes(self, data: bytes)      // where M == Write, S == Open; loops to completion; raises Degraded
     fn write_at(self, offset: int, data: bytes) // where M == Write, S == Open; pwrite — never moves the cursor; raises Degraded
+    fn truncate(self, len: int)            // where M == Write, S == Open; ftruncate — shrink discards the tail, extend zero-fills, cursor unmoved; negative len raises FileError (handle still sound), syscall failure raises Degraded
     fn sync(self)                          // where M == Write, S == Open; full durability (fsync / F_FULLFSYNC); raises Degraded
     fn sync_data(self)                     // where M == Write, S == Open; fdatasync (F_FULLFSYNC on Darwin); raises Degraded
     fn seek(self, to: Seek) int            // where S == Open; raises FileError
@@ -917,6 +918,7 @@ enum Seek {
 | `remove_dir_all` | `(path: string)` | Recursive delete; refuses "/" and "" (fallible) |
 | `rename` | `(old: string, new_path: string)` | Rename/move file (fallible) |
 | `copy` | `(src: string, dst: string)` | Copy file; close errors surfaced (fallible) |
+| `truncate` | `(path: string, len: int)` | Set file length (truncate(2)): shrink discards the tail, extend zero-fills; negative len raises FileError (raises NotFound \| FileError). Not durable by itself — use the handle form + sync() when the shrink must survive a crash |
 | `list_dir` | `(path: string) [string]` | List directory contents (fallible) |
 | `temp_dir` | `() string` | Create a fresh temp directory |
 

@@ -105,6 +105,8 @@ extern fn __pluto_fs_send_to_socket(fd: int, sock_fd: int, offset: int, max_byte
 extern fn __pluto_fs_recv_from_socket(fd: int, sock_fd: int, max_bytes: int) int
 extern fn __pluto_fs_relay_side() int
 extern fn __pluto_fs_seek(fd: int, offset: int, whence_tag: int) int
+extern fn __pluto_fs_truncate(fd: int, len: int) int
+extern fn __pluto_fs_truncate_path(path: string, len: int) int
 extern fn __pluto_fs_sync(fd: int) int
 extern fn __pluto_fs_sync_data(fd: int) int
 extern fn __pluto_fs_sync_dir(path: string) int
@@ -322,6 +324,43 @@ pub class File<M, S> {
         let n = __pluto_fs_write_at(self.fd, offset, data)
         if n < 0 {
             let code = 0 - n
+            raise Degraded {
+                file: File<Write, Poisoned> { fd: self.fd },
+                code: code,
+                message: __pluto_fs_errstr(code)
+            }
+        }
+    }
+
+    // Set the file's length to exactly len bytes (ftruncate, issue
+    // #397): shrinking discards the tail, extending zero-fills —
+    // syscall-faithful POSIX semantics, documented rather than
+    // restricted (the WAL recovery that cuts a torn tail and the
+    // preallocator that grows a segment are the same operation to the
+    // kernel). The seek cursor does NOT move: a cursor past the new end
+    // is legal, and the next sequential write zero-fills the gap.
+    //
+    // Negative len raises FileError (code 0), checked before any
+    // syscall touches the fd: it is a condition on caller input, and
+    // the file's warrant is intact — the same sound-file/destroyed-
+    // warrant split receive_from draws between its socket-side and
+    // file-side failures. A FAILED ftruncate, by contrast, leaves the
+    // resulting length/data state unwarranted exactly like a failed
+    // write, so the handle degrades (owner decision D3 applies).
+    //
+    // Durability: truncate dirties the inode (the size) and, when
+    // shrinking, data pages — the change is warranted durable only
+    // after sync()/sync_data(), like any write. No directory sync is
+    // needed (the name→inode mapping is untouched).
+    fn truncate(self, len: int)
+        where M == Write, S == Open
+    {
+        if len < 0 {
+            raise FileError { path: "", code: 0, message: "truncate: negative length" }
+        }
+        let r = __pluto_fs_truncate(self.fd, len)
+        if r < 0 {
+            let code = 0 - r
             raise Degraded {
                 file: File<Write, Poisoned> { fd: self.fd },
                 code: code,
@@ -656,6 +695,26 @@ pub fn copy(from: string, to: string) {
     let r = __pluto_fs_copy(from, to)
     if r < 0 {
         raise_path_error(from, 0 - r)!
+    }
+}
+
+// Path-level truncate (truncate(2), issue #397): set the file at
+// `path` to exactly len bytes without minting a handle — shrinking
+// discards the tail, extending zero-fills. Negative len raises
+// FileError before any syscall (a condition on caller input).
+// Raises NotFound | FileError.
+//
+// Durability stance matches write_all: success means the kernel
+// accepted the new length, not that it is durable. A recovery path
+// that must make the shrink durable uses the handle form —
+// open_append → truncate → sync → close — so the fd exists to sync.
+pub fn truncate(path: string, len: int) {
+    if len < 0 {
+        raise FileError { path: path, code: 0, message: "truncate: negative length" }
+    }
+    let r = __pluto_fs_truncate_path(path, len)
+    if r < 0 {
+        raise_path_error(path, 0 - r)!
     }
 }
 
