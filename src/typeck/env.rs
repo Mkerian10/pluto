@@ -440,6 +440,13 @@ pub struct TypeEnv {
     /// statement's kills) and assumed by `discharge::post_stmt` once the
     /// statement — including its field-fact kills — has been processed.
     pub pending_call_ensures: Vec<super::facts::Fact>,
+    /// Syntactic write-effect summaries of every non-generic function and
+    /// method body (keyed by plain/mangled name). Populated by
+    /// `discharge::summarize_write_effects` before body checking, consumed
+    /// by the call-boundary refinement (`discharge::calls_cannot_write_class`,
+    /// issue #454) to prove a callee transitively cannot write any field of
+    /// the receiver's class. Empty when no contract exists in the program.
+    pub fn_write_summaries: HashMap<String, super::discharge::FnWriteSummary>,
     /// Provided properties (rfc-properties.md slice 2): class name → the
     /// `satisfies` instantiations it carries. The property NAME is the
     /// type's exported fact — recorded here (and surfaced through
@@ -610,6 +617,7 @@ impl TypeEnv {
             generic_class_ensures: HashMap::new(),
             assume_discharged: false,
             pending_call_ensures: Vec::new(),
+            fn_write_summaries: HashMap::new(),
             class_properties: HashMap::new(),
             fn_properties: HashMap::new(),
         }

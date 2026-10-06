@@ -996,7 +996,10 @@ pub(crate) fn free_call_severity(
 }
 
 /// Classify a direct method call by its receiver's (path-resolvable) type.
-fn method_call_severity(
+/// Shared with invariant/ensures discharge, whose per-call refinement
+/// (`discharge::calls_cannot_write_class`) consumes the same classification
+/// before applying its stricter write-freedom analysis.
+pub(crate) fn method_call_severity(
     object: &Spanned<Expr>,
     method: &Spanned<String>,
     env: &TypeEnv,

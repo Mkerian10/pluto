@@ -164,6 +164,12 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // register before body checking, so every method exit carries its proof
     // obligation and every caller can assume the relation.
     discharge::register_ensures(program, &mut env)?;
+    // Write-effect summaries (issue #454): syntactic, transitive per-body
+    // summaries proving that a callee cannot write any field of a given
+    // class. Consumed by the call-boundary refinement in discharge so that
+    // provably receiver-read-only calls preserve exact two-state knowledge.
+    // Built only when the program carries contracts.
+    discharge::summarize_write_effects(program, &mut env);
     // Provided properties (rfc-properties.md slice 2): the atoms were
     // already desugared into the invariant/guard sets above; here the
     // property NAME is retained per type as its exported fact.

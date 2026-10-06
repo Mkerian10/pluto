@@ -57,7 +57,12 @@
 //!   declared parameter types cannot reach the receiver's class
 //!   (facts::call_severity, the shared purity predicate) — are NOT
 //!   boundaries: with no possible observer or writer, exact two-state
-//!   knowledge survives them. *Between* boundaries the invariant may be
+//!   knowledge survives them. A call that may OBSERVE but provably cannot
+//!   WRITE the receiver (a non-`mut-self` method of the receiver's own
+//!   class, no alias-capable parameter, transitively write-free body —
+//!   see `calls_cannot_write_class`, issue #454) is a *half* boundary:
+//!   the invariant must still hold at the call, but exact two-state
+//!   knowledge survives it. *Between* boundaries the invariant may be
 //!   temporarily broken (subtract-then-add works because the symbolic
 //!   forms cancel).
 //!
@@ -928,6 +933,13 @@ pub struct InvariantScope {
 pub struct SymSnapshot {
     sym: HashMap<String, Affine>,
     touched: HashSet<String>,
+    /// Per ensures spec (indexed like `InvariantScope::ensures`): did this
+    /// path's end state prove the postcondition under the path's own facts
+    /// (branch guards included — evaluated before the branch frame pops)?
+    /// Consumed at branch joins (issue #455): a relation every surviving
+    /// path proved holds of the joined state, because the runtime join
+    /// state IS one of the surviving path states.
+    ensures_ok: Vec<bool>,
 }
 
 impl InvariantScope {
@@ -1601,6 +1613,530 @@ pub(crate) fn function_exit(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Write-effect summaries (issue #454 — call-boundary write-freedom)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A call boundary has two obligations (module header): (a) the invariant
+// must HOLD at the call (the callee, or anyone holding an alias, may
+// observe the receiver), and (b) exact two-state knowledge is dropped to
+// invariant level (the callee may WRITE the receiver through an alias).
+// Obligation (b) is unnecessary when the callee provably cannot write any
+// int field of the receiver's class. "Provably" is the hard part: Pluto's
+// binding mutability is shallow — `let mut me = self` inside an
+// immutable-`self` method mints a mutable alias of the receiver, so the
+// callee's `self` mutability annotation ALONE does not bound its write
+// effects. The proof therefore rests on a transitive, syntactic
+// write-effect summary of the callee's body:
+//
+// - A `self.f = v` statement writes a field of the summarized method's own
+//   class and nothing else (nominal typing: a D instance is never a C
+//   instance).
+// - ANY other field assignment (`me.f = v`, `self.a.b = v`, laundered
+//   aliases included) conservatively counts as a write to every class.
+// - Index assignment writes a container *slot* (an element reference or a
+//   primitive), never a field of a class instance — there is no operator
+//   overloading and no builtin follows references into class fields (the
+//   load-bearing survey on `CallSeverity::Collections`).
+// - Calls recurse: direct self-calls and field/param-receiver method calls
+//   with syntactically known classes add call-graph edges; builtin
+//   receivers (collections/primitives) are write-free for class fields by
+//   the same survey; builtin free functions run no user code. Everything
+//   else — trait dispatch, closures and fn-typed values (shadowed names),
+//   `at`, `spawn`, `serve`, static trait calls, unknown receivers — is
+//   opaque and poisons the summary.
+// - Closure bodies are scanned as if they ran at the definition site
+//   (over-conservative: their writes count even though they only run when
+//   invoked).
+//
+// Summaries are built once, before body checking, from the flattened
+// program (prelude and modules included). Generic templates are skipped —
+// queries against template- or instantiation-mangled names miss and answer
+// conservatively. The summaries describe the program AS WRITTEN; bodies
+// that would fail later checks (e.g. illegal shadowing) may summarize
+// imprecisely, which is harmless because such programs never compile.
+
+/// Syntactic write-effect summary of one function/method body.
+#[derive(Debug, Clone, Default)]
+pub struct FnWriteSummary {
+    /// The class whose fields `self.f = v` statements write (None for free
+    /// functions, which have no `self`).
+    owner: Option<String>,
+    /// Body contains `self.f = v` (object is exactly the `self` ident).
+    writes_own_fields: bool,
+    /// Body contains any other field assignment — the target object's class
+    /// is not syntactically known, so this counts as a write to EVERY class
+    /// (laundered aliases land here).
+    writes_other_fields: bool,
+    /// Body contains a call whose effects cannot be bounded syntactically.
+    opaque: bool,
+    /// Resolved direct callees: mangled method names and free-function
+    /// names, resolved at query time (builtins are write-free; unknown
+    /// names are opaque).
+    callees: HashSet<String>,
+}
+
+/// Build write-effect summaries for every non-generic function and class
+/// method. Runs after signature registration and contract registration,
+/// before any body checking; skipped entirely when the program carries no
+/// contracts (no consumer exists).
+pub(crate) fn summarize_write_effects(program: &Program, env: &mut TypeEnv) {
+    if env.class_invariants.is_empty()
+        && env.fn_ensures.is_empty()
+        && env.generic_class_invariants.is_empty()
+        && env.generic_class_ensures.is_empty()
+    {
+        return;
+    }
+    let mut out: HashMap<String, FnWriteSummary> = HashMap::new();
+    for f in &program.functions {
+        if !f.node.type_params.is_empty() {
+            continue; // generic: queries miss → conservative
+        }
+        let name = f.node.name.node.clone();
+        let summary = summarize_function(&name, &f.node, None, env);
+        out.insert(name, summary);
+    }
+    for class in &program.classes {
+        let c = &class.node;
+        if !c.type_params.is_empty() {
+            continue; // template bodies are proven under skolems; conservative here
+        }
+        for m in &c.methods {
+            if !m.node.type_params.is_empty() {
+                continue;
+            }
+            let key = mangle_method(&c.name.node, &m.node.name.node);
+            let summary = summarize_function(&key, &m.node, Some(&c.name.node), env);
+            out.insert(key, summary);
+        }
+    }
+    env.fn_write_summaries = out;
+}
+
+/// Collect every name the body (or parameter list) can bind locally — the
+/// shadow set for classifying `Call { name }` nodes (a call through a local
+/// fn-typed value is opaque, not a call to the global of the same name).
+fn collect_bound_names(func: &Function) -> HashSet<String> {
+    struct Binders {
+        names: HashSet<String>,
+    }
+    impl Visitor for Binders {
+        fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+            match &stmt.node {
+                Stmt::Let { name, .. } => {
+                    self.names.insert(name.node.clone());
+                }
+                Stmt::LetChan { sender, receiver, .. } => {
+                    self.names.insert(sender.node.clone());
+                    self.names.insert(receiver.node.clone());
+                }
+                Stmt::For { var, .. } => {
+                    self.names.insert(var.node.clone());
+                }
+                Stmt::Match { arms, .. } => {
+                    for arm in arms {
+                        if let crate::parser::ast::MatchPattern::Variant { bindings, .. } =
+                            &arm.pattern
+                        {
+                            for (field, rename) in bindings {
+                                let n = rename.as_ref().unwrap_or(field);
+                                self.names.insert(n.node.clone());
+                            }
+                        }
+                    }
+                }
+                Stmt::Select { arms, .. } => {
+                    for arm in arms {
+                        if let crate::parser::ast::SelectOp::Recv { binding, .. } = &arm.op {
+                            self.names.insert(binding.node.clone());
+                        }
+                    }
+                }
+                Stmt::Scope { bindings, .. } => {
+                    for b in bindings {
+                        self.names.insert(b.name.node.clone());
+                    }
+                }
+                _ => {}
+            }
+            walk_stmt(self, stmt);
+        }
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            match &expr.node {
+                Expr::Closure { params, .. } => {
+                    for p in params {
+                        self.names.insert(p.name.node.clone());
+                    }
+                }
+                Expr::Catch { handlers, .. } => {
+                    for h in handlers {
+                        match h {
+                            crate::parser::ast::CatchHandler::Wildcard { var, .. }
+                            | crate::parser::ast::CatchHandler::Typed { var, .. } => {
+                                self.names.insert(var.node.clone());
+                            }
+                            // `expr catch fallback` binds nothing.
+                            crate::parser::ast::CatchHandler::Shorthand(_) => {}
+                        }
+                    }
+                }
+                Expr::Match { arms, .. } => {
+                    for arm in arms {
+                        if let crate::parser::ast::MatchPattern::Variant { bindings, .. } =
+                            &arm.pattern
+                        {
+                            for (field, rename) in bindings {
+                                let n = rename.as_ref().unwrap_or(field);
+                                self.names.insert(n.node.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut b = Binders { names: HashSet::new() };
+    for p in &func.params {
+        b.names.insert(p.name.node.clone());
+    }
+    for stmt in &func.body.node.stmts {
+        b.visit_stmt(stmt);
+    }
+    b.names
+}
+
+/// Receiver classification for method calls inside a summarized body —
+/// purely syntactic, from declared parameter types and the owner class's
+/// field table.
+enum RecvKind {
+    /// The `self` ident: a sibling method of the owner class.
+    SelfRecv,
+    /// A collection/primitive: builtin methods only, write-free for class
+    /// int fields (load-bearing survey on `CallSeverity::Collections`).
+    Builtin,
+    /// A known class: edge to that class's method.
+    Known(String),
+    /// Anything else (unknown locals, chained paths, traits, fn values...).
+    Unknown,
+}
+
+fn classify_recv_type(t: &PlutoType) -> RecvKind {
+    match t {
+        PlutoType::Array(_)
+        | PlutoType::String
+        | PlutoType::Bytes
+        | PlutoType::Map(_, _)
+        | PlutoType::Set(_)
+        | PlutoType::Range
+        | PlutoType::Int
+        | PlutoType::Float
+        | PlutoType::Bool
+        | PlutoType::Byte => RecvKind::Builtin,
+        PlutoType::Class(c) => RecvKind::Known(c.clone()),
+        _ => RecvKind::Unknown,
+    }
+}
+
+fn summarize_function(
+    key: &str,
+    func: &Function,
+    owner: Option<&str>,
+    env: &TypeEnv,
+) -> FnWriteSummary {
+    // Param name → declared type, aligned positionally with the registered
+    // signature (the receiver rides in params[0] for methods).
+    let mut param_types: HashMap<String, PlutoType> = HashMap::new();
+    if let Some(sig) = env.functions.get(key) {
+        if sig.params.len() == func.params.len() {
+            for (p, t) in func.params.iter().zip(sig.params.iter()) {
+                param_types.insert(p.name.node.clone(), t.clone());
+            }
+        }
+    }
+    let bound = collect_bound_names(func);
+    let owner_fields: Vec<(String, PlutoType)> = owner
+        .and_then(|o| env.classes.get(o))
+        .map(|ci| {
+            ci.fields
+                .iter()
+                .map(|(n, t, _)| (n.clone(), t.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    struct Scan<'a> {
+        env: &'a TypeEnv,
+        owner: Option<&'a str>,
+        param_types: &'a HashMap<String, PlutoType>,
+        owner_fields: &'a [(String, PlutoType)],
+        bound: &'a HashSet<String>,
+        s: FnWriteSummary,
+    }
+    impl Scan<'_> {
+        fn recv_kind(&self, object: &Expr) -> RecvKind {
+            match object {
+                Expr::Ident(n) if n == "self" => RecvKind::SelfRecv,
+                Expr::Ident(n) => match self.param_types.get(n) {
+                    // Shadowing a param is illegal (define() rejects it), so
+                    // the declared type is the binding's type.
+                    Some(t) => classify_recv_type(t),
+                    None => RecvKind::Unknown,
+                },
+                Expr::FieldAccess { object: o, field }
+                    if matches!(&o.node, Expr::Ident(s) if s == "self") =>
+                {
+                    match self
+                        .owner_fields
+                        .iter()
+                        .find(|(n, _)| *n == field.node)
+                        .map(|(_, t)| t)
+                    {
+                        Some(t) => classify_recv_type(t),
+                        None => RecvKind::Unknown,
+                    }
+                }
+                _ => RecvKind::Unknown,
+            }
+        }
+    }
+    impl Visitor for Scan<'_> {
+        fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+            if self.s.opaque && self.s.writes_other_fields {
+                return; // already maximal
+            }
+            match &stmt.node {
+                Stmt::FieldAssign { object, .. } => {
+                    if matches!(&object.node, Expr::Ident(s) if s == "self") {
+                        self.s.writes_own_fields = true;
+                    } else {
+                        self.s.writes_other_fields = true;
+                    }
+                }
+                // Index assignment writes a container slot, never a field
+                // of a class instance — see the section header.
+                Stmt::IndexAssign { .. } => {}
+                Stmt::Serve { .. } => {
+                    // Registers methods for the runtime to invoke later.
+                    self.s.opaque = true;
+                }
+                _ => {}
+            }
+            walk_stmt(self, stmt);
+        }
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            if self.s.opaque && self.s.writes_other_fields {
+                return;
+            }
+            match &expr.node {
+                Expr::MethodCall { object, method, .. } => {
+                    match self.recv_kind(&object.node) {
+                        RecvKind::SelfRecv => match self.owner {
+                            Some(o) => {
+                                self.s
+                                    .callees
+                                    .insert(mangle_method(o, &method.node));
+                            }
+                            None => self.s.opaque = true,
+                        },
+                        RecvKind::Builtin => {}
+                        RecvKind::Known(c) => {
+                            self.s.callees.insert(mangle_method(&c, &method.node));
+                        }
+                        RecvKind::Unknown => self.s.opaque = true,
+                    }
+                }
+                Expr::Call { name, .. } => {
+                    if self.bound.contains(&name.node) {
+                        // May be a call through a local fn value.
+                        self.s.opaque = true;
+                    } else {
+                        self.s.callees.insert(name.node.clone());
+                    }
+                }
+                Expr::StaticTraitCall { .. } | Expr::At { .. } | Expr::Spawn { .. } => {
+                    self.s.opaque = true;
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut scan = Scan {
+        env,
+        owner,
+        param_types: &param_types,
+        owner_fields: &owner_fields,
+        bound: &bound,
+        s: FnWriteSummary { owner: owner.map(str::to_string), ..Default::default() },
+    };
+    for stmt in &func.body.node.stmts {
+        scan.visit_stmt(stmt);
+    }
+    scan.s
+}
+
+/// Can the callee named `start` — and everything it can transitively call —
+/// be proven never to write any field of class `cls`? Walks the summarized
+/// call graph; any edge that leaves the summarized world (unknown name,
+/// opaque construct) answers `false`. A reachable `self.f = v` poisons only
+/// when its owner IS `cls` (nominal typing); any other field assignment
+/// poisons unconditionally (its target class is unknown — laundered
+/// aliases of `cls` included).
+pub(crate) fn callee_cannot_write_class(start: &str, cls: &str, env: &TypeEnv) -> bool {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut work: Vec<&str> = vec![start];
+    while let Some(f) = work.pop() {
+        if !seen.insert(f) {
+            continue;
+        }
+        if env.builtins.contains(f) {
+            // Runs no user code and cannot write class fields (the
+            // load-bearing survey on CallSeverity::Collections).
+            continue;
+        }
+        let Some(s) = env.fn_write_summaries.get(f) else {
+            return false;
+        };
+        if s.opaque || s.writes_other_fields {
+            return false;
+        }
+        if s.writes_own_fields && s.owner.as_deref() == Some(cls) {
+            return false;
+        }
+        work.extend(s.callees.iter().map(String::as_str));
+    }
+    true
+}
+
+/// The #454 call-boundary refinement predicate: every call-like node of
+/// `expr` provably cannot WRITE any int field of class `cls`. When this
+/// holds for a whole statement, the call boundary keeps obligation (a) —
+/// the invariant is proven at the call, an observer may see the receiver —
+/// but skips the two-state havoc of obligation (b): the symbolic field
+/// state and all entry-anchored (`old()`) knowledge survive the call.
+///
+/// # Soundness
+///
+/// The ghost scope tracks exactly the int fields of `cls`'s receiver. The
+/// symbolic state desyncs from the runtime state only if some code that
+/// runs DURING the statement writes an int field of a `cls` instance (the
+/// receiver is one; alias-coarse by class, as everywhere in this engine).
+/// Per call-like node:
+/// - severity ≤ `Collections` nodes cannot write any int field of `cls`
+///   by the shared classification (builtin receivers, callees whose
+///   declared parameter/receiver types cannot reach `cls`);
+/// - severity `All` method calls qualify only when the callee is a known,
+///   non-`mut-self` method of `cls` itself, no non-receiver parameter's
+///   declared type can reach `cls` (no writable alias handed in), AND the
+///   transitive write-effect summary proves no reachable statement writes
+///   a `cls` field through ANY binding — which closes the shallow-
+///   mutability laundering doors (`let mut me = self`) that the signature
+///   conditions alone cannot;
+/// - everything else (trait dispatch, closures, fn values, `at`, `spawn`,
+///   static trait calls, free functions handed possible aliases) fails the
+///   predicate and keeps the full havoc.
+///
+/// A qualifying callee may still RETURN an alias of the receiver, or stash
+/// one into a container passed as an argument — returning or stashing does
+/// not write. Any later write through such an alias is a separate
+/// statement the engine already sees: a foreign field assignment (proven
+/// immediately, or rejected inside contract-carrying methods), or another
+/// call boundary classified on its own. Deferred execution (closures
+/// created by the callee, generator bodies) can only run via a later
+/// call-like node, which is classified at ITS statement. Caller locals are
+/// by-value ints (unwritable by any callee); ghost *length* terms about
+/// collections the callee may mutate are retired by the anchor-epoch bump
+/// at the call site.
+fn calls_cannot_write_class(expr: &Spanned<Expr>, env: &TypeEnv, cls: &str) -> bool {
+    struct Scan<'a> {
+        env: &'a TypeEnv,
+        cls: &'a str,
+        ok: bool,
+    }
+    impl Scan<'_> {
+        /// Does this severity-All method call meet the #454 conditions?
+        fn refined_method_ok(
+            &self,
+            object: &Spanned<Expr>,
+            method: &Spanned<String>,
+        ) -> bool {
+            let Some((_, PlutoType::Class(c))) = typed_path(&object.node, self.env) else {
+                return false;
+            };
+            if c != self.cls {
+                return false;
+            }
+            let mangled = mangle_method(&c, &method.node);
+            if self.env.mut_self_methods.contains(&mangled) {
+                return false;
+            }
+            let Some(sig) = self.env.functions.get(&mangled) else {
+                return false;
+            };
+            // params[0] is the receiver; any OTHER parameter that can reach
+            // `cls` may hand the callee a writable alias.
+            if sig.params.iter().skip(1).any(|t| {
+                super::facts::type_reaches_class(t, Some(self.cls), self.env)
+            }) {
+                return false;
+            }
+            callee_cannot_write_class(&mangled, self.cls, self.env)
+        }
+    }
+    impl Visitor for Scan<'_> {
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            if !self.ok {
+                return;
+            }
+            match &expr.node {
+                Expr::MethodCall { .. } if len_path(&expr.node, self.env).is_some() => {
+                    return; // pure length read (object is a trackable path)
+                }
+                Expr::MethodCall { object, method, .. } => {
+                    let sev = super::facts::method_call_severity(
+                        object,
+                        method,
+                        self.env,
+                        Some(self.cls),
+                    );
+                    if sev == super::facts::CallSeverity::All
+                        && !self.refined_method_ok(object, method)
+                    {
+                        self.ok = false;
+                        return;
+                    }
+                }
+                Expr::Call { name, args, .. } => {
+                    let leaf = |e: &Expr| typed_path(e, self.env).map(|(_, t)| t);
+                    let sev = super::facts::free_call_severity(
+                        &name.node,
+                        args,
+                        self.env,
+                        Some(self.cls),
+                        &leaf,
+                    );
+                    if sev == super::facts::CallSeverity::All {
+                        self.ok = false;
+                        return;
+                    }
+                }
+                Expr::StaticTraitCall { .. } | Expr::At { .. } | Expr::Spawn { .. } => {
+                    self.ok = false;
+                    return;
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut scan = Scan { env, cls, ok: true };
+    scan.visit_expr(expr);
+    scan.ok
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Statement hooks
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1649,8 +2185,28 @@ pub(crate) fn pre_stmt(stmt: &Stmt, span: Span, env: &mut TypeEnv) -> Result<(),
                 }
             }
             super::facts::CallSeverity::All => {
+                // Obligation (a): the callee — or anyone holding an alias —
+                // may OBSERVE the receiver, so the invariant must hold here.
                 checkpoint_scope(env, span, "this call (the callee may observe the object)")?;
-                apply_self_call_ensures(stmt, env);
+                // Obligation (b) — refined (issue #454): exact two-state
+                // knowledge survives the call when every call in this
+                // statement provably cannot WRITE the receiver's int fields
+                // (see calls_cannot_write_class for the soundness argument).
+                // Only the ghost anchor epoch advances, retiring length
+                // terms about collections the callee may mutate through its
+                // arguments. Otherwise the callee may write the receiver:
+                // drop to invariant-level knowledge, layering a single
+                // direct self-callee's declared ensures relation on top.
+                let read_only = immediate_exprs(stmt)
+                    .iter()
+                    .all(|e| calls_cannot_write_class(e, env, &cls));
+                if read_only {
+                    if let Some(s) = env.invariant_scope.as_mut() {
+                        s.next_ghost += 1;
+                    }
+                } else {
+                    apply_self_call_ensures(stmt, env);
+                }
             }
         }
     }
@@ -2564,6 +3120,26 @@ pub(crate) fn branch_snapshot(env: &TypeEnv) -> Option<SymSnapshot> {
     env.invariant_scope.as_ref().map(|s| SymSnapshot {
         sym: s.sym.clone(),
         touched: s.touched.clone(),
+        // Evaluate each ensures spec against this path's state and the
+        // facts visible HERE (callers take end-of-branch snapshots before
+        // popping the branch scope, so guard facts participate). This is
+        // the per-path half of the #455 join rule; it never errors — a
+        // path that cannot prove the relation simply contributes `false`,
+        // and the method's exit proof remains the deciding obligation.
+        ensures_ok: s
+            .ensures
+            .iter()
+            .map(|spec| {
+                matches!(
+                    eval_condition_with(
+                        &spec.expr,
+                        &|e| s.resolve_two_state(env, e),
+                        &s.ghost_facts,
+                    ),
+                    Verdict::Proven
+                )
+            })
+            .collect(),
     })
 }
 
@@ -2725,10 +3301,68 @@ fn join_syms(
                 condition_facts_with(&spec.expr, &|e| s.resolve_two_state(env, e)).then_facts,
             );
         }
+        // Ensures at a join (issue #455): a postcondition that EVERY
+        // surviving path proved at its own end — under that path's facts,
+        // branch guards included — holds of the joined state, because the
+        // runtime join state is one of the surviving path states. This is
+        // the exact disjunction rule invariant checking uses, with one
+        // difference: paths owe no ensures obligation at their ends, so
+        // the relation is *proven opportunistically* per path
+        // (branch_snapshot) rather than enforced; a path that fails to
+        // prove contributes nothing here and the exit proof decides.
+        //
+        // Guard: the join-time phrasing of a parameter term (`n@v`) must
+        // denote the same ghost every per-path proof used. Versions only
+        // move forward and are never restored per branch, so "every
+        // mentioned local is still at version 0" guarantees agreement; a
+        // reassigned parameter conservatively disables the rule.
+        for (i, spec) in s.ensures.iter().enumerate() {
+            if surviving.is_empty()
+                || !surviving
+                    .iter()
+                    .all(|sv| sv.ensures_ok.get(i).copied().unwrap_or(false))
+            {
+                continue;
+            }
+            if !spec_locals_at_entry_version(&spec.expr, s) {
+                continue;
+            }
+            to_assume.extend(
+                condition_facts_with(&spec.expr, &|e| s.resolve_two_state(env, e)).then_facts,
+            );
+        }
     }
     for f in to_assume {
         scope.ghost_facts.assume(f);
     }
+}
+
+/// Is every non-`self` identifier an ensures expression mentions still at
+/// local version 0 (never reassigned on any path so far)? See the join
+/// rule in [`join_syms`].
+fn spec_locals_at_entry_version(expr: &Expr, scope: &InvariantScope) -> bool {
+    fn idents(e: &Expr, out: &mut HashSet<String>) {
+        if let Some(inner) = old_call_arg(e) {
+            idents(&inner.node, out);
+            return;
+        }
+        match e {
+            Expr::Ident(n) if n != "self" => {
+                out.insert(n.clone());
+            }
+            Expr::BinOp { lhs, rhs, .. } => {
+                idents(&lhs.node, out);
+                idents(&rhs.node, out);
+            }
+            Expr::UnaryOp { operand, .. } => idents(&operand.node, out),
+            _ => {}
+        }
+    }
+    let mut names = HashSet::new();
+    idents(expr, &mut names);
+    names
+        .iter()
+        .all(|n| scope.local_ver.get(n).copied().unwrap_or(0) == 0)
 }
 
 /// Does a loop body interact with the proof state (self-field writes or
