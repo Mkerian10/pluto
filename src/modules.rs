@@ -255,7 +255,7 @@ fn load_directory_module(
     // Directory cycle detection with closure cleanup pattern
     let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     if visited.contains(&canonical_dir) {
-        return Err(CompileError::codegen(format!(
+        return Err(CompileError::module(format!(
             "circular import detected: '{}'", dir.display()
         )));
     }
@@ -363,7 +363,7 @@ fn resolve_module_path(
     if let Some(file_path) = resolve_module_file(&current_dir, &final_seg.node) {
         let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
         if visited.contains(&canonical) {
-            return Err(CompileError::codegen(format!(
+            return Err(CompileError::module(format!(
                 "circular import detected: '{}'",
                 file_path.display()
             )));
@@ -375,10 +375,38 @@ fn resolve_module_path(
         Ok(module_prog)
     } else if dir_path.is_dir() {
         load_directory_module(&dir_path, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)
+    } else if segments.len() == 1
+        && parent_origin != ImportOrigin::PackageDep
+        && let Some(parent) = base_dir.parent()
+        && (resolve_module_file(parent, &final_seg.node).is_some()
+            || parent.join(&final_seg.node).is_dir())
+    {
+        // Sibling fallback (issue #413, rfc-module-semantics.md section 6):
+        // a directory module's own imports resolve child-first, then among
+        // its SIBLINGS — `locks/locks.pt` importing `marks` finds
+        // `../marks/`. One parent hop only, so resolution never walks
+        // toward the filesystem root; the cycle guard in `visited` applies
+        // unchanged (a sibling cycle reports as a circular import).
+        resolve_module_path(
+            segments,
+            parent,
+            source_map,
+            import_span,
+            visited,
+            effective_stdlib,
+            current_deps,
+            pkg_graph,
+            parent_origin,
+        )
     } else {
         let full_path: Vec<&str> = segments.iter().map(|s| s.node.as_str()).collect();
         Err(CompileError::syntax(
-            format!("cannot find module '{}': no directory or file found", full_path.join(".")),
+            format!(
+                "cannot find module '{}': no directory or file found (searched '{}' and, for a \
+                 single-segment import, its parent)",
+                full_path.join("."),
+                current_dir.display()
+            ),
             final_seg.span,
         ))
     }
@@ -454,7 +482,7 @@ fn resolve_module_imports(
             } else if let Some(file_path) = file_path_candidate {
                 let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
                 if visited.contains(&canonical) {
-                    return Err(CompileError::codegen(format!(
+                    return Err(CompileError::module(format!(
                         "circular import detected: '{}'",
                         file_path.display()
                     )));
@@ -465,9 +493,51 @@ fn resolve_module_imports(
                 visited.remove(&canonical);
                 let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
                 resolved_imports.push((binding_name, module_prog, origin));
+            } else if parent_origin != ImportOrigin::PackageDep
+                && let Some(parent) = module_dir.parent()
+                && (parent.join(first_segment).is_dir()
+                    || resolve_module_file(parent, first_segment).is_some())
+            {
+                // (Local modules only: inside a PACKAGE the hop could cross
+                // the package boundary into an undeclared cached sibling,
+                // breaking dependency-scope isolation — packages declare
+                // their deps in pluto.toml and keep submodules as children.)
+                // Sibling fallback (issue #413, rfc-module-semantics.md
+                // section 6): a module's own imports resolve child-first,
+                // then among its SIBLINGS — `locks/locks.pt` importing
+                // `marks` finds `../marks/`. One parent hop only, so
+                // resolution never walks toward the filesystem root; the
+                // `visited` cycle guard applies unchanged, so a sibling
+                // cycle still reports as a circular import.
+                let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
+                let sib_dir = parent.join(first_segment);
+                if sib_dir.is_dir() {
+                    let module_prog = load_directory_module(&sib_dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
+                    resolved_imports.push((binding_name, module_prog, origin));
+                } else {
+                    let file_path = resolve_module_file(parent, first_segment)
+                        .expect("sibling file existence checked in the guard");
+                    let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
+                    if visited.contains(&canonical) {
+                        return Err(CompileError::module(format!(
+                            "circular import detected: '{}'",
+                            file_path.display()
+                        )));
+                    }
+                    visited.insert(canonical.clone());
+                    let (mut module_prog, _) = load_file_auto(&file_path, source_map)?;
+                    resolve_module_imports(&mut module_prog, parent, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
+                    visited.remove(&canonical);
+                    resolved_imports.push((binding_name, module_prog, origin));
+                }
             } else {
                 return Err(CompileError::syntax(
-                    format!("cannot find module '{}': no directory or file found", full_path),
+                    format!(
+                        "cannot find module '{}': no directory or file found (searched '{}' and \
+                         its parent for a sibling module)",
+                        full_path,
+                        module_dir.display()
+                    ),
                     import.node.path[0].span,
                 ));
             }
@@ -816,6 +886,47 @@ fn resolve_modules_inner(
             .filter(|p| p.canonicalize().unwrap_or(p.clone()) != entry_file)
             .collect();
 
+        // Transitive import closure over the sibling space (issue #437,
+        // rfc-module-semantics.md section 6): a sibling consumed as a module
+        // ANYWHERE in the entry's import graph must not also auto-merge into
+        // the entry — double inclusion arrives once bare and once prefixed,
+        // and the bare copies collide ("class 'Foo' is already declared").
+        // The direct-import exclusion below already handled depth one; this
+        // walks imports-of-imports to a fixpoint, reading each sibling's (or
+        // sibling directory's) own import list.
+        let import_first_segments = {
+            let mut closed = import_first_segments;
+            let mut frontier: Vec<String> = closed.iter().cloned().collect();
+            let mut scanned: HashSet<String> = HashSet::new();
+            while let Some(name) = frontier.pop() {
+                if !scanned.insert(name.clone()) {
+                    continue;
+                }
+                let mut sub_sources: Vec<PathBuf> = Vec::new();
+                if let Some(f) = resolve_module_file(entry_dir, &name) {
+                    sub_sources.push(f);
+                } else {
+                    let d = entry_dir.join(&name);
+                    if d.is_dir()
+                        && let Ok(files) = collect_source_files(&d)
+                    {
+                        sub_sources.extend(files);
+                    }
+                }
+                for f in sub_sources {
+                    if let Ok((prog, _)) = load_file_auto(&f, &mut source_map) {
+                        for i in &prog.imports {
+                            let seg = i.node.path[0].node.clone();
+                            if closed.insert(seg.clone()) {
+                                frontier.push(seg);
+                            }
+                        }
+                    }
+                }
+            }
+            closed
+        };
+
         for file_path in &sibling_files {
             let stem = file_path.file_stem()
                 .and_then(|s| s.to_str())
@@ -911,7 +1022,7 @@ fn resolve_modules_inner(
             } else if let Some(file_path) = file_path_candidate {
                 let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
                 if visited.contains(&canonical) {
-                    return Err(CompileError::codegen(format!(
+                    return Err(CompileError::module(format!(
                         "circular import detected: '{}'",
                         file_path.display()
                     )));
