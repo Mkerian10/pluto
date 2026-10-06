@@ -1697,6 +1697,7 @@ pub(crate) fn pre_stmt(stmt: &Stmt, span: Span, env: &mut TypeEnv) -> Result<(),
         | Stmt::IndexAssign { .. }
         | Stmt::LetChan { .. }
         | Stmt::Assert { .. }
+        | Stmt::ExpectRaises { .. }
         | Stmt::Serve { .. }
         | Stmt::Expr(_) => {}
     }
@@ -1770,7 +1771,13 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
             }
             ghost_len_binding(env, &target.node, &value.node);
         }
-        Stmt::If { .. } | Stmt::Match { .. } | Stmt::While { .. } | Stmt::For { .. } => {
+        Stmt::If { .. }
+        | Stmt::Match { .. }
+        | Stmt::While { .. }
+        | Stmt::For { .. }
+        // The block may stop executing at any raising statement, so the
+        // post-state is a join like a branch's.
+        | Stmt::ExpectRaises { .. } => {
             // Branch-join / loop-exit anchoring: kills are flow events that
             // remove facts from *every* frame, but the invariant-level
             // reassumption a call triggers lands in the then-current

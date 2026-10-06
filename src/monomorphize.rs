@@ -594,6 +594,9 @@ fn substitute_in_stmt(stmt: &mut Stmt, bindings: &HashMap<String, TypeExpr>) {
         Stmt::Assert { expr } => {
             substitute_in_expr(&mut expr.node, bindings);
         }
+        Stmt::ExpectRaises { body, .. } => {
+            substitute_in_block(&mut body.node, bindings);
+        }
         Stmt::Serve { service, port } => {
             substitute_in_expr(&mut service.node, bindings);
             substitute_in_expr(&mut port.node, bindings);

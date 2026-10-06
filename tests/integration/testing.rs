@@ -571,3 +571,328 @@ fn main(){
 }
 "#, "seed it inside a test body for a test-local override");
 }
+
+// ── expect_raises ─────────────────────────────────────────────────────────────
+
+#[test]
+fn test_expect_raises_typed_passing() {
+    let (stdout, _, code) = compile_test_and_run(r#"
+error ParseError {
+    input: string
+}
+
+fn parse(s: string) int {
+    if s == "bad" {
+        raise ParseError { input: s }
+    }
+    return 42
+}
+
+test "bad input raises ParseError" {
+    expect_raises(ParseError) {
+        parse("bad")!
+    }
+    expect(1).to_equal(1)
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("test bad input raises ParseError ... ok"));
+    assert!(stdout.contains("1 tests passed"));
+}
+
+#[test]
+fn test_expect_raises_fails_when_no_raise() {
+    let (_, stderr, code) = compile_test_and_run(r#"
+error ParseError {
+    input: string
+}
+
+fn parse(s: string) int {
+    if s == "bad" {
+        raise ParseError { input: s }
+    }
+    return 42
+}
+
+test "no raise fails" {
+    expect_raises(ParseError) {
+        let v = parse("good")!
+        expect(v).to_equal(42)
+    }
+}
+"#);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("expected ParseError to be raised, but no error was raised"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_expect_raises_fails_on_wrong_error_type() {
+    let (_, stderr, code) = compile_test_and_run(r#"
+error ParseError {
+    input: string
+}
+
+error SegmentError {
+    offset: int
+}
+
+fn fickle(which: bool) int {
+    if which {
+        raise ParseError { input: "x" }
+    }
+    raise SegmentError { offset: 1 }
+}
+
+test "wrong type fails" {
+    expect_raises(ParseError) {
+        fickle(false)!
+    }
+}
+"#);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("expected ParseError to be raised, got SegmentError"),
+        "stderr: {stderr}"
+    );
+    // The wrong error is consumed by the construct, not re-propagated.
+    assert!(
+        !stderr.contains("unhandled error escaped main"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_expect_raises_wildcard_passing() {
+    let (stdout, _, code) = compile_test_and_run(r#"
+error SegmentError {
+    offset: int
+}
+
+fn explode() int {
+    raise SegmentError { offset: 7 }
+}
+
+test "wildcard catches any raise" {
+    expect_raises {
+        explode()!
+    }
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("test wildcard catches any raise ... ok"));
+}
+
+#[test]
+fn test_expect_raises_wildcard_fails_when_no_raise() {
+    let (_, stderr, code) = compile_test_and_run(r#"
+error SegmentError {
+    offset: int
+}
+
+fn explode(go: bool) int {
+    if go {
+        raise SegmentError { offset: 7 }
+    }
+    return 0
+}
+
+test "wildcard no raise" {
+    expect_raises {
+        explode(false)!
+    }
+}
+"#);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("expected an error to be raised, but no error was raised"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_expect_raises_propagation_in_infallible_test() {
+    // `!` inside the block is the propagation route to the construct: the
+    // enclosing test stays infallible, and statements after the construct
+    // still run.
+    let (stdout, _, code) = compile_test_and_run(r#"
+error ParseError {
+    input: string
+}
+
+fn parse(s: string) int {
+    if s == "bad" {
+        raise ParseError { input: s }
+    }
+    return 42
+}
+
+test "bang propagates to the construct" {
+    expect_raises(ParseError) {
+        let v = parse("good")!
+        expect(v).to_equal(42)
+        parse("bad")!
+    }
+    expect(parse("good") catch 0).to_equal(42)
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("test bang propagates to the construct ... ok"));
+}
+
+#[test]
+fn test_expect_raises_direct_raise_in_block() {
+    let (stdout, _, code) = compile_test_and_run(r#"
+error ParseError {
+    input: string
+}
+
+test "direct raise" {
+    expect_raises(ParseError) {
+        raise ParseError { input: "direct" }
+    }
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("test direct raise ... ok"));
+}
+
+#[test]
+fn test_expect_raises_nested_in_loop() {
+    let (stdout, _, code) = compile_test_and_run(r#"
+error SegmentError {
+    offset: int
+}
+
+fn check(off: int) int {
+    if off > 10 {
+        raise SegmentError { offset: off }
+    }
+    return off
+}
+
+test "raises assertion inside a loop" {
+    for i in 0..3 {
+        expect_raises(SegmentError) {
+            check(11 + i)!
+        }
+    }
+    expect(check(5) catch 0).to_equal(5)
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("test raises assertion inside a loop ... ok"));
+}
+
+#[test]
+fn test_expect_raises_block_cannot_raise_is_compile_error() {
+    compile_test_should_fail_with(r#"
+error ParseError {
+    input: string
+}
+
+test "cannot raise" {
+    expect_raises(ParseError) {
+        let x = 1 + 1
+        expect(x).to_equal(2)
+    }
+}
+"#, "expect_raises block cannot raise");
+}
+
+#[test]
+fn test_expect_raises_type_not_in_error_set_is_compile_error() {
+    compile_test_should_fail_with(r#"
+error ParseError {
+    input: string
+}
+
+error SegmentError {
+    offset: int
+}
+
+error IoError {
+    path: string
+}
+
+fn fickle(which: bool) int {
+    if which {
+        raise ParseError { input: "x" }
+    }
+    raise SegmentError { offset: 1 }
+}
+
+test "not in set" {
+    expect_raises(IoError) {
+        fickle(true)!
+    }
+}
+"#, "the block can raise 'ParseError', 'SegmentError' — not 'IoError'");
+}
+
+#[test]
+fn test_expect_raises_unknown_error_type_is_compile_error() {
+    compile_test_should_fail_with(r#"
+error ParseError {
+    input: string
+}
+
+fn explode() int {
+    raise ParseError { input: "x" }
+}
+
+test "unknown type" {
+    expect_raises(NoSuchError) {
+        explode()!
+    }
+}
+"#, "unknown error type 'NoSuchError'");
+}
+
+#[test]
+fn test_expect_raises_fully_caught_block_cannot_raise() {
+    // A `catch` inside the block consumes the error locally, so nothing can
+    // reach the construct — rejected like any other can't-raise block.
+    compile_test_should_fail_with(r#"
+error ParseError {
+    input: string
+}
+
+fn parse(s: string) int {
+    if s == "bad" {
+        raise ParseError { input: s }
+    }
+    return 42
+}
+
+test "caught inside" {
+    expect_raises(ParseError) {
+        let v = parse("bad") catch 0
+        expect(v).to_equal(0)
+    }
+}
+"#, "expect_raises block cannot raise");
+}
+
+#[test]
+fn test_expect_raises_bare_fallible_call_still_needs_handling() {
+    // The construct is the handler for `!`, not a license for bare fallible
+    // calls — the usual handling rule still applies inside the block.
+    compile_test_should_fail_with(r#"
+error ParseError {
+    input: string
+}
+
+fn explode() int {
+    raise ParseError { input: "x" }
+}
+
+test "bare call" {
+    expect_raises(ParseError) {
+        explode()
+    }
+}
+"#, "must be handled with ! or catch");
+}

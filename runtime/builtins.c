@@ -3853,6 +3853,33 @@ void __pluto_expect_false(long actual, long line) {
     }
 }
 
+// expect_raises: the block completed without raising. `expected_name` is the
+// expected error type's name (a Pluto string), or NULL for the wildcard form.
+void __pluto_expect_raises_no_error(void *expected_name, long line) {
+    if (expected_name) {
+        const char *data;
+        long len;
+        __pluto_string_data(expected_name, &data, &len);
+        fprintf(stderr, "FAIL (line %ld): expected %.*s to be raised, but no error was raised\n",
+                line, (int)len, data);
+    } else {
+        fprintf(stderr, "FAIL (line %ld): expected an error to be raised, but no error was raised\n",
+                line);
+    }
+    exit(1);
+}
+
+// expect_raises: the block raised an error of a different type.
+void __pluto_expect_raises_wrong_type(void *expected_name, void *actual_type, long line) {
+    const char *data_e, *data_a;
+    long len_e, len_a;
+    __pluto_string_data(expected_name, &data_e, &len_e);
+    __pluto_string_data(actual_type, &data_a, &len_a);
+    fprintf(stderr, "FAIL (line %ld): expected %.*s to be raised, got %.*s\n",
+            line, (int)len_e, data_e, (int)len_a, data_a);
+    exit(1);
+}
+
 void __pluto_test_start(void *name_str) {
     const char *data;
     long len;

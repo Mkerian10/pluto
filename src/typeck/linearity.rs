@@ -1677,6 +1677,15 @@ impl Visitor for Linearity<'_> {
             Stmt::Assert { expr } => {
                 self.visit_expr(expr);
             }
+            Stmt::ExpectRaises { body, .. } => {
+                // The block may stop at any raising statement: any prefix of
+                // it may have run. Consumption grows monotonically along the
+                // block, so unioning the entry state with the full-execution
+                // state covers every prefix.
+                let entry = self.snapshot();
+                let r = self.branch(&entry, &body.node, false);
+                self.union_into(r.state);
+            }
             Stmt::Serve { service, port } => {
                 self.visit_expr(service);
                 self.visit_expr(port);

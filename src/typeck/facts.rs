@@ -1961,6 +1961,9 @@ pub fn immediate_exprs(stmt: &crate::parser::ast::Stmt) -> Vec<&Spanned<Expr>> {
         }
         Stmt::Yield { value } => exprs.push(value),
         Stmt::Assert { expr } => exprs.push(expr),
+        // Evaluates nothing directly; its block's statements are visited by
+        // the checker in flow order.
+        Stmt::ExpectRaises { .. } => {}
         Stmt::Serve { service, port } => {
             exprs.push(service);
             exprs.push(port);
@@ -2007,6 +2010,7 @@ pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
         | Stmt::Scope { .. }
         | Stmt::Yield { .. }
         | Stmt::Assert { .. }
+        | Stmt::ExpectRaises { .. }
         | Stmt::Serve { .. }
         | Stmt::Break
         | Stmt::Continue

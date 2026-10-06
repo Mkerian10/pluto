@@ -334,17 +334,14 @@ test "try_map success with fallible callback" {
 
 test "try_map propagates callback error" {
     let nums = [1, 500, 3]
-    let fallback: [int] = [-1]
-    let result = collections.try_map(nums, (x: int) => {
-        if x > 100 {
-            raise CallbackError { value: x }
-        }
-        return x * 2
-    }) catch err {
-        fallback
+    expect_raises(CallbackError) {
+        collections.try_map(nums, (x: int) => {
+            if x > 100 {
+                raise CallbackError { value: x }
+            }
+            return x * 2
+        })!
     }
-    expect(result.len()).to_equal(1)
-    expect(result[0]).to_equal(-1)
 }
 
 test "try_map accepts infallible callback" {
@@ -414,16 +411,12 @@ test "try_for_each success does not raise" {
 }
 
 test "try_for_each propagates callback error" {
-    // The raising input must route through the catch arm (asserted via the
-    // sentinel), not crash or silently continue.
-    let sentinel = collections.try_fold([0], 0, (acc: int, x: int) => acc) catch -1
-    expect(sentinel).to_equal(0)
-    collections.try_for_each([1, 500], (x: int) => {
-        if x > 100 {
-            raise CallbackError { value: x }
-        }
-    }) catch err {
-        expect(true).to_be_true()
+    expect_raises(CallbackError) {
+        collections.try_for_each([1, 500], (x: int) => {
+            if x > 100 {
+                raise CallbackError { value: x }
+            }
+        })!
     }
 }
 

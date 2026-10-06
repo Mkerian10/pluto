@@ -1234,6 +1234,16 @@ impl PrettyPrinter {
                 self.write("assert ");
                 self.emit_expr(&expr.node, 0);
             }
+            Stmt::ExpectRaises { error_type, body } => {
+                self.write("expect_raises");
+                if let Some(et) = error_type {
+                    self.write("(");
+                    self.write(&et.node);
+                    self.write(")");
+                }
+                self.write(" ");
+                self.emit_block(&body.node);
+            }
             Stmt::Serve { service, port } => {
                 self.write("serve ");
                 self.emit_expr(&service.node, 0);
@@ -2437,6 +2447,31 @@ test "addition works" {
         let result = pp(src);
         assert!(result.contains("test \"addition works\""));
         assert!(result.contains("expect(add(1, 2)).to_equal(3)"));
+        assert_roundtrip_stable(src);
+    }
+
+    #[test]
+    fn test_expect_raises_blocks() {
+        let src = r#"error ParseError {
+    input: string
+}
+
+fn explode() int {
+    raise ParseError { input: "x" }
+}
+
+test "raises" {
+    expect_raises(ParseError) {
+        explode()!
+    }
+    expect_raises {
+        explode()!
+    }
+}
+"#;
+        let result = pp(src);
+        assert!(result.contains("expect_raises(ParseError) {"));
+        assert!(result.contains("expect_raises {"));
         assert_roundtrip_stable(src);
     }
 

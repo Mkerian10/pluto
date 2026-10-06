@@ -379,7 +379,12 @@ test "string contains" {
 }
 ```
 - Run with `pluto test <file>`
-- Assertions: `expect(val).to_equal(expected)`, `.to_be_true()`, `.to_be_false()`"#
+- Assertions: `expect(val).to_equal(expected)`, `.to_be_true()`, `.to_be_false()`
+- Raises assertions: `expect_raises(ErrorType) { ... }` asserts the block raises
+  that error type (`!` inside propagates to the construct; the raise is consumed);
+  bare `expect_raises { ... }` asserts the block raises anything. Checked against
+  the inferred error sets at compile time: a block that cannot raise, or an error
+  type outside the block's error set, is a compile error."#
         .to_string()
 }
 
