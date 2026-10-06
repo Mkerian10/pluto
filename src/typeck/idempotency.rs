@@ -131,6 +131,12 @@ use super::types::PlutoType;
 /// perform communication — effects, and (for set methods on a dedup field)
 /// monotonicity violations. Everything non-builtin is call-shaped and
 /// already an effect.
+///
+/// Deliberately NOT derived from the builtin-method registry
+/// (typeck/builtins.rs): this list classifies by analysis meaning — it is
+/// name-only (no receiver typing) and spans channel/task methods the
+/// registry excludes. Keep the two in sync when adding a mutating
+/// collection method.
 const MUTATING_BUILTIN_METHODS: &[&str] = &[
     "push", "pop", "clear", "reverse", "remove_at", "insert_at", "insert", "remove", "send",
     "try_send", "close", "recv", "try_recv", "get", "detach", "cancel",

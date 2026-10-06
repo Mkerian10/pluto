@@ -4557,6 +4557,71 @@ impl<'a> LowerContext<'a> {
         }
     }
 
+    /// Lower a registry builtin method with `Lowering::Runtime` to its C
+    /// runtime call. The call shape is derived from the entry's signature:
+    /// receiver pointer first, then (per `Tag`) the collection's key-type
+    /// tag, then the arguments — `Elem`/`Key`/`Value` params go through
+    /// type-erased array slots (string-escaped first when the entry stores
+    /// them), `Byte` params widen to i64 for the C ABI, everything else
+    /// passes through. `Bool` results reduce from the runtime's i64,
+    /// `Elem` results convert back from a slot, `Void` yields a dummy 0.
+    fn lower_builtin_runtime_call(
+        &mut self,
+        entry: &'static crate::typeck::builtins::BuiltinMethod,
+        obj_type: &PlutoType,
+        obj_ptr: Value,
+        args: &[crate::span::Spanned<Expr>],
+    ) -> Result<Value, CompileError> {
+        use crate::typeck::builtins::{tag_source_type, Lowering, SymTy, Tag};
+        let Lowering::Runtime { symbol, tag } = entry.lowering else {
+            return Err(CompileError::codegen(format!(
+                "builtin method '{}' does not lower to a runtime call",
+                entry.name
+            )));
+        };
+        let mut vals = vec![obj_ptr];
+        if tag == Tag::AfterRecv {
+            let tag_ty = tag_source_type(obj_type);
+            vals.push(self.builder.ins().iconst(types::I64, key_type_tag(&tag_ty)));
+        }
+        for (arg, param) in args.iter().zip(entry.params) {
+            let val = self.lower_expr(&arg.node)?;
+            match param.ty {
+                SymTy::Elem | SymTy::Key | SymTy::Value => {
+                    let ty = param.ty.resolve(obj_type);
+                    let val = if param.escape {
+                        self.emit_string_escape(val, &ty)
+                    } else {
+                        val
+                    };
+                    vals.push(to_array_slot(val, &ty, &mut self.builder));
+                }
+                SymTy::Byte => vals.push(self.builder.ins().uextend(types::I64, val)),
+                _ => vals.push(val),
+            }
+        }
+        if tag == Tag::AfterArgs {
+            let tag_ty = tag_source_type(obj_type);
+            vals.push(self.builder.ins().iconst(types::I64, key_type_tag(&tag_ty)));
+        }
+        match entry.ret {
+            SymTy::Void => {
+                self.call_runtime_void(symbol, &vals);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+            SymTy::Bool => {
+                let raw = self.call_runtime(symbol, &vals);
+                Ok(self.builder.ins().ireduce(types::I8, raw))
+            }
+            SymTy::Elem => {
+                let elem = SymTy::Elem.resolve(obj_type);
+                let raw = self.call_runtime(symbol, &vals);
+                Ok(from_array_slot(raw, &elem, &mut self.builder))
+            }
+            _ => Ok(self.call_runtime(symbol, &vals)),
+        }
+    }
+
     fn lower_method_call(
         &mut self,
         object: &crate::span::Spanned<Expr>,
@@ -4736,322 +4801,48 @@ impl<'a> LowerContext<'a> {
             }
         }
 
-        // Array methods
-        if let PlutoType::Array(elem) = &obj_type {
-            match method.node.as_str() {
-                "len" => {
-                    return Ok(self.call_runtime("__pluto_array_len", &[obj_ptr]));
+        // Builtin methods on primitive/collection receivers (array/map/set/
+        // bytes/string/int/float/bool): the registry (typeck/builtins.rs)
+        // supplies the runtime symbol and marshaling shape for the common
+        // call-a-C-function case; only Lowering::Inline entries keep custom
+        // codegen arms here. Existence is still centralized — an Inline
+        // entry without an arm below is an ICE, not a silent fallthrough.
+        if let Some(recv_kind) = crate::typeck::builtins::Receiver::of(&obj_type) {
+            use crate::typeck::builtins::{Lowering, Receiver};
+            let entry = crate::typeck::builtins::lookup(recv_kind, &method.node).ok_or_else(|| {
+                CompileError::codegen(format!(
+                    "{} has no method '{}'",
+                    recv_kind.noun(),
+                    method.node
+                ))
+            })?;
+            return match entry.lowering {
+                Lowering::Runtime { .. } => {
+                    self.lower_builtin_runtime_call(entry, &obj_type, obj_ptr, args)
                 }
-                "push" => {
-                    let elem = elem.clone();
-                    let arg_val = self.lower_expr(&args[0].node)?;
-                    let arg_val = self.emit_string_escape(arg_val, &elem);
-                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
-                    self.call_runtime_void("__pluto_array_push", &[obj_ptr, slot]);
-                    return Ok(self.builder.ins().iconst(types::I64, 0));
-                }
-                "pop" => {
-                    let elem = elem.clone();
-                    let raw = self.call_runtime("__pluto_array_pop", &[obj_ptr]);
-                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
-                }
-                "last" => {
-                    let elem = elem.clone();
-                    let raw = self.call_runtime("__pluto_array_last", &[obj_ptr]);
-                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
-                }
-                "first" => {
-                    let elem = elem.clone();
-                    let raw = self.call_runtime("__pluto_array_first", &[obj_ptr]);
-                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
-                }
-                "is_empty" => {
-                    let len_val = self.call_runtime("__pluto_array_len", &[obj_ptr]);
-                    let zero = self.builder.ins().iconst(types::I64, 0);
-                    let cmp = self.builder.ins().icmp(IntCC::Equal, len_val, zero);
-                    return Ok(cmp);
-                }
-                "clear" => {
-                    self.call_runtime_void("__pluto_array_clear", &[obj_ptr]);
-                    return Ok(self.builder.ins().iconst(types::I64, 0));
-                }
-                "remove_at" => {
-                    let elem = elem.clone();
-                    let idx = self.lower_expr(&args[0].node)?;
-                    let raw = self.call_runtime("__pluto_array_remove_at", &[obj_ptr, idx]);
-                    return Ok(from_array_slot(raw, &elem, &mut self.builder));
-                }
-                "insert_at" => {
-                    let elem = elem.clone();
-                    let idx = self.lower_expr(&args[0].node)?;
-                    let arg_val = self.lower_expr(&args[1].node)?;
-                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
-                    self.call_runtime_void("__pluto_array_insert_at", &[obj_ptr, idx, slot]);
-                    return Ok(self.builder.ins().iconst(types::I64, 0));
-                }
-                "slice" => {
-                    let start = self.lower_expr(&args[0].node)?;
-                    let end = self.lower_expr(&args[1].node)?;
-                    return Ok(self.call_runtime("__pluto_array_slice", &[obj_ptr, start, end]));
-                }
-                "reverse" => {
-                    self.call_runtime_void("__pluto_array_reverse", &[obj_ptr]);
-                    return Ok(self.builder.ins().iconst(types::I64, 0));
-                }
-                "contains" => {
-                    let elem = elem.clone();
-                    let arg_val = self.lower_expr(&args[0].node)?;
-                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
-                    let tag = self.builder.ins().iconst(types::I64, key_type_tag(&elem));
-                    let result = self.call_runtime("__pluto_array_contains", &[obj_ptr, slot, tag]);
-                    return Ok(self.builder.ins().ireduce(types::I8, result));
-                }
-                "index_of" => {
-                    let elem = elem.clone();
-                    let arg_val = self.lower_expr(&args[0].node)?;
-                    let slot = to_array_slot(arg_val, &elem, &mut self.builder);
-                    let tag = self.builder.ins().iconst(types::I64, key_type_tag(&elem));
-                    return Ok(self.call_runtime("__pluto_array_index_of", &[obj_ptr, slot, tag]));
-                }
-                _ => {
-                    return Err(CompileError::codegen(format!("array has no method '{}'", method.node)));
-                }
-            }
-        }
-
-        // Map methods
-        if let PlutoType::Map(key_ty, val_ty) = &obj_type {
-            let tag = self.builder.ins().iconst(types::I64, key_type_tag(key_ty));
-            match method.node.as_str() {
-                "len" => return Ok(self.call_runtime("__pluto_map_len", &[obj_ptr])),
-                "contains" => {
-                    let k = self.lower_expr(&args[0].node)?;
-                    let key_slot = to_array_slot(k, key_ty, &mut self.builder);
-                    let result = self.call_runtime("__pluto_map_contains", &[obj_ptr, tag, key_slot]);
-                    return Ok(self.builder.ins().ireduce(types::I8, result));
-                }
-                "insert" => {
-                    let k = self.lower_expr(&args[0].node)?;
-                    let v = self.lower_expr(&args[1].node)?;
-                    let k = self.emit_string_escape(k, key_ty);
-                    let v = self.emit_string_escape(v, val_ty);
-                    let key_slot = to_array_slot(k, key_ty, &mut self.builder);
-                    let val_slot = to_array_slot(v, val_ty, &mut self.builder);
-                    self.call_runtime_void("__pluto_map_insert", &[obj_ptr, tag, key_slot, val_slot]);
-                    return Ok(self.builder.ins().iconst(types::I64, 0));
-                }
-                "remove" => {
-                    let k = self.lower_expr(&args[0].node)?;
-                    let key_slot = to_array_slot(k, key_ty, &mut self.builder);
-                    self.call_runtime_void("__pluto_map_remove", &[obj_ptr, tag, key_slot]);
-                    return Ok(self.builder.ins().iconst(types::I64, 0));
-                }
-                "keys" => return Ok(self.call_runtime("__pluto_map_keys", &[obj_ptr])),
-                "values" => return Ok(self.call_runtime("__pluto_map_values", &[obj_ptr])),
-                _ => return Err(CompileError::codegen(format!("Map has no method '{}'", method.node))),
-            }
-        }
-
-        // Set methods
-        if let PlutoType::Set(elem_ty) = &obj_type {
-            let tag = self.builder.ins().iconst(types::I64, key_type_tag(elem_ty));
-            match method.node.as_str() {
-                "len" => return Ok(self.call_runtime("__pluto_set_len", &[obj_ptr])),
-                "contains" => {
-                    let e = self.lower_expr(&args[0].node)?;
-                    let slot = to_array_slot(e, elem_ty, &mut self.builder);
-                    let result = self.call_runtime("__pluto_set_contains", &[obj_ptr, tag, slot]);
-                    return Ok(self.builder.ins().ireduce(types::I8, result));
-                }
-                "insert" => {
-                    let e = self.lower_expr(&args[0].node)?;
-                    let e = self.emit_string_escape(e, elem_ty);
-                    let slot = to_array_slot(e, elem_ty, &mut self.builder);
-                    self.call_runtime_void("__pluto_set_insert", &[obj_ptr, tag, slot]);
-                    return Ok(self.builder.ins().iconst(types::I64, 0));
-                }
-                "remove" => {
-                    let e = self.lower_expr(&args[0].node)?;
-                    let slot = to_array_slot(e, elem_ty, &mut self.builder);
-                    self.call_runtime_void("__pluto_set_remove", &[obj_ptr, tag, slot]);
-                    return Ok(self.builder.ins().iconst(types::I64, 0));
-                }
-                "to_array" => return Ok(self.call_runtime("__pluto_set_to_array", &[obj_ptr])),
-                _ => return Err(CompileError::codegen(format!("Set has no method '{}'", method.node))),
-            }
-        }
-
-        // Bytes methods
-        if obj_type == PlutoType::Bytes {
-            return match method.node.as_str() {
-                "len" => Ok(self.call_runtime("__pluto_bytes_len", &[obj_ptr])),
-                "push" => {
-                    let arg_val = self.lower_expr(&args[0].node)?;
-                    let widened = self.builder.ins().uextend(types::I64, arg_val);
-                    self.call_runtime_void("__pluto_bytes_push", &[obj_ptr, widened]);
-                    Ok(self.builder.ins().iconst(types::I64, 0))
-                }
-                "to_string" => Ok(self.call_runtime("__pluto_bytes_to_string", &[obj_ptr])),
-                "slice" => {
-                    let start = self.lower_expr(&args[0].node)?;
-                    let end = self.lower_expr(&args[1].node)?;
-                    Ok(self.call_runtime("__pluto_bytes_slice", &[obj_ptr, start, end]))
-                }
-                "extend" => {
-                    let other = self.lower_expr(&args[0].node)?;
-                    self.call_runtime_void("__pluto_bytes_extend", &[obj_ptr, other]);
-                    Ok(self.builder.ins().iconst(types::I64, 0))
-                }
-                "fill" => {
-                    let val = self.lower_expr(&args[0].node)?;
-                    let widened = self.builder.ins().uextend(types::I64, val);
-                    self.call_runtime_void("__pluto_bytes_fill", &[obj_ptr, widened]);
-                    Ok(self.builder.ins().iconst(types::I64, 0))
-                }
-                "copy_from" => {
-                    let src = self.lower_expr(&args[0].node)?;
-                    let src_off = self.lower_expr(&args[1].node)?;
-                    let dst_off = self.lower_expr(&args[2].node)?;
-                    let n = self.lower_expr(&args[3].node)?;
-                    self.call_runtime_void("__pluto_bytes_copy_from", &[obj_ptr, src, src_off, dst_off, n]);
-                    Ok(self.builder.ins().iconst(types::I64, 0))
-                }
-                "find" => {
-                    let needle = self.lower_expr(&args[0].node)?;
-                    let widened = self.builder.ins().uextend(types::I64, needle);
-                    let from = self.lower_expr(&args[1].node)?;
-                    Ok(self.call_runtime("__pluto_bytes_find", &[obj_ptr, widened, from]))
-                }
-                "compare" => {
-                    let other = self.lower_expr(&args[0].node)?;
-                    Ok(self.call_runtime("__pluto_bytes_compare", &[obj_ptr, other]))
-                }
-                "read_u8" | "read_u16_le" | "read_u16_be" | "read_u32_le" | "read_u32_be"
-                | "read_i64_le" | "read_i64_be" => {
-                    let off = self.lower_expr(&args[0].node)?;
-                    let rt_fn = format!("__pluto_bytes_{}", method.node);
-                    Ok(self.call_runtime(&rt_fn, &[obj_ptr, off]))
-                }
-                "write_u8" | "write_u16_le" | "write_u16_be" | "write_u32_le" | "write_u32_be"
-                | "write_i64_le" | "write_i64_be" => {
-                    let off = self.lower_expr(&args[0].node)?;
-                    let val = self.lower_expr(&args[1].node)?;
-                    let rt_fn = format!("__pluto_bytes_{}", method.node);
-                    self.call_runtime_void(&rt_fn, &[obj_ptr, off, val]);
-                    Ok(self.builder.ins().iconst(types::I64, 0))
-                }
-                _ => Err(CompileError::codegen(format!("bytes has no method '{}'", method.node))),
-            };
-        }
-
-        // Primitive value methods (int/float/bool). The math methods call the
-        // same runtime functions as the free builtins (abs, sqrt, ...) so
-        // method and function forms agree exactly.
-        if obj_type == PlutoType::Int {
-            return match method.node.as_str() {
-                "to_string" => Ok(self.call_runtime("__pluto_int_to_string", &[obj_ptr])),
-                "to_float" => Ok(self.builder.ins().fcvt_from_sint(types::F64, obj_ptr)),
-                "abs" => Ok(self.call_runtime("__pluto_abs_int", &[obj_ptr])),
-                _ => Err(CompileError::codegen(format!("int has no method '{}'", method.node))),
-            };
-        }
-        if obj_type == PlutoType::Float {
-            return match method.node.as_str() {
-                "to_string" => Ok(self.call_runtime("__pluto_float_to_string", &[obj_ptr])),
-                "to_int" => Ok(self.builder.ins().fcvt_to_sint_sat(types::I64, obj_ptr)),
-                "abs" => Ok(self.call_runtime("__pluto_abs_float", &[obj_ptr])),
-                "sqrt" => Ok(self.call_runtime("__pluto_sqrt", &[obj_ptr])),
-                "floor" => Ok(self.call_runtime("__pluto_floor", &[obj_ptr])),
-                "ceil" => Ok(self.call_runtime("__pluto_ceil", &[obj_ptr])),
-                "round" => Ok(self.call_runtime("__pluto_round", &[obj_ptr])),
-                _ => Err(CompileError::codegen(format!("float has no method '{}'", method.node))),
-            };
-        }
-        if obj_type == PlutoType::Bool {
-            return match method.node.as_str() {
-                "to_string" => {
-                    let widened = self.builder.ins().uextend(types::I32, obj_ptr);
-                    Ok(self.call_runtime("__pluto_bool_to_string", &[widened]))
-                }
-                _ => Err(CompileError::codegen(format!("bool has no method '{}'", method.node))),
-            };
-        }
-
-        // String methods
-        if obj_type == PlutoType::String {
-            return match method.node.as_str() {
-                "len" => Ok(self.call_runtime("__pluto_string_len", &[obj_ptr])),
-                "contains" => {
-                    let arg = self.lower_expr(&args[0].node)?;
-                    let result = self.call_runtime("__pluto_string_contains", &[obj_ptr, arg]);
-                    Ok(self.builder.ins().ireduce(types::I8, result))
-                }
-                "starts_with" => {
-                    let arg = self.lower_expr(&args[0].node)?;
-                    let result = self.call_runtime("__pluto_string_starts_with", &[obj_ptr, arg]);
-                    Ok(self.builder.ins().ireduce(types::I8, result))
-                }
-                "ends_with" => {
-                    let arg = self.lower_expr(&args[0].node)?;
-                    let result = self.call_runtime("__pluto_string_ends_with", &[obj_ptr, arg]);
-                    Ok(self.builder.ins().ireduce(types::I8, result))
-                }
-                "index_of" => {
-                    let arg = self.lower_expr(&args[0].node)?;
-                    Ok(self.call_runtime("__pluto_string_index_of", &[obj_ptr, arg]))
-                }
-                "substring" => {
-                    let start = self.lower_expr(&args[0].node)?;
-                    let len = self.lower_expr(&args[1].node)?;
-                    Ok(self.call_runtime("__pluto_string_substring", &[obj_ptr, start, len]))
-                }
-                "trim" => Ok(self.call_runtime("__pluto_string_trim", &[obj_ptr])),
-                "to_upper" => Ok(self.call_runtime("__pluto_string_to_upper", &[obj_ptr])),
-                "to_lower" => Ok(self.call_runtime("__pluto_string_to_lower", &[obj_ptr])),
-                "replace" => {
-                    let old = self.lower_expr(&args[0].node)?;
-                    let new = self.lower_expr(&args[1].node)?;
-                    Ok(self.call_runtime("__pluto_string_replace", &[obj_ptr, old, new]))
-                }
-                "split" => {
-                    let delim = self.lower_expr(&args[0].node)?;
-                    Ok(self.call_runtime("__pluto_string_split", &[obj_ptr, delim]))
-                }
-                "char_at" => {
-                    let idx = self.lower_expr(&args[0].node)?;
-                    Ok(self.call_runtime("__pluto_string_char_at", &[obj_ptr, idx]))
-                }
-                "byte_at" => {
-                    let idx = self.lower_expr(&args[0].node)?;
-                    Ok(self.call_runtime("__pluto_string_byte_at", &[obj_ptr, idx]))
-                }
-                "to_bytes" => Ok(self.call_runtime("__pluto_string_to_bytes", &[obj_ptr])),
-                "to_int" => Ok(self.call_runtime("__pluto_string_to_int", &[obj_ptr])),
-                "to_float" => Ok(self.call_runtime("__pluto_string_to_float", &[obj_ptr])),
-                "trim_start" => Ok(self.call_runtime("__pluto_string_trim_start", &[obj_ptr])),
-                "trim_end" => Ok(self.call_runtime("__pluto_string_trim_end", &[obj_ptr])),
-                "repeat" => {
-                    let count = self.lower_expr(&args[0].node)?;
-                    Ok(self.call_runtime("__pluto_string_repeat", &[obj_ptr, count]))
-                }
-                "last_index_of" => {
-                    let needle = self.lower_expr(&args[0].node)?;
-                    Ok(self.call_runtime("__pluto_string_last_index_of", &[obj_ptr, needle]))
-                }
-                "count" => {
-                    let needle = self.lower_expr(&args[0].node)?;
-                    Ok(self.call_runtime("__pluto_string_count", &[obj_ptr, needle]))
-                }
-                "is_empty" => {
-                    let result = self.call_runtime("__pluto_string_is_empty", &[obj_ptr]);
-                    Ok(self.builder.ins().ireduce(types::I8, result))
-                }
-
-                "is_whitespace" => {
-                    let result = self.call_runtime("__pluto_string_is_whitespace", &[obj_ptr]);
-                    Ok(self.builder.ins().ireduce(types::I8, result))
-                }
-                _ => Err(CompileError::codegen(format!("string has no method '{}'", method.node))),
+                Lowering::Inline => match (entry.receiver, entry.name) {
+                    (Receiver::Array, "is_empty") => {
+                        let len_val = self.call_runtime("__pluto_array_len", &[obj_ptr]);
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        Ok(self.builder.ins().icmp(IntCC::Equal, len_val, zero))
+                    }
+                    (Receiver::Int, "to_float") => {
+                        Ok(self.builder.ins().fcvt_from_sint(types::F64, obj_ptr))
+                    }
+                    (Receiver::Float, "to_int") => {
+                        Ok(self.builder.ins().fcvt_to_sint_sat(types::I64, obj_ptr))
+                    }
+                    (Receiver::Bool, "to_string") => {
+                        // bool is I8; the C ABI takes I32.
+                        let widened = self.builder.ins().uextend(types::I32, obj_ptr);
+                        Ok(self.call_runtime("__pluto_bool_to_string", &[widened]))
+                    }
+                    _ => Err(CompileError::codegen(format!(
+                        "builtin method {}.{} is marked Inline in the registry but has no codegen arm",
+                        entry.receiver.noun(),
+                        entry.name
+                    ))),
+                },
             };
         }
 

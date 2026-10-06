@@ -9,6 +9,7 @@ mod resolve;
 mod infer;
 mod check;
 mod closures;
+pub(crate) mod builtins;
 pub(crate) mod errors;
 mod idempotency;
 mod linearity;
