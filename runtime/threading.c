@@ -53,7 +53,8 @@ typedef enum {
     FIBER_BLOCKED_TASK=2, FIBER_BLOCKED_CHAN_SEND=3,
     FIBER_BLOCKED_CHAN_RECV=4, FIBER_BLOCKED_SELECT=5,
     FIBER_BLOCKED_SLEEP=6,
-    FIBER_COMPLETED=7
+    FIBER_BLOCKED_LOCK=7,   // waiting on an entity/singleton rwlock
+    FIBER_COMPLETED=8       // keep last: BLOCKED_TASK..BLOCKED_LOCK is the blocked range
 } FiberState;
 
 typedef struct {
@@ -176,6 +177,7 @@ static void wake_select_fibers_for_chan(long *ch_ptr) {
 // A fiber blocked on a deadline-carrying wait: an enabled "fire the timeout"
 // transition in the scheduler's choice set.
 static int fiber_timed_blocked(Fiber *f) {
+    // Lock waits never carry deadlines, so SLEEP stays the range end here.
     return f->has_timeout &&
            f->state >= FIBER_BLOCKED_TASK && f->state <= FIBER_BLOCKED_SLEEP;
 }
@@ -686,7 +688,7 @@ static void scheduler_run(void) {
             fprintf(stderr, "pluto: deadlock detected in test\n");
             for (int i = 0; i < g_scheduler->fiber_count; i++) {
                 Fiber *f = &g_scheduler->fibers[i];
-                if (f->state >= FIBER_BLOCKED_TASK && f->state <= FIBER_BLOCKED_SLEEP) {
+                if (f->state >= FIBER_BLOCKED_TASK && f->state <= FIBER_BLOCKED_LOCK) {
                     const char *reason = "unknown";
                     switch (f->state) {
                         case FIBER_BLOCKED_TASK:      reason = "task.get()"; break;
@@ -694,6 +696,7 @@ static void scheduler_run(void) {
                         case FIBER_BLOCKED_CHAN_RECV:  reason = "chan.recv()"; break;
                         case FIBER_BLOCKED_SELECT:     reason = "select"; break;
                         case FIBER_BLOCKED_SLEEP:      reason = "sleep"; break;
+                        case FIBER_BLOCKED_LOCK:       reason = "entity lock"; break;
                         default: break;
                     }
                     fprintf(stderr, "  Fiber %d: blocked on %s\n", i, reason);
@@ -2763,16 +2766,159 @@ void __pluto_entity_unlock(void *entity) {
     __pluto_rwlock_unlock(lock);
 }
 #else
-// Test mode: single-threaded fiber scheduler — locks are no-ops. (The
-// symbols must still exist: codegen emits lock calls unconditionally.)
-long __pluto_rwlock_init(void) { return 0; }
-void __pluto_rwlock_rdlock(long lock_ptr) { (void)lock_ptr; }
-void __pluto_rwlock_wrlock(long lock_ptr) { (void)lock_ptr; }
-void __pluto_rwlock_unlock(long lock_ptr) { (void)lock_ptr; }
-void __pluto_rwlock_destroy(long lock_ptr) { (void)lock_ptr; }
-void __pluto_entity_rdlock(void *entity) { (void)entity; }
-void __pluto_entity_wrlock(void *entity) { (void)entity; }
-void __pluto_entity_unlock(void *entity) { (void)entity; }
+// Test mode: fiber-aware owner-tracking rwlock (rfc-test-harness phase 4).
+//
+// These used to be no-ops, which combined with blocking-only yield points
+// made the harness UNSOUND for entity programs: a fiber ran from one
+// blocking op to the next without interleaving, so method-granularity
+// races (get-then-set lost updates) were invisible to every strategy and
+// Exhaustive certified programs whose production interleavings lose
+// updates.
+//
+// Two halves, both required:
+//   1. Lock ACQUISITION IS A PREEMPTION POINT: before attempting the
+//      acquire, the fiber re-enters the ready set and yields, so the
+//      scheduler may interleave another fiber between any two entity
+//      operations. The dispatch is recorded like any other fiber pick, so
+//      lock-site races land in schedule tokens and replay like channel
+//      races.
+//   2. The lock is REAL: once fibers interleave at method boundaries, a
+//      no-op lock would let Exhaustive explore interleavings production
+//      forbids (two writers inside one method). Semantics mirror the
+//      production PlutoRwlock: owner-tracked write holds with depth (any
+//      same-owner reacquisition proceeds — same-message reentrancy),
+//      shared counted reads with no writer preference, cross-fiber
+//      acquisition blocks (FIBER_BLOCKED_LOCK, woken on release).
+//
+// DPOR: each acquire records the lock in the exhaustive dependency
+// tracker (same mechanism as channels), so fibers touching the same
+// entity instance are dependent and independent entities still prune.
+// Read/read pruning is deliberately not refined yet: object-granular
+// dependencies over-approximate (never unsound, just less pruning).
+
+typedef struct {
+    long readers;      // active shared holds
+    long write_depth;  // nested holds by the owning fiber (0 = not held)
+    int owner_fiber;   // valid iff write_depth > 0
+} TestRwlock;
+
+static int lock_fiber_mode(void) {
+    return g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL;
+}
+
+// The preemption point: rejoin the ready set and let the scheduler decide
+// who runs. Recorded as an ordinary fiber-pick decision.
+static void lock_preempt(void) {
+    Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
+    cur->state = FIBER_READY;
+    fiber_yield_to_scheduler();
+}
+
+static void lock_block(TestRwlock *l) {
+    Fiber *cur = &g_scheduler->fibers[g_scheduler->current_fiber];
+    cur->state = FIBER_BLOCKED_LOCK;
+    cur->blocked_on = (void *)l;
+    fiber_yield_to_scheduler();
+}
+
+static void wake_fibers_blocked_on_lock(TestRwlock *l) {
+    if (!g_scheduler) return;
+    for (int i = 0; i < g_scheduler->fiber_count; i++) {
+        Fiber *f = &g_scheduler->fibers[i];
+        if (f->state == FIBER_BLOCKED_LOCK && f->blocked_on == (void *)l) {
+            f->state = FIBER_READY;
+        }
+    }
+}
+
+long __pluto_rwlock_init(void) {
+    return (long)calloc(1, sizeof(TestRwlock));
+}
+
+void __pluto_rwlock_rdlock(long lock_ptr) {
+    TestRwlock *l = (TestRwlock *)lock_ptr;
+    if (!l) return;
+    if (!lock_fiber_mode()) return;  // sequential: single fiber, trivially serialized
+    int cur = g_scheduler->current_fiber;
+    // Reentrant fast path first: a read nested in our own write hold is
+    // another level of the same message — never a preemption point.
+    if (l->write_depth > 0 && l->owner_fiber == cur) {
+        l->write_depth++;
+        return;
+    }
+    exhaustive_record_channel(cur, (void *)l);
+    lock_preempt();
+    cur = g_scheduler->current_fiber;
+    while (l->write_depth > 0) {
+        if (l->owner_fiber == cur) { l->write_depth++; return; }
+        lock_block(l);
+    }
+    l->readers++;
+}
+
+void __pluto_rwlock_wrlock(long lock_ptr) {
+    TestRwlock *l = (TestRwlock *)lock_ptr;
+    if (!l) return;
+    if (!lock_fiber_mode()) return;
+    int cur = g_scheduler->current_fiber;
+    if (l->write_depth > 0 && l->owner_fiber == cur) {
+        l->write_depth++;
+        return;
+    }
+    exhaustive_record_channel(cur, (void *)l);
+    lock_preempt();
+    cur = g_scheduler->current_fiber;
+    while (1) {
+        if (l->write_depth > 0 && l->owner_fiber == cur) { l->write_depth++; return; }
+        if (l->write_depth == 0 && l->readers == 0) break;
+        lock_block(l);
+    }
+    l->owner_fiber = cur;
+    l->write_depth = 1;
+}
+
+void __pluto_rwlock_unlock(long lock_ptr) {
+    TestRwlock *l = (TestRwlock *)lock_ptr;
+    if (!l) return;
+    if (!lock_fiber_mode()) return;
+    int cur = g_scheduler->current_fiber;
+    if (l->write_depth > 0 && l->owner_fiber == cur) {
+        l->write_depth--;
+        if (l->write_depth == 0) {
+            l->owner_fiber = -1;
+            wake_fibers_blocked_on_lock(l);
+        }
+    } else if (l->readers > 0) {
+        l->readers--;
+        if (l->readers == 0) wake_fibers_blocked_on_lock(l);
+    }
+}
+
+void __pluto_rwlock_destroy(long lock_ptr) {
+    if (lock_ptr) free((void *)lock_ptr);
+}
+
+// Per-instance entity locks: same hidden-trailing-slot lookup as
+// production (the slot is now initialized in test mode too).
+static long test_entity_lock_of(void *entity) {
+    if (!entity) return 0;
+    GCHeader *h = (GCHeader *)((char *)entity - sizeof(GCHeader));
+    if (h->type_tag != GC_TAG_ENTITY || h->size < 8) return 0;
+    long *slots = (long *)entity;
+    return slots[h->size / 8 - 1];
+}
+
+void __pluto_entity_rdlock(void *entity) {
+    __pluto_rwlock_rdlock(test_entity_lock_of(entity));
+}
+
+void __pluto_entity_wrlock(void *entity) {
+    __pluto_rwlock_wrlock(test_entity_lock_of(entity));
+}
+
+void __pluto_entity_unlock(void *entity) {
+    __pluto_rwlock_unlock(test_entity_lock_of(entity));
+}
 #endif
 
 // ── Logging ────────────────────────────────────────────────────────────────
