@@ -6477,3 +6477,137 @@ tests[scheduler: Random, retries: 3] {
 }
 "#, "unknown tests config key");
 }
+
+// ── Entity locks as preemption points (rfc-test-harness phase 4) ────────────
+//
+// Test-mode entity locks used to be no-ops and fibers only yielded at
+// blocking ops, so method-granularity races were invisible: Exhaustive
+// certified entity programs whose production interleavings lose updates.
+// Lock acquisition is now a recorded preemption point backed by a real
+// fiber-aware owner-tracking rwlock.
+
+const ENTITY_LOST_UPDATE: &str = r#"
+object Counter {
+    value: int
+
+    fn get(self) int {
+        return self.value
+    }
+
+    fn set(mut self, v: int) {
+        self.value = v
+    }
+}
+
+fn bump(mut c: Counter) {
+    let v = c.get()
+    c.set(v + 1)
+}
+
+tests[scheduler: Exhaustive] {
+    test "lost update is found" {
+        let mut c = Counter { value: 0 }
+        let t1 = spawn bump(c)
+        let t2 = spawn bump(c)
+        t1.get()
+        t2.get()
+        expect(c.get()).to_equal(2)
+    }
+}
+"#;
+
+#[test]
+fn exhaustive_finds_entity_lost_update_and_pin_replays() {
+    // The get-then-set window straddles no blocking op — before phase 4
+    // this "passed" every strategy. Exhaustive must now find the schedule
+    // where both fibers read 0, and the pin must replay it.
+    let (_stdout, stderr, code) = compile_test_and_run(ENTITY_LOST_UPDATE);
+    assert_ne!(code, 0, "lost update not found — entity preemption points regressed:\n{stderr}");
+    assert!(stderr.contains("expected 1 to equal 2"), "stderr: {stderr}");
+    assert!(stderr.contains("schedule: ptsched:v1:"), "stderr: {stderr}");
+
+    let token = extract_schedule_token(&stderr, "schedule: ");
+    let (_s2, stderr2, code2) =
+        compile_test_and_run_with_env(ENTITY_LOST_UPDATE, &[("PLUTO_TEST_SCHEDULE", &token)]);
+    assert_ne!(code2, 0, "pin did not replay: {stderr2}");
+    assert!(stderr2.contains("expected 1 to equal 2"), "stderr: {stderr2}");
+}
+
+#[test]
+fn exhaustive_serialized_entity_methods_never_lose() {
+    // The inverse guarantee: a `mut self` method is one message — the lock
+    // is modeled, so Exhaustive must NOT explore interleavings production
+    // forbids (two writers inside one method body).
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+object Counter {
+    value: int
+
+    fn increment(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+fn bump(mut c: Counter) {
+    c.increment()
+}
+
+tests[scheduler: Exhaustive] {
+    test "serialized increments never lose" {
+        let mut c = Counter { value: 0 }
+        let t1 = spawn bump(c)
+        let t2 = spawn bump(c)
+        t1.get()
+        t2.get()
+        expect(c.get()).to_equal(2)
+    }
+}
+"#);
+    assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}");
+}
+
+#[test]
+fn entity_method_reentrancy_under_concurrent_fibers() {
+    // Same-message reentrancy (a method calling another method on self)
+    // must proceed while another fiber contends for the same instance —
+    // the owner-tracked depth mirrors the production lock.
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+object Counter {
+    value: int
+
+    fn get(self) int {
+        return self.value
+    }
+
+    fn add_twice(mut self) {
+        self.bump()
+        self.bump()
+    }
+
+    fn bump(mut self) {
+        self.value = self.value + 1
+    }
+}
+
+fn worker(mut c: Counter) {
+    c.add_twice()
+}
+
+tests[scheduler: RoundRobin] {
+    test "reentrant methods with contention" {
+        let mut c = Counter { value: 0 }
+        let t1 = spawn worker(c)
+        let t2 = spawn worker(c)
+        t1.get()
+        t2.get()
+        expect(c.get()).to_equal(4)
+    }
+}
+"#);
+    assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}");
+}

@@ -56,9 +56,9 @@ void *__pluto_alloc_entity(long size) {
     // noop backend never collects.
     if (size == 0) size = 8;
     long *ptr = (long *)gc_alloc((size_t)size + 8, GC_TAG_ENTITY, 0);
-#ifndef PLUTO_TEST_MODE
+    // Both modes: test mode carries a real fiber-aware lock too
+    // (rfc-test-harness phase 4 — lock sites are preemption points).
     ptr[size / 8] = __pluto_rwlock_init();
-#endif
     return ptr;
 }
 
