@@ -1232,9 +1232,7 @@ pub fn compile_system_file_with_stdlib(
 
     for member in &system_decl.node.members {
         let module_name = &member.module_name.node;
-        let module_prog = graph.imports.iter()
-            .find(|(name, _, _)| name == module_name)
-            .map(|(_, prog, _)| prog);
+        let module_prog = graph.module_for_binding(module_name).map(|m| &m.program);
         match module_prog {
             Some(prog) if prog.app.is_none() => {
                 return Err(CompileError::syntax(
@@ -1267,9 +1265,8 @@ pub fn compile_system_file_with_stdlib(
         let mut consumed: Vec<(String, String, Option<&ClassDecl>, crate::span::Span)> = Vec::new();
 
         for member in &system_decl.node.members {
-            let Some(prog) = graph.imports.iter()
-                .find(|(n, _, _)| n == &member.module_name.node)
-                .map(|(_, p, _)| p)
+            let Some(prog) = graph.module_for_binding(&member.module_name.node)
+                .map(|m| &m.program)
             else { continue };
 
             for svc_name in collect_served_services(prog) {
@@ -1388,8 +1385,7 @@ pub fn compile_system_file_with_stdlib(
         let mut served: std::collections::HashMap<String, (String, String, Vec<String>)> =
             std::collections::HashMap::new();
         for member in &system_decl.node.members {
-            let Some(prog) = graph.imports.iter()
-                .find(|(n, _, _)| n == &member.module_name.node).map(|(_, p, _)| p)
+            let Some(prog) = graph.module_for_binding(&member.module_name.node).map(|m| &m.program)
             else { continue };
             for svc in collect_served_services(prog) {
                 if let Some(cd) = prog.classes.iter().find(|c| unqual(&c.node.name.node) == svc) {
@@ -1400,8 +1396,7 @@ pub fn compile_system_file_with_stdlib(
         }
 
         for member in &system_decl.node.members {
-            let Some(prog) = graph.imports.iter()
-                .find(|(n, _, _)| n == &member.module_name.node).map(|(_, p, _)| p)
+            let Some(prog) = graph.module_for_binding(&member.module_name.node).map(|m| &m.program)
             else { continue };
             let mut remote_fields: Vec<&parser::ast::Field> = Vec::new();
             if let Some(app) = &prog.app { remote_fields.extend(app.node.inject_fields.iter()); }

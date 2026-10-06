@@ -43,11 +43,47 @@ pub enum ImportOrigin {
     PackageDep,
 }
 
+/// A module resolved to its canonical identity (issue #391): every import
+/// path that reaches the same resolved filesystem path shares ONE copy of
+/// the module, parsed and flattened exactly once under one canonical
+/// prefix. An importer's local binding is an aliasing entry onto the
+/// canonical module (rfc-module-semantics.md: "an aliasing entry, not a
+/// copy"), never a second prefixed copy — so `codec.Reader` names the same
+/// nominal type through every route.
+pub struct ResolvedModule {
+    /// Canonical prefix under which this module's items flatten (e.g.
+    /// `codec`): the binding name of the first import that reached the
+    /// module. When two DISTINCT modules (different resolved paths) share
+    /// a binding name, later ones are disambiguated as `name#2`, `name#3`,
+    /// ... — identity is by resolved path, never by name.
+    pub name: String,
+    pub program: Program,
+    pub origin: ImportOrigin,
+    /// This module's own import bindings: local name -> canonical prefix.
+    pub aliases: HashMap<String, String>,
+}
+
 /// Result of module resolution before flattening.
 pub struct ModuleGraph {
     pub root: Program,
-    pub imports: Vec<(String, Program, ImportOrigin)>,
+    /// The root program's import bindings: local name -> canonical prefix.
+    pub root_aliases: HashMap<String, String>,
+    /// Every module in the import graph, each exactly once (canonical
+    /// identity = resolved path), in dependency-first discovery order.
+    pub imports: Vec<ResolvedModule>,
+    /// Re-export alias surface across the whole graph: canonical surface
+    /// name (`wal.SyncError`) -> canonical declaration name
+    /// (`fs.SyncError`). Applied as a rename over the flattened program.
+    pub reexport_aliases: HashMap<String, String>,
     pub source_map: SourceMap,
+}
+
+impl ModuleGraph {
+    /// Look up the module a root-level import binding refers to.
+    pub fn module_for_binding(&self, binding: &str) -> Option<&ResolvedModule> {
+        let canon = self.root_aliases.get(binding)?;
+        self.imports.iter().find(|m| m.name == *canon)
+    }
 }
 
 /// Visitor that stamps all spans in an AST with a specific file_id.
@@ -240,27 +276,230 @@ fn collect_source_files(dir: &Path) -> Result<Vec<PathBuf>, CompileError> {
     Ok(deduped)
 }
 
-/// Load all .pluto files in a directory and merge into one Program.
-/// If `mod.pluto` exists, only that file is loaded; otherwise all .pluto files are auto-merged.
-/// Sub-imports within loaded files are recursively resolved and flattened into the result.
-fn load_directory_module(
-    dir: &Path,
-    source_map: &mut SourceMap,
-    visited: &mut HashSet<PathBuf>,
-    effective_stdlib: Option<&Path>,
-    current_deps: &DependencyScope,
-    pkg_graph: &PackageGraph,
-    parent_origin: ImportOrigin,
-) -> Result<Program, CompileError> {
-    // Directory cycle detection with closure cleanup pattern
-    let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    if visited.contains(&canonical_dir) {
-        return Err(CompileError::module(format!(
-            "circular import detected: '{}'", dir.display()
-        )));
+/// Shared resolution state: parses each canonical module exactly once and
+/// hands importers the canonical prefix to alias onto.
+struct Resolver<'a> {
+    source_map: SourceMap,
+    /// Completed modules, in dependency-first discovery order.
+    modules: Vec<ResolvedModule>,
+    /// Canonical filesystem path (file or directory) -> index in `modules`.
+    ids_by_path: HashMap<PathBuf, usize>,
+    /// Canonical prefixes already taken (for `#N` disambiguation between
+    /// distinct modules that share a binding name).
+    used_prefixes: HashSet<String>,
+    /// In-progress resolution stack (canonical paths) for cycle detection.
+    visited: HashSet<PathBuf>,
+    /// Re-export alias surface (rfc-module-semantics section 7): canonical
+    /// surface name (`wal.SyncError`) -> canonical declaration name
+    /// (`fs.SyncError`). Chains are flattened as they register — imports
+    /// resolve post-order, so a target's own aliases are always final.
+    reexport_aliases: HashMap<String, String>,
+    effective_stdlib: Option<PathBuf>,
+    pkg_graph: &'a PackageGraph,
+}
+
+impl<'a> Resolver<'a> {
+    /// Pick the canonical prefix for a newly registered module: the
+    /// requested binding name when free, else `name#2`, `name#3`, ...
+    fn alloc_prefix(&mut self, preferred: &str) -> String {
+        if self.used_prefixes.insert(preferred.to_string()) {
+            return preferred.to_string();
+        }
+        let mut n = 2;
+        loop {
+            let candidate = format!("{preferred}#{n}");
+            if self.used_prefixes.insert(candidate.clone()) {
+                return candidate;
+            }
+            n += 1;
+        }
     }
-    visited.insert(canonical_dir.clone());
-    let result = (|| {
+
+    /// Register a single-file module by canonical path, loading and
+    /// resolving it only on first encounter. Returns the canonical prefix.
+    fn register_file_module(
+        &mut self,
+        file_path: &Path,
+        subimport_dir: &Path,
+        preferred: &str,
+        current_deps: &DependencyScope,
+        origin: ImportOrigin,
+        parent_origin: ImportOrigin,
+    ) -> Result<String, CompileError> {
+        let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+        if let Some(&id) = self.ids_by_path.get(&canonical) {
+            return Ok(self.modules[id].name.clone());
+        }
+        if self.visited.contains(&canonical) {
+            return Err(CompileError::module(format!(
+                "circular import detected: '{}'",
+                file_path.display()
+            )));
+        }
+        self.visited.insert(canonical.clone());
+        let loaded = match load_file_auto(file_path, &mut self.source_map) {
+            Ok((mut program, _)) => self
+                .resolve_imports(&mut program, subimport_dir, current_deps, parent_origin, false)
+                .map(|aliases| (program, aliases)),
+            Err(e) => Err(e),
+        };
+        self.visited.remove(&canonical);
+        let (mut program, aliases) = loaded?;
+        let name = self.alloc_prefix(preferred);
+        self.resolve_reexports(&mut program, Some(&name), &aliases)?;
+        let id = self.modules.len();
+        self.ids_by_path.insert(canonical, id);
+        self.modules.push(ResolvedModule { name: name.clone(), program, origin, aliases });
+        Ok(name)
+    }
+
+    /// Register a directory module by canonical path, loading and
+    /// resolving it only on first encounter. Returns the canonical prefix.
+    fn register_dir_module(
+        &mut self,
+        dir: &Path,
+        preferred: &str,
+        current_deps: &DependencyScope,
+        origin: ImportOrigin,
+        parent_origin: ImportOrigin,
+    ) -> Result<String, CompileError> {
+        let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        if let Some(&id) = self.ids_by_path.get(&canonical) {
+            return Ok(self.modules[id].name.clone());
+        }
+        if self.visited.contains(&canonical) {
+            return Err(CompileError::module(format!(
+                "circular import detected: '{}'",
+                dir.display()
+            )));
+        }
+        self.visited.insert(canonical.clone());
+        let loaded = self.load_directory_program(dir, current_deps, parent_origin);
+        self.visited.remove(&canonical);
+        let (mut program, aliases) = loaded?;
+        let name = self.alloc_prefix(preferred);
+        self.resolve_reexports(&mut program, Some(&name), &aliases)?;
+        let id = self.modules.len();
+        self.ids_by_path.insert(canonical, id);
+        self.modules.push(ResolvedModule { name: name.clone(), program, origin, aliases });
+        Ok(name)
+    }
+
+    /// Validate and canonicalize a program's `pub import` re-exports
+    /// (rfc-module-semantics section 7) once its own imports are resolved.
+    /// Each must name a public declaration of an imported module; chains
+    /// of re-exports resolve through the already-registered surface map
+    /// to the one canonical declaration. For a module (`module_prefix`
+    /// set), the surface entry `<prefix>.<Item> -> <canonical decl>` is
+    /// recorded so importers' references rename onto the declaration at
+    /// flatten time — an aliasing entry, never a copy.
+    fn resolve_reexports(
+        &mut self,
+        program: &mut Program,
+        module_prefix: Option<&str>,
+        aliases: &HashMap<String, String>,
+    ) -> Result<(), CompileError> {
+        if program.reexports.is_empty() {
+            return Ok(());
+        }
+
+        let has_local_decl = |p: &Program, n: &str| -> bool {
+            p.functions.iter().any(|f| f.node.name.node == n)
+                || p.classes.iter().any(|c| c.node.name.node == n)
+                || p.enums.iter().any(|e| e.node.name.node == n)
+                || p.errors.iter().any(|e| e.node.name.node == n)
+                || p.traits.iter().any(|t| t.node.name.node == n)
+        };
+
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut reexports = std::mem::take(&mut program.reexports);
+        for r in &mut reexports {
+            let first = r.node.path[0].node.clone();
+            let written = r.node.target_name();
+            let Some(target_module) = aliases.get(&first) else {
+                return Err(CompileError::module(format!(
+                    "cannot re-export '{written}': module '{first}' is not imported here"
+                )));
+            };
+
+            // Canonical declaration name the written path points at;
+            // chained re-exports (the target is itself a re-export of the
+            // imported module) resolve through the surface map.
+            let rest: Vec<&str> = r.node.path[1..].iter().map(|s| s.node.as_str()).collect();
+            let mut target = format!("{}.{}", target_module, rest.join("."));
+            if let Some(canon) = self.reexport_aliases.get(&target) {
+                target = canon.clone();
+            }
+
+            // Existence + visibility, checked against the canonical
+            // module that actually declares the item.
+            let (decl_module, decl_item) =
+                target.rsplit_once('.').expect("canonical re-export target is dotted");
+            let is_pub = self.modules.iter().find(|m| m.name == decl_module).and_then(|m| {
+                let p = &m.program;
+                p.functions.iter().find(|f| f.node.name.node == decl_item).map(|f| f.node.is_pub)
+                    .or_else(|| p.classes.iter().find(|c| c.node.name.node == decl_item).map(|c| c.node.is_pub))
+                    .or_else(|| p.enums.iter().find(|e| e.node.name.node == decl_item).map(|e| e.node.is_pub))
+                    .or_else(|| p.errors.iter().find(|e| e.node.name.node == decl_item).map(|e| e.node.is_pub))
+                    .or_else(|| p.traits.iter().find(|t| t.node.name.node == decl_item).map(|t| t.node.is_pub))
+            });
+            match is_pub {
+                None => {
+                    return Err(CompileError::module(format!(
+                        "cannot re-export '{written}': no such item in module '{first}' \
+(re-exportable items are functions, classes, enums, errors, and traits)"
+                    )));
+                }
+                Some(false) => {
+                    return Err(CompileError::module(format!(
+                        "cannot re-export '{written}': it is private to module '{first}'; \
+declare it `pub` there first"
+                    )));
+                }
+                Some(true) => {}
+            }
+
+            let item = r.node.item_name().to_string();
+            if has_local_decl(program, &item) {
+                return Err(CompileError::module(format!(
+                    "re-export '{item}' collides with a declaration of the same name in this module"
+                )));
+            }
+            if !seen.insert(item.clone()) {
+                return Err(CompileError::module(format!(
+                    "duplicate re-export '{item}'"
+                )));
+            }
+
+            // Store the canonical path back on the declaration so later
+            // consumers (pretty printing, binary round-trips) see the
+            // real name.
+            if written != target {
+                let span = r.span;
+                r.node.path = target
+                    .split('.')
+                    .map(|seg| Spanned::new(seg.to_string(), span))
+                    .collect();
+            }
+
+            // A module's surface entry aliases importers onto the one
+            // declaration; the root has no surface to import.
+            if let Some(prefix) = module_prefix {
+                self.reexport_aliases.insert(prefix_name(prefix, &item), target);
+            }
+        }
+        program.reexports = reexports;
+        Ok(())
+    }
+
+    /// Load all source files in a directory and merge into one Program,
+    /// resolving the merged import list to an alias map.
+    fn load_directory_program(
+        &mut self,
+        dir: &Path,
+        current_deps: &DependencyScope,
+        parent_origin: ImportOrigin,
+    ) -> Result<(Program, HashMap<String, String>), CompileError> {
         let mut merged = Program {
             imports: Vec::new(),
             functions: Vec::new(),
@@ -282,7 +521,7 @@ fn load_directory_module(
         let source_files = collect_source_files(dir)?;
 
         for file_path in source_files {
-            let (program, _file_id) = load_file_auto(&file_path, source_map)?;
+            let (program, _file_id) = load_file_auto(&file_path, &mut self.source_map)?;
             merged.properties.extend(program.properties);
             merged.reexports.extend(program.reexports);
             merged.functions.extend(program.functions);
@@ -323,288 +562,242 @@ fn load_directory_module(
             merged.imports.extend(program.imports);
         }
 
-        resolve_module_imports(&mut merged, dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
+        let aliases = self.resolve_imports(&mut merged, dir, current_deps, parent_origin, false)?;
 
-        Ok(merged)
-    })();
-    visited.remove(&canonical_dir);
-    result
-}
-
-/// Resolve a multi-segment import path to a module, with recursive sub-import resolution.
-#[allow(clippy::too_many_arguments)]
-fn resolve_module_path(
-    segments: &[Spanned<String>],
-    base_dir: &Path,
-    source_map: &mut SourceMap,
-    import_span: Span,
-    visited: &mut HashSet<PathBuf>,
-    effective_stdlib: Option<&Path>,
-    current_deps: &DependencyScope,
-    pkg_graph: &PackageGraph,
-    parent_origin: ImportOrigin,
-) -> Result<Program, CompileError> {
-    let mut current_dir = base_dir.to_path_buf();
-
-    // Walk intermediate segments (all but the last)
-    for segment in &segments[..segments.len() - 1] {
-        let next_dir = current_dir.join(&segment.node);
-        if !next_dir.is_dir() {
-            return Err(CompileError::syntax(
-                format!("cannot find module path: '{}' is not a directory", next_dir.display()),
-                import_span,
-            ));
-        }
-        current_dir = next_dir;
+        Ok((merged, aliases))
     }
 
-    // Resolve final segment
-    let final_seg = &segments[segments.len() - 1];
-    let dir_path = current_dir.join(&final_seg.node);
+    /// Resolve a multi-segment import path to a module, registering it by
+    /// canonical identity. Returns the canonical prefix.
+    fn resolve_path_module(
+        &mut self,
+        segments: &[Spanned<String>],
+        base_dir: &Path,
+        preferred: &str,
+        import_span: Span,
+        current_deps: &DependencyScope,
+        parent_origin: ImportOrigin,
+    ) -> Result<String, CompileError> {
+        let mut current_dir = base_dir.to_path_buf();
 
-    if let Some(file_path) = resolve_module_file(&current_dir, &final_seg.node) {
-        let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
-        if visited.contains(&canonical) {
-            return Err(CompileError::module(format!(
-                "circular import detected: '{}'",
-                file_path.display()
-            )));
-        }
-        visited.insert(canonical.clone());
-        let (mut module_prog, _) = load_file_auto(&file_path, source_map)?;
-        resolve_module_imports(&mut module_prog, &current_dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
-        visited.remove(&canonical);
-        Ok(module_prog)
-    } else if dir_path.is_dir() {
-        load_directory_module(&dir_path, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)
-    } else if segments.len() == 1
-        && parent_origin != ImportOrigin::PackageDep
-        && let Some(parent) = base_dir.parent()
-        && (resolve_module_file(parent, &final_seg.node).is_some()
-            || parent.join(&final_seg.node).is_dir())
-    {
-        // Sibling fallback (issue #413, rfc-module-semantics.md section 6):
-        // a directory module's own imports resolve child-first, then among
-        // its SIBLINGS — `locks/locks.pt` importing `marks` finds
-        // `../marks/`. One parent hop only, so resolution never walks
-        // toward the filesystem root; the cycle guard in `visited` applies
-        // unchanged (a sibling cycle reports as a circular import).
-        resolve_module_path(
-            segments,
-            parent,
-            source_map,
-            import_span,
-            visited,
-            effective_stdlib,
-            current_deps,
-            pkg_graph,
-            parent_origin,
-        )
-    } else {
-        let full_path: Vec<&str> = segments.iter().map(|s| s.node.as_str()).collect();
-        Err(CompileError::syntax(
-            format!(
-                "cannot find module '{}': no directory or file found (searched '{}' and, for a \
-                 single-segment import, its parent)",
-                full_path.join("."),
-                current_dir.display()
-            ),
-            final_seg.span,
-        ))
-    }
-}
-
-/// Resolve all imports within a module's Program, flattening sub-imports into it.
-/// This is the core recursive function: for each import in `program`, resolve the sub-module,
-/// then flatten its items into `program` with prefixed names.
-#[allow(clippy::too_many_arguments)]
-fn resolve_module_imports(
-    program: &mut Program,
-    module_dir: &Path,
-    source_map: &mut SourceMap,
-    visited: &mut HashSet<PathBuf>,
-    effective_stdlib: Option<&Path>,
-    current_deps: &DependencyScope,
-    pkg_graph: &PackageGraph,
-    parent_origin: ImportOrigin,
-) -> Result<(), CompileError> {
-    if program.imports.is_empty() {
-        if let Some(r) = program.reexports.first() {
-            return Err(CompileError::module(format!(
-                "cannot re-export '{}': module '{}' is not imported here",
-                r.node.target_name(),
-                r.node.path[0].node
-            )));
-        }
-        return Ok(());
-    }
-
-    let imports_to_resolve: Vec<Spanned<ImportDecl>> = std::mem::take(&mut program.imports);
-    let mut imported_names: HashMap<String, String> = HashMap::new();
-    let mut resolved_imports: Vec<(String, Program, ImportOrigin)> = Vec::new();
-
-    for import in &imports_to_resolve {
-        let binding_name = import.node.binding_name().to_string();
-        let full_path = import.node.full_path();
-
-        // Duplicate import handling: allow exact duplicates, error on conflicts
-        if let Some(prev_path) = imported_names.get(&binding_name) {
-            if *prev_path == full_path {
-                continue; // Exact duplicate — deduplicate silently
-            } else {
+        // Walk intermediate segments (all but the last)
+        for segment in &segments[..segments.len() - 1] {
+            let next_dir = current_dir.join(&segment.node);
+            if !next_dir.is_dir() {
                 return Err(CompileError::syntax(
-                    format!("conflicting import binding '{}': imports '{}' and '{}'", binding_name, prev_path, full_path),
-                    import.span,
+                    format!("cannot find module path: '{}' is not a directory", next_dir.display()),
+                    import_span,
                 ));
             }
+            current_dir = next_dir;
         }
-        imported_names.insert(binding_name.clone(), full_path.clone());
 
-        let first_segment = &import.node.path[0].node;
+        // Resolve final segment
+        let final_seg = &segments[segments.len() - 1];
+        let dir_path = current_dir.join(&final_seg.node);
+        let origin = if parent_origin == ImportOrigin::PackageDep {
+            ImportOrigin::PackageDep
+        } else {
+            ImportOrigin::Local
+        };
 
-        if import.node.path.len() == 1 {
-            // Single-segment import
-            let is_dep = current_deps.contains_key(first_segment);
-            let dir_path = module_dir.join(first_segment);
-            let file_path_candidate = resolve_module_file(module_dir, first_segment);
-            let is_local = dir_path.is_dir() || file_path_candidate.is_some();
+        if let Some(file_path) = resolve_module_file(&current_dir, &final_seg.node) {
+            self.register_file_module(&file_path, &current_dir, preferred, current_deps, origin, parent_origin)
+        } else if dir_path.is_dir() {
+            self.register_dir_module(&dir_path, preferred, current_deps, origin, parent_origin)
+        } else if segments.len() == 1
+            && parent_origin != ImportOrigin::PackageDep
+            && let Some(parent) = base_dir.parent()
+            && (resolve_module_file(parent, &final_seg.node).is_some()
+                || parent.join(&final_seg.node).is_dir())
+        {
+            // Sibling fallback (issue #413, rfc-module-semantics.md section 6):
+            // a directory module's own imports resolve child-first, then among
+            // its SIBLINGS — `locks/locks.pt` importing `marks` finds
+            // `../marks/`. One parent hop only, so resolution never walks
+            // toward the filesystem root; the cycle guard in `visited` applies
+            // unchanged (a sibling cycle reports as a circular import).
+            self.resolve_path_module(segments, parent, preferred, import_span, current_deps, parent_origin)
+        } else {
+            let full_path: Vec<&str> = segments.iter().map(|s| s.node.as_str()).collect();
+            Err(CompileError::syntax(
+                format!(
+                    "cannot find module '{}': no directory or file found (searched '{}' and, for a \
+                     single-segment import, its parent)",
+                    full_path.join("."),
+                    current_dir.display()
+                ),
+                final_seg.span,
+            ))
+        }
+    }
 
-            if is_dep && is_local {
-                return Err(CompileError::syntax(
-                    format!("import '{}' is ambiguous: declared as dependency and also exists locally", first_segment),
-                    import.node.path[0].span,
-                ));
-            }
+    /// Resolve all imports of a Program (the root's or a module's own) to
+    /// canonical modules. Takes the import list out of the program and
+    /// returns the alias map: local binding name -> canonical prefix.
+    ///
+    /// Nothing is flattened into the importer here — a sub-module is
+    /// registered once in the resolver and the importer merely records the
+    /// aliasing entry, which is what keeps a diamond's two routes on the
+    /// same nominal types (issue #391).
+    fn resolve_imports(
+        &mut self,
+        program: &mut Program,
+        module_dir: &Path,
+        current_deps: &DependencyScope,
+        parent_origin: ImportOrigin,
+        is_root: bool,
+    ) -> Result<HashMap<String, String>, CompileError> {
+        let imports_to_resolve: Vec<Spanned<ImportDecl>> = std::mem::take(&mut program.imports);
+        let mut imported_names: HashMap<String, String> = HashMap::new();
+        let mut aliases: HashMap<String, String> = HashMap::new();
 
-            if is_dep {
-                let dep_path = &current_deps[first_segment];
-                let dep_canonical = dep_path.canonicalize().map_err(|e| {
-                    CompileError::codegen(format!("cannot resolve dep path '{}': {e}", dep_path.display()))
-                })?;
-                let dep_scope = pkg_graph.deps_for(&dep_canonical);
-                let module_prog = load_directory_module(dep_path, source_map, visited, effective_stdlib, dep_scope, pkg_graph, ImportOrigin::PackageDep)?;
-                resolved_imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
-            } else if dir_path.is_dir() {
-                let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
-                let module_prog = load_directory_module(&dir_path, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
-                resolved_imports.push((binding_name, module_prog, origin));
-            } else if let Some(file_path) = file_path_candidate {
-                let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
-                if visited.contains(&canonical) {
-                    return Err(CompileError::module(format!(
-                        "circular import detected: '{}'",
-                        file_path.display()
-                    )));
-                }
-                visited.insert(canonical.clone());
-                let (mut module_prog, _) = load_file_auto(&file_path, source_map)?;
-                resolve_module_imports(&mut module_prog, module_dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
-                visited.remove(&canonical);
-                let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
-                resolved_imports.push((binding_name, module_prog, origin));
-            } else if parent_origin != ImportOrigin::PackageDep
-                && let Some(parent) = module_dir.parent()
-                && (parent.join(first_segment).is_dir()
-                    || resolve_module_file(parent, first_segment).is_some())
-            {
-                // (Local modules only: inside a PACKAGE the hop could cross
-                // the package boundary into an undeclared cached sibling,
-                // breaking dependency-scope isolation — packages declare
-                // their deps in pluto.toml and keep submodules as children.)
-                // Sibling fallback (issue #413, rfc-module-semantics.md
-                // section 6): a module's own imports resolve child-first,
-                // then among its SIBLINGS — `locks/locks.pt` importing
-                // `marks` finds `../marks/`. One parent hop only, so
-                // resolution never walks toward the filesystem root; the
-                // `visited` cycle guard applies unchanged, so a sibling
-                // cycle still reports as a circular import.
-                let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
-                let sib_dir = parent.join(first_segment);
-                if sib_dir.is_dir() {
-                    let module_prog = load_directory_module(&sib_dir, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
-                    resolved_imports.push((binding_name, module_prog, origin));
+        for import in &imports_to_resolve {
+            let binding_name = import.node.binding_name().to_string();
+            let full_path = import.node.full_path();
+
+            // Duplicate import handling: allow exact duplicates, error on conflicts
+            if let Some(prev_path) = imported_names.get(&binding_name) {
+                if *prev_path == full_path {
+                    continue; // Exact duplicate — deduplicate silently
                 } else {
-                    let file_path = resolve_module_file(parent, first_segment)
-                        .expect("sibling file existence checked in the guard");
-                    let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
-                    if visited.contains(&canonical) {
-                        return Err(CompileError::module(format!(
-                            "circular import detected: '{}'",
-                            file_path.display()
-                        )));
-                    }
-                    visited.insert(canonical.clone());
-                    let (mut module_prog, _) = load_file_auto(&file_path, source_map)?;
-                    resolve_module_imports(&mut module_prog, parent, source_map, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
-                    visited.remove(&canonical);
-                    resolved_imports.push((binding_name, module_prog, origin));
-                }
-            } else {
-                return Err(CompileError::syntax(
-                    format!(
-                        "cannot find module '{}': no directory or file found (searched '{}' and \
-                         its parent for a sibling module)",
-                        full_path,
-                        module_dir.display()
-                    ),
-                    import.node.path[0].span,
-                ));
-            }
-        } else if first_segment == "std" {
-            // Stdlib import
-            match effective_stdlib {
-                Some(root) => {
-                    let remaining = &import.node.path[1..];
-                    let module_prog = resolve_module_path(remaining, root, source_map, import.span, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
-                    let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
-                    resolved_imports.push((binding_name, module_prog, origin));
-                }
-                None => {
                     return Err(CompileError::syntax(
-                        format!(
-                            "cannot import '{}': no stdlib root found (tried --stdlib flag, PLUTO_STDLIB env var, and ./stdlib relative to entry file)",
-                            full_path
-                        ),
+                        format!("conflicting import binding '{}': imports '{}' and '{}'", binding_name, prev_path, full_path),
                         import.span,
                     ));
                 }
             }
-        } else {
-            // Multi-segment import
-            let is_dep = current_deps.contains_key(first_segment);
-            let dir_path = module_dir.join(first_segment);
-            let is_local = dir_path.is_dir();
+            imported_names.insert(binding_name.clone(), full_path.clone());
 
-            if is_dep && is_local {
-                return Err(CompileError::syntax(
-                    format!("import '{}' is ambiguous: declared as dependency and also exists locally", full_path),
-                    import.node.path[0].span,
-                ));
-            }
-
-            if is_dep {
-                // Resolve remaining segments from dep path
-                let dep_path = &current_deps[first_segment];
-                let dep_canonical = dep_path.canonicalize().map_err(|e| {
-                    CompileError::codegen(format!("cannot resolve dep path '{}': {e}", dep_path.display()))
-                })?;
-                let dep_scope = pkg_graph.deps_for(&dep_canonical);
-                let remaining = &import.node.path[1..];
-                let module_prog = resolve_module_path(remaining, dep_path, source_map, import.span, visited, effective_stdlib, dep_scope, pkg_graph, ImportOrigin::PackageDep)?;
-                resolved_imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
+            let first_segment = &import.node.path[0].node;
+            let derived_origin = if parent_origin == ImportOrigin::PackageDep {
+                ImportOrigin::PackageDep
             } else {
-                // Multi-segment import from project
-                let origin = if parent_origin == ImportOrigin::PackageDep { ImportOrigin::PackageDep } else { ImportOrigin::Local };
-                let module_prog = resolve_module_path(&import.node.path, module_dir, source_map, import.span, visited, effective_stdlib, current_deps, pkg_graph, parent_origin)?;
-                resolved_imports.push((binding_name, module_prog, origin));
-            }
+                ImportOrigin::Local
+            };
+
+            let canonical_name = if import.node.path.len() == 1 {
+                // Single-segment import
+                let is_dep = current_deps.contains_key(first_segment);
+                let dir_path = module_dir.join(first_segment);
+                let file_path_candidate = resolve_module_file(module_dir, first_segment);
+                let is_local = dir_path.is_dir() || file_path_candidate.is_some();
+
+                if is_dep && is_local {
+                    return Err(CompileError::syntax(
+                        format!("import '{}' is ambiguous: declared as dependency and also exists locally", first_segment),
+                        import.node.path[0].span,
+                    ));
+                }
+
+                if is_dep {
+                    let dep_path = current_deps[first_segment].clone();
+                    let dep_canonical = dep_path.canonicalize().map_err(|e| {
+                        CompileError::codegen(format!("cannot resolve dep path '{}': {e}", dep_path.display()))
+                    })?;
+                    let pg = self.pkg_graph;
+                    let dep_scope = pg.deps_for(&dep_canonical);
+                    self.register_dir_module(&dep_path, &binding_name, dep_scope, ImportOrigin::PackageDep, ImportOrigin::PackageDep)?
+                } else if dir_path.is_dir() {
+                    self.register_dir_module(&dir_path, &binding_name, current_deps, derived_origin, parent_origin)?
+                } else if let Some(file_path) = file_path_candidate {
+                    self.register_file_module(&file_path, module_dir, &binding_name, current_deps, derived_origin, parent_origin)?
+                } else if !is_root
+                    && parent_origin != ImportOrigin::PackageDep
+                    && let Some(parent) = module_dir.parent()
+                    && (parent.join(first_segment).is_dir()
+                        || resolve_module_file(parent, first_segment).is_some())
+                {
+                    // (Local modules only: inside a PACKAGE the hop could cross
+                    // the package boundary into an undeclared cached sibling,
+                    // breaking dependency-scope isolation — packages declare
+                    // their deps in pluto.toml and keep submodules as children.)
+                    // Sibling fallback (issue #413, rfc-module-semantics.md
+                    // section 6): a module's own imports resolve child-first,
+                    // then among its SIBLINGS — `locks/locks.pt` importing
+                    // `marks` finds `../marks/`. One parent hop only, so
+                    // resolution never walks toward the filesystem root; the
+                    // `visited` cycle guard applies unchanged, so a sibling
+                    // cycle still reports as a circular import.
+                    let sib_dir = parent.join(first_segment);
+                    if sib_dir.is_dir() {
+                        self.register_dir_module(&sib_dir, &binding_name, current_deps, derived_origin, parent_origin)?
+                    } else {
+                        let file_path = resolve_module_file(parent, first_segment)
+                            .expect("sibling file existence checked in the guard");
+                        self.register_file_module(&file_path, parent, &binding_name, current_deps, derived_origin, parent_origin)?
+                    }
+                } else if is_root && module_dir.join(".deps").join(first_segment).is_dir() {
+                    // Check .deps/ directory (vendored dependencies)
+                    let deps_dir_path = module_dir.join(".deps").join(first_segment);
+                    self.register_dir_module(&deps_dir_path, &binding_name, current_deps, ImportOrigin::PackageDep, ImportOrigin::PackageDep)?
+                } else if is_root {
+                    return Err(CompileError::syntax(
+                        format!("cannot find module '{}': no directory or file found", full_path),
+                        import.node.path[0].span,
+                    ));
+                } else {
+                    return Err(CompileError::syntax(
+                        format!(
+                            "cannot find module '{}': no directory or file found (searched '{}' and \
+                             its parent for a sibling module)",
+                            full_path,
+                            module_dir.display()
+                        ),
+                        import.node.path[0].span,
+                    ));
+                }
+            } else if first_segment == "std" {
+                // Stdlib import
+                match self.effective_stdlib.clone() {
+                    Some(root) => {
+                        let remaining: Vec<Spanned<String>> = import.node.path[1..].to_vec();
+                        self.resolve_path_module(&remaining, &root, &binding_name, import.span, current_deps, parent_origin)?
+                    }
+                    None => {
+                        return Err(CompileError::syntax(
+                            format!(
+                                "cannot import '{}': no stdlib root found (tried --stdlib flag, PLUTO_STDLIB env var, and ./stdlib relative to entry file)",
+                                full_path
+                            ),
+                            import.span,
+                        ));
+                    }
+                }
+            } else {
+                // Multi-segment import
+                let is_dep = current_deps.contains_key(first_segment);
+                let dir_path = module_dir.join(first_segment);
+                let is_local = dir_path.is_dir();
+
+                if is_dep && is_local {
+                    return Err(CompileError::syntax(
+                        format!("import '{}' is ambiguous: declared as dependency and also exists locally", full_path),
+                        import.node.path[0].span,
+                    ));
+                }
+
+                if is_dep {
+                    // Resolve remaining segments from dep path
+                    let dep_path = current_deps[first_segment].clone();
+                    let dep_canonical = dep_path.canonicalize().map_err(|e| {
+                        CompileError::codegen(format!("cannot resolve dep path '{}': {e}", dep_path.display()))
+                    })?;
+                    let pg = self.pkg_graph;
+                    let dep_scope = pg.deps_for(&dep_canonical);
+                    let remaining: Vec<Spanned<String>> = import.node.path[1..].to_vec();
+                    self.resolve_path_module(&remaining, &dep_path, &binding_name, import.span, dep_scope, ImportOrigin::PackageDep)?
+                } else {
+                    // Multi-segment import from project
+                    self.resolve_path_module(&import.node.path, module_dir, &binding_name, import.span, current_deps, parent_origin)?
+                }
+            };
+
+            aliases.insert(binding_name, canonical_name);
         }
+
+        Ok(aliases)
     }
-
-    // Flatten resolved imports into the program
-    flatten_into_program(program, resolved_imports)?;
-
-    Ok(())
 }
 
 /// Format a module-prefixed name: "module.name".
@@ -613,12 +806,12 @@ fn prefix_name(module_name: &str, name: &str) -> String {
 }
 
 /// Validate that imported modules don't contain app or extern_rust declarations.
-fn validate_imported_modules(imports: &[(String, Program, ImportOrigin)]) -> Result<(), CompileError> {
-    for (module_name, module_prog, _origin) in imports {
-        if module_prog.app.is_some() {
+fn validate_imported_modules(imports: &[ResolvedModule]) -> Result<(), CompileError> {
+    for module in imports {
+        if module.program.app.is_some() {
             return Err(CompileError::codegen(format!(
                 "app declarations are not allowed in imported modules (found in '{}')",
-                module_name
+                module.name
             )));
         }
     }
@@ -753,23 +946,6 @@ fn add_prefixed_items(
     Ok(())
 }
 
-/// Collect the re-export alias surface of a set of resolved imports:
-/// for each `pub import sub.Item` in module `m`, the name `m.Item` is an
-/// alias for the flattened declaration `m.sub.Item`. The imported
-/// modules' own re-export paths are already canonical (chains resolved
-/// when each module's own imports were flattened), so one join suffices.
-fn collect_alias_map(imports: &[(String, Program, ImportOrigin)]) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for (module_name, module_prog, _origin) in imports {
-        for r in &module_prog.reexports {
-            let alias = prefix_name(module_name, r.node.item_name());
-            let canonical = prefix_name(module_name, &r.node.target_name());
-            map.insert(alias, canonical);
-        }
-    }
-    map
-}
-
 /// Applies re-export aliasing after flattening: every reference to an
 /// alias surface name is renamed to the canonical declaration name, so
 /// the alias and the original are one declaration everywhere downstream
@@ -849,112 +1025,6 @@ fn apply_alias_renames(program: &mut Program, renames: &HashMap<String, String>)
     }
     let mut renamer = AliasRenamer { renames };
     renamer.visit_program_mut(program);
-}
-
-/// Validate and canonicalize this program's own `pub import` re-exports,
-/// after its imports have been flattened in. Each must name a public
-/// declaration of an imported module (re-exports of re-exports resolve
-/// through `import_alias_map` to the canonical declaration), and the
-/// surface name must be free — no clash with a local declaration or
-/// another re-export.
-fn resolve_own_reexports(
-    program: &mut Program,
-    import_alias_map: &HashMap<String, String>,
-    import_names: &HashSet<String>,
-) -> Result<(), CompileError> {
-    if program.reexports.is_empty() {
-        return Ok(());
-    }
-
-    // Declaration table: flattened name -> is_pub.
-    let mut decls: HashMap<String, bool> = HashMap::new();
-    for f in &program.functions { decls.insert(f.node.name.node.clone(), f.node.is_pub); }
-    for c in &program.classes { decls.insert(c.node.name.node.clone(), c.node.is_pub); }
-    for e in &program.enums { decls.insert(e.node.name.node.clone(), e.node.is_pub); }
-    for e in &program.errors { decls.insert(e.node.name.node.clone(), e.node.is_pub); }
-    for t in &program.traits { decls.insert(t.node.name.node.clone(), t.node.is_pub); }
-
-    let mut seen: HashSet<String> = HashSet::new();
-    for r in &mut program.reexports {
-        let first = r.node.path[0].node.clone();
-        let written = r.node.target_name();
-        if !import_names.contains(&first) {
-            return Err(CompileError::module(format!(
-                "cannot re-export '{written}': module '{first}' is not imported here"
-            )));
-        }
-
-        // Chained re-exports: the written path may itself be an alias of
-        // the imported module; canonicalize so the stored path always
-        // names the real declaration.
-        let mut target = written.clone();
-        if let Some(canon) = import_alias_map.get(&target) {
-            target = canon.clone();
-            let span = r.span;
-            r.node.path = target
-                .split('.')
-                .map(|seg| Spanned::new(seg.to_string(), span))
-                .collect();
-        }
-
-        match decls.get(&target) {
-            None => {
-                return Err(CompileError::module(format!(
-                    "cannot re-export '{written}': no such item in module '{first}' \
-(re-exportable items are functions, classes, enums, errors, and traits)"
-                )));
-            }
-            Some(false) => {
-                return Err(CompileError::module(format!(
-                    "cannot re-export '{written}': it is private to module '{first}'; \
-declare it `pub` there first"
-                )));
-            }
-            Some(true) => {}
-        }
-
-        let item = r.node.item_name().to_string();
-        if decls.contains_key(&item) {
-            return Err(CompileError::module(format!(
-                "re-export '{item}' collides with a declaration of the same name in this module"
-            )));
-        }
-        if !seen.insert(item.clone()) {
-            return Err(CompileError::module(format!(
-                "duplicate re-export '{item}'"
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Flatten resolved imports into a program by prefixing names.
-/// Used for sub-module flattening (within a module's own imports).
-/// Adds ALL items (not just pub) since visibility is deferred.
-fn flatten_into_program(
-    program: &mut Program,
-    imports: Vec<(String, Program, ImportOrigin)>,
-) -> Result<(), CompileError> {
-    let import_names: HashSet<String> = imports.iter().map(|(n, _, _)| n.clone()).collect();
-
-    validate_imported_modules(&imports)?;
-
-    let alias_map = collect_alias_map(&imports);
-
-    for (module_name, module_prog, _origin) in &imports {
-        add_prefixed_items(program, module_name, module_prog)?;
-    }
-
-    rewrite_program(program, &import_names);
-
-    // Re-export aliasing: references to imported modules' re-exported
-    // names canonicalize to the real declarations, and this program's
-    // own re-exports are validated (and chained ones canonicalized) so
-    // the next flattening level sees only real names.
-    apply_alias_renames(program, &alias_map);
-    resolve_own_reexports(program, &alias_map, &import_names)?;
-
-    Ok(())
 }
 
 /// Compare two TypeExpr values ignoring source spans.
@@ -1037,26 +1107,33 @@ fn resolve_modules_inner(
         CompileError::codegen("entry file has no parent directory")
     })?;
 
-    let mut source_map = SourceMap::new();
-
     // Compute effective stdlib root once
     let fallback_stdlib = entry_dir.join("stdlib");
-    let effective_stdlib: Option<&Path> = if let Some(root) = stdlib_root {
-        Some(root)
+    let effective_stdlib: Option<PathBuf> = if let Some(root) = stdlib_root {
+        Some(root.to_path_buf())
     } else if fallback_stdlib.is_dir() {
-        Some(&fallback_stdlib)
+        Some(fallback_stdlib)
     } else {
         None
     };
 
     let current_deps = pkg_graph.root_deps();
 
-    // Circular import detection: track canonical paths in resolution stack
-    let mut visited = HashSet::new();
-    visited.insert(entry_file.clone());
+    let mut resolver = Resolver {
+        source_map: SourceMap::new(),
+        modules: Vec::new(),
+        ids_by_path: HashMap::new(),
+        used_prefixes: HashSet::new(),
+        visited: HashSet::new(),
+        reexport_aliases: HashMap::new(),
+        effective_stdlib,
+        pkg_graph,
+    };
+    // Circular import detection: the entry file itself is on the stack
+    resolver.visited.insert(entry_file.clone());
 
     // First, parse the entry file to discover imports
-    let (entry_prog, _entry_file_id) = load_file_auto(&entry_file, &mut source_map)?;
+    let (entry_prog, _entry_file_id) = load_file_auto(&entry_file, &mut resolver.source_map)?;
 
     // Collect import binding names to know which sibling .pluto files are imported modules
     let import_first_segments: HashSet<String> = entry_prog.imports.iter()
@@ -1107,7 +1184,7 @@ fn resolve_modules_inner(
                     }
                 }
                 for f in sub_sources {
-                    if let Ok((prog, _)) = load_file_auto(&f, &mut source_map) {
+                    if let Ok((prog, _)) = load_file_auto(&f, &mut resolver.source_map) {
                         for i in &prog.imports {
                             let seg = i.node.path[0].node.clone();
                             if closed.insert(seg.clone()) {
@@ -1132,7 +1209,7 @@ fn resolve_modules_inner(
             if dep_names.contains(&stem.to_string()) {
                 continue;
             }
-            let (program, _file_id) = load_file_auto(file_path, &mut source_map)
+            let (program, _file_id) = load_file_auto(file_path, &mut resolver.source_map)
                 .map_err(|err| CompileError::sibling_file(file_path.clone(), err))?;
             // Merge sibling's imports into root (they might also have imports)
             root.imports.extend(program.imports);
@@ -1164,139 +1241,23 @@ fn resolve_modules_inner(
         }
     }
 
-    // Resolve each import (now with recursive sub-import support)
-    let mut imports: Vec<(String, Program, ImportOrigin)> = Vec::new();
-    let mut imported_names: HashMap<String, String> = HashMap::new();
+    // Resolve each root import to its canonical module via the shared
+    // resolver; sibling files' imports were merged into root.imports above
+    // and resolve as root-level bindings.
+    let root_aliases =
+        resolver.resolve_imports(&mut root, entry_dir, current_deps, ImportOrigin::Local, true)?;
 
-    for import in &root.imports {
-        let binding_name = import.node.binding_name().to_string();
-        let full_path = import.node.full_path();
+    // The root's own `pub import` re-exports are validated like any
+    // module's (nothing imports the root, so they add no surface).
+    resolver.resolve_reexports(&mut root, None, &root_aliases)?;
 
-        // Duplicate import handling: allow exact duplicates, error on conflicts
-        if let Some(prev_path) = imported_names.get(&binding_name) {
-            if *prev_path == full_path {
-                continue; // Exact duplicate — deduplicate silently
-            } else {
-                return Err(CompileError::syntax(
-                    format!("conflicting import binding '{}': imports '{}' and '{}'", binding_name, prev_path, full_path),
-                    import.span,
-                ));
-            }
-        }
-        imported_names.insert(binding_name.clone(), full_path.clone());
-
-        let first_segment = &import.node.path[0].node;
-
-        if import.node.path.len() == 1 {
-            // Single-segment import (e.g., `import math`) — resolve from entry_dir
-            let is_dep = current_deps.contains_key(first_segment);
-            let dir_path = entry_dir.join(first_segment);
-            let file_path_candidate = resolve_module_file(entry_dir, first_segment);
-            let is_local = dir_path.is_dir() || file_path_candidate.is_some();
-
-            if is_dep && is_local {
-                return Err(CompileError::syntax(
-                    format!("import '{}' is ambiguous: declared as dependency and also exists locally", first_segment),
-                    import.node.path[0].span,
-                ));
-            }
-
-            if is_dep {
-                let dep_path = &current_deps[first_segment];
-                let dep_canonical = dep_path.canonicalize().map_err(|e| {
-                    CompileError::codegen(format!("cannot resolve dep path '{}': {e}", dep_path.display()))
-                })?;
-                let dep_scope = pkg_graph.deps_for(&dep_canonical);
-                let module_prog = load_directory_module(dep_path, &mut source_map, &mut visited, effective_stdlib, dep_scope, pkg_graph, ImportOrigin::PackageDep)?;
-                imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
-            } else if dir_path.is_dir() {
-                let module_prog = load_directory_module(&dir_path, &mut source_map, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
-                imports.push((binding_name, module_prog, ImportOrigin::Local));
-            } else if let Some(file_path) = file_path_candidate {
-                let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
-                if visited.contains(&canonical) {
-                    return Err(CompileError::module(format!(
-                        "circular import detected: '{}'",
-                        file_path.display()
-                    )));
-                }
-                visited.insert(canonical.clone());
-                let (mut module_prog, _) = load_file_auto(&file_path, &mut source_map)?;
-                // Recursively resolve sub-imports
-                resolve_module_imports(&mut module_prog, entry_dir, &mut source_map, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
-                visited.remove(&canonical);
-                imports.push((binding_name, module_prog, ImportOrigin::Local));
-            } else {
-                // Check .deps/ directory (vendored dependencies)
-                let deps_dir_path = entry_dir.join(".deps").join(first_segment);
-                if deps_dir_path.is_dir() {
-                    let module_prog = load_directory_module(
-                        &deps_dir_path,
-                        &mut source_map,
-                        &mut visited,
-                        effective_stdlib,
-                        current_deps,
-                        pkg_graph,
-                        ImportOrigin::PackageDep,
-                    )?;
-                    imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
-                } else {
-                    return Err(CompileError::syntax(
-                        format!("cannot find module '{}': no directory or file found", full_path),
-                        import.node.path[0].span,
-                    ));
-                }
-            }
-        } else if first_segment == "std" {
-            // Stdlib import: `import std.io` → resolve remaining path from stdlib_root
-            match effective_stdlib {
-                Some(root) => {
-                    // Skip the "std" prefix, resolve remaining segments from stdlib root
-                    let remaining = &import.node.path[1..];
-                    let module_prog = resolve_module_path(remaining, root, &mut source_map, import.span, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
-                    imports.push((binding_name, module_prog, ImportOrigin::Local));
-                }
-                None => {
-                    return Err(CompileError::syntax(
-                        format!(
-                            "cannot import '{}': no stdlib root found (tried --stdlib flag, PLUTO_STDLIB env var, and ./stdlib relative to entry file)",
-                            full_path
-                        ),
-                        import.span,
-                    ));
-                }
-            }
-        } else {
-            // Multi-segment import
-            let is_dep = current_deps.contains_key(first_segment);
-            let dir_path = entry_dir.join(first_segment);
-            let is_local = dir_path.is_dir();
-
-            if is_dep && is_local {
-                return Err(CompileError::syntax(
-                    format!("import '{}' is ambiguous: declared as dependency and also exists locally", full_path),
-                    import.node.path[0].span,
-                ));
-            }
-
-            if is_dep {
-                let dep_path = &current_deps[first_segment];
-                let dep_canonical = dep_path.canonicalize().map_err(|e| {
-                    CompileError::codegen(format!("cannot resolve dep path '{}': {e}", dep_path.display()))
-                })?;
-                let dep_scope = pkg_graph.deps_for(&dep_canonical);
-                let remaining = &import.node.path[1..];
-                let module_prog = resolve_module_path(remaining, dep_path, &mut source_map, import.span, &mut visited, effective_stdlib, dep_scope, pkg_graph, ImportOrigin::PackageDep)?;
-                imports.push((binding_name, module_prog, ImportOrigin::PackageDep));
-            } else {
-                // Multi-segment import from project (e.g., `import utils.math`) — resolve from entry_dir
-                let module_prog = resolve_module_path(&import.node.path, entry_dir, &mut source_map, import.span, &mut visited, effective_stdlib, current_deps, pkg_graph, ImportOrigin::Local)?;
-                imports.push((binding_name, module_prog, ImportOrigin::Local));
-            }
-        }
-    }
-
-    Ok(ModuleGraph { root, imports, source_map })
+    Ok(ModuleGraph {
+        root,
+        root_aliases,
+        imports: resolver.modules,
+        reexport_aliases: resolver.reexport_aliases,
+        source_map: resolver.source_map,
+    })
 }
 
 /// Flatten imported modules into the root program by prefixing names.
@@ -1365,10 +1326,15 @@ impl crate::visit::Visitor for VisibilityValidator<'_> {
 }
 
 fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
-    let imports: HashSet<String> = graph.imports.iter().map(|(n, _, _)| n.clone()).collect();
+    // The root's references are written against its LOCAL import bindings
+    // (validation runs before alias rewriting), so the item sets are keyed
+    // by binding name, each resolved to its canonical module's program.
+    let imports: HashSet<String> = graph.root_aliases.keys().cloned().collect();
     let mut pub_items: HashMap<String, HashSet<String>> = HashMap::new();
     let mut all_items: HashMap<String, HashSet<String>> = HashMap::new();
-    for (name, prog, _) in &graph.imports {
+    for binding in graph.root_aliases.keys() {
+        let Some(module) = graph.module_for_binding(binding) else { continue };
+        let prog = &module.program;
         let mut all = HashSet::new();
         let mut pubs = HashSet::new();
         let mut add = |n: &str, is_pub: bool| {
@@ -1382,8 +1348,8 @@ fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
         for t in &prog.traits { add(&t.node.name.node, t.node.is_pub); }
         for p in &prog.properties { add(&p.node.name.node, p.node.is_pub); }
         drop(add);
-        all_items.insert(name.clone(), all);
-        pub_items.insert(name.clone(), pubs);
+        all_items.insert(binding.clone(), all);
+        pub_items.insert(binding.clone(), pubs);
     }
 
     // `satisfies verify.monotonic(...)` references a property across the
@@ -1429,11 +1395,9 @@ fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
         violations: Vec::new(),
     };
     use crate::visit::Visitor;
-    // Only the root (the user's own program) is checked. Imported modules'
-    // programs are already transitively flattened — they contain their
-    // dependencies' code merged in under prefixed names, whose internal
-    // qualified references are intra-module and must not be treated as the
-    // user's cross-module access.
+    // Only the root (the user's own program) is checked. A module's own
+    // cross-module references were resolved against its own import list;
+    // they are not the user's cross-module access.
     v.visit_program(&graph.root);
     if let Some((module, item, span)) = v.violations.into_iter().next() {
         return Err(CompileError::type_err(
@@ -1445,37 +1409,45 @@ fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
 }
 
 pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), CompileError> {
-    let import_names: HashSet<String> = graph.imports.iter().map(|(n, _, _)| n.clone()).collect();
-
     validate_imported_modules(&graph.imports)?;
     validate_module_visibility(&graph)?;
 
-    // Filter out test functions from imported modules before merging
-    for (_module_name, module_prog, _origin) in &mut graph.imports {
-        let test_fn_names: HashSet<String> = module_prog.test_info.iter()
+    for module in &mut graph.imports {
+        // Filter out test functions from imported modules before merging
+        let test_fn_names: HashSet<String> = module.program.test_info.iter()
             .map(|t| t.fn_name.clone()).collect();
-        module_prog.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
-        module_prog.test_info.clear();
-        module_prog.tests = None;
+        module.program.functions.retain(|f| !test_fn_names.contains(&f.node.name.node));
+        module.program.test_info.clear();
+        module.program.tests = None;
+
+        // Rewrite the module's references to ITS imports onto their
+        // canonical prefixes (an aliasing entry, not a copy): after this,
+        // every route to a shared module names the same flattened items,
+        // so nominal type identity follows (issue #391).
+        rewrite_program(&mut module.program, &module.aliases);
     }
 
-    for (module_name, module_prog, _origin) in &graph.imports {
-        add_prefixed_items(&mut graph.root, module_name, module_prog)?;
+    // Rewrite the root's qualified references through its own alias map
+    // BEFORE merging, so the modules' already-rewritten items are not
+    // re-processed against the root's bindings.
+    rewrite_program(&mut graph.root, &graph.root_aliases);
+
+    // Merge every canonical module into the root exactly once, under its
+    // canonical prefix.
+    for module in &graph.imports {
+        add_prefixed_items(&mut graph.root, &module.name, &module.program)?;
     }
 
-    let alias_map = collect_alias_map(&graph.imports);
+    // Resolve QualifiedAccess nodes: convert to FieldAccess or keep for
+    // type checker. All references now use canonical prefixes.
+    let canonical_names: HashSet<String> =
+        graph.imports.iter().map(|m| m.name.clone()).collect();
+    resolve_qualified_access_in_program(&mut graph.root, &canonical_names);
 
-    // Rewrite qualified references in root program's AST
-    rewrite_program(&mut graph.root, &import_names);
-
-    // Resolve QualifiedAccess nodes: convert to FieldAccess or keep for type checker
-    resolve_qualified_access_in_program(&mut graph.root, &import_names);
-
-    // Re-export aliasing (after both rewrites, so references are in
-    // their final dotted-name shape): `wal.SyncError` becomes the one
-    // canonical declaration `wal.fs.SyncError` everywhere.
-    apply_alias_renames(&mut graph.root, &alias_map);
-    resolve_own_reexports(&mut graph.root, &alias_map, &import_names)?;
+    // Re-export aliasing (after all rewrites, so references are in their
+    // final dotted-name shape): `wal.SyncError` becomes the one canonical
+    // declaration `fs.SyncError` everywhere — an alias, never a copy.
+    apply_alias_renames(&mut graph.root, &graph.reexport_aliases);
 
     // Clear imports since they've been flattened
     graph.root.imports.clear();
@@ -1752,135 +1724,182 @@ fn rewrite_block_for_module(block: &mut Block, module_name: &str, module_prog: &
 }
 
 
-/// Rewrite qualified references in the root program.
-/// Converts MethodCall { object: Ident("module"), method, args } → Call { name: "module.method", args }
-/// when "module" is a known import name.
+/// If `name` is a dotted reference whose first segment is an import
+/// binding, rewrite that segment onto the binding's canonical module
+/// prefix (e.g. `m.Reader` -> `codec.Reader` under `import codec as m`).
+/// Returns None when no rewrite is needed (the common case: the binding
+/// name IS the canonical prefix).
+fn realias_dotted(name: &str, aliases: &HashMap<String, String>) -> Option<String> {
+    let (head, rest) = name.split_once('.')?;
+    let canon = aliases.get(head)?;
+    if canon == head {
+        None
+    } else {
+        Some(format!("{canon}.{rest}"))
+    }
+}
+
+/// Apply `realias_dotted` in place.
+fn realias_dotted_in_place(name: &mut String, aliases: &HashMap<String, String>) {
+    if let Some(new_name) = realias_dotted(name, aliases) {
+        *name = new_name;
+    }
+}
+
+/// Rewrite a program's qualified references through its alias map
+/// (local import binding -> canonical module prefix).
+/// Converts MethodCall { object: Ident("module"), method, args } → Call { name: "canonical.method", args }
+/// when "module" is a known import binding.
 /// Also rewrites declaration-level types (class fields, trait sigs, error fields, enum variant fields, app inject fields).
-fn rewrite_program(program: &mut Program, import_names: &HashSet<String>) {
+fn rewrite_program(program: &mut Program, aliases: &HashMap<String, String>) {
     for func in &mut program.functions {
-        rewrite_function_body(&mut func.node, import_names);
+        rewrite_function_body(&mut func.node, aliases);
     }
     for class in &mut program.classes {
         for method in &mut class.node.methods {
-            rewrite_function_body(&mut method.node, import_names);
+            rewrite_function_body(&mut method.node, aliases);
         }
         // Rewrite class field types
         for field in &mut class.node.fields {
-            rewrite_type_expr(&mut field.ty, import_names);
+            rewrite_type_expr(&mut field.ty, aliases);
             if let Some(guard) = &mut field.guarded_by {
-                rewrite_type_expr(&mut guard.binder_ty, import_names);
+                rewrite_type_expr(&mut guard.binder_ty, aliases);
             }
+        }
+        // Implemented traits and satisfies clauses may name imported
+        // traits/properties through the local binding
+        for tn in &mut class.node.impl_traits {
+            realias_dotted_in_place(&mut tn.name.node, aliases);
+        }
+        for clause in &mut class.node.satisfies {
+            realias_dotted_in_place(&mut clause.node.name.node, aliases);
         }
     }
     for tr in &mut program.traits {
         for method in &mut tr.node.methods {
             // Rewrite trait method param/return types
             for param in &mut method.params {
-                rewrite_type_expr(&mut param.ty, import_names);
+                rewrite_type_expr(&mut param.ty, aliases);
             }
             if let Some(ret) = &mut method.return_type {
-                rewrite_type_expr(ret, import_names);
+                rewrite_type_expr(ret, aliases);
             }
             if let Some(body) = &mut method.body {
-                rewrite_block(&mut body.node, import_names);
+                rewrite_block(&mut body.node, aliases);
             }
         }
     }
     // Rewrite error field types
     for error in &mut program.errors {
         for field in &mut error.node.fields {
-            rewrite_type_expr(&mut field.ty, import_names);
+            rewrite_type_expr(&mut field.ty, aliases);
         }
     }
     // Rewrite enum variant field types
     for enum_decl in &mut program.enums {
         for variant in &mut enum_decl.node.variants {
             for field in &mut variant.fields {
-                rewrite_type_expr(&mut field.ty, import_names);
+                rewrite_type_expr(&mut field.ty, aliases);
             }
         }
     }
     if let Some(app) = &mut program.app {
         for method in &mut app.node.methods {
-            rewrite_function_body(&mut method.node, import_names);
+            rewrite_function_body(&mut method.node, aliases);
         }
         // Rewrite app inject field types
         for field in &mut app.node.inject_fields {
-            rewrite_type_expr(&mut field.ty, import_names);
+            rewrite_type_expr(&mut field.ty, aliases);
         }
     }
     for stage in &mut program.stages {
         for method in &mut stage.node.methods {
-            rewrite_function_body(&mut method.node, import_names);
+            rewrite_function_body(&mut method.node, aliases);
         }
         // Rewrite required method param/return types
         for req in &mut stage.node.required_methods {
             for param in &mut req.node.params {
-                rewrite_type_expr(&mut param.ty, import_names);
+                rewrite_type_expr(&mut param.ty, aliases);
             }
             if let Some(ret) = &mut req.node.return_type {
-                rewrite_type_expr(ret, import_names);
+                rewrite_type_expr(ret, aliases);
             }
         }
         // Rewrite stage inject field types
         for field in &mut stage.node.inject_fields {
-            rewrite_type_expr(&mut field.ty, import_names);
+            rewrite_type_expr(&mut field.ty, aliases);
+        }
+    }
+    // Extern `assume` clauses may reference imported properties
+    for ext in &mut program.extern_fns {
+        for clause in &mut ext.node.assumes {
+            realias_dotted_in_place(&mut clause.node.name.node, aliases);
         }
     }
 }
 
-fn rewrite_function_body(func: &mut Function, import_names: &HashSet<String>) {
+fn rewrite_function_body(func: &mut Function, aliases: &HashMap<String, String>) {
     // Rewrite qualified types in params
     for param in &mut func.params {
-        rewrite_type_expr(&mut param.ty, import_names);
+        rewrite_type_expr(&mut param.ty, aliases);
     }
     if let Some(ret) = &mut func.return_type {
-        rewrite_type_expr(ret, import_names);
+        rewrite_type_expr(ret, aliases);
     }
-    rewrite_block(&mut func.body.node, import_names);
+    // Provides clauses may name imported properties through the local binding
+    for clause in &mut func.provides {
+        realias_dotted_in_place(&mut clause.node.name.node, aliases);
+    }
+    // Contract expressions (e.g. `where S == marks.Held`) may reference
+    // imported state markers through the local binding
+    {
+        let mut rewriter = QualifiedAccessRewriter { aliases };
+        for contract in &mut func.contracts {
+            rewriter.visit_expr_mut(&mut contract.node.expr);
+        }
+    }
+    rewrite_block(&mut func.body.node, aliases);
 }
 
-fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, import_names: &HashSet<String>) {
+fn rewrite_type_expr(ty: &mut Spanned<TypeExpr>, aliases: &HashMap<String, String>) {
     match &mut ty.node {
         TypeExpr::Qualified { module, name } => {
-            if import_names.contains(module.as_str()) {
-                ty.node = TypeExpr::Named(prefix_name(module, name));
+            if let Some(canon) = aliases.get(module.as_str()) {
+                ty.node = TypeExpr::Named(prefix_name(canon, name));
             }
         }
         TypeExpr::Array(inner) => {
-            rewrite_type_expr(inner, import_names);
+            rewrite_type_expr(inner, aliases);
         }
-        TypeExpr::Named(_) => {}
+        TypeExpr::Named(name) => {
+            realias_dotted_in_place(name, aliases);
+        }
         TypeExpr::Infer => {}
         TypeExpr::Fn { params, return_type, fallible: _, provides: _ } => {
             for p in params {
-                rewrite_type_expr(p, import_names);
+                rewrite_type_expr(p, aliases);
             }
-            rewrite_type_expr(return_type, import_names);
+            rewrite_type_expr(return_type, aliases);
         }
         TypeExpr::Generic { name, type_args } => {
-            // Check if the base name is a qualified type from an import
-            if let Some(dot_pos) = name.find('.') {
-                let module = &name[..dot_pos];
-                if import_names.contains(module) {
-                    // Already qualified, leave the name alone
-                }
-            }
+            // The base name may be a qualified type from an import
+            // (`m.Buf<int>` parses with a dotted base name)
+            realias_dotted_in_place(name, aliases);
             for arg in type_args {
-                rewrite_type_expr(arg, import_names);
+                rewrite_type_expr(arg, aliases);
             }
         }
         TypeExpr::Nullable(inner) => {
-            rewrite_type_expr(inner, import_names);
+            rewrite_type_expr(inner, aliases);
         }
         TypeExpr::Stream(inner) => {
-            rewrite_type_expr(inner, import_names);
+            rewrite_type_expr(inner, aliases);
         }
     }
 }
 
 struct QualifiedAccessRewriter<'a> {
-    import_names: &'a HashSet<String>,
+    aliases: &'a HashMap<String, String>,
 }
 
 impl VisitMut for QualifiedAccessRewriter<'_> {
@@ -1888,11 +1907,11 @@ impl VisitMut for QualifiedAccessRewriter<'_> {
         // Handle expressions that need qualification rewriting
         match &mut expr.node {
             Expr::MethodCall { object, method, args, type_args, .. } => {
-                // Check if object is Ident matching an import name → convert to qualified call
+                // Check if object is Ident matching an import binding → convert to qualified call
                 if let Expr::Ident(name) = &object.node
-                    && self.import_names.contains(name.as_str())
+                    && let Some(canon) = self.aliases.get(name.as_str())
                 {
-                    let qualified_name = prefix_name(name, &method.node);
+                    let qualified_name = prefix_name(canon, &method.node);
                     let name_span = Span::new(object.span.start, method.span.end);
                     // Rewrite args first
                     for arg in args.iter_mut() {
@@ -1912,9 +1931,9 @@ impl VisitMut for QualifiedAccessRewriter<'_> {
                 // Pattern: FieldAccess { object: FieldAccess { object: Ident(module), field: enum_name }, field: variant }
                 if let Expr::FieldAccess { object: inner_object, field: inner_field } = &object.node {
                     if let Expr::Ident(module_name) = &inner_object.node {
-                        if self.import_names.contains(module_name.as_str()) {
+                        if let Some(canon) = self.aliases.get(module_name.as_str()) {
                             // This is module.Enum.Variant - convert to EnumUnit
-                            let qualified_enum_name = prefix_name(module_name, &inner_field.node);
+                            let qualified_enum_name = prefix_name(canon, &inner_field.node);
                             let enum_name_span = Span::new(inner_object.span.start, inner_field.span.end);
                             let variant = field.clone();
 
@@ -1930,25 +1949,55 @@ impl VisitMut for QualifiedAccessRewriter<'_> {
                     }
                 }
             }
-            Expr::StructLit { type_args, .. } => {
+            Expr::Call { name, .. } => {
+                realias_dotted_in_place(&mut name.node, self.aliases);
+            }
+            Expr::StructLit { name, type_args, .. } => {
+                // `m.Reader { ... }` carries the binding in its dotted name
+                realias_dotted_in_place(&mut name.node, self.aliases);
                 for ta in type_args {
-                    rewrite_type_expr(ta, self.import_names);
+                    rewrite_type_expr(ta, self.aliases);
                 }
             }
-            Expr::EnumUnit { type_args, .. } | Expr::EnumData { type_args, .. } => {
+            Expr::EnumUnit { enum_name, type_args, .. } | Expr::EnumData { enum_name, type_args, .. } => {
+                realias_dotted_in_place(&mut enum_name.node, self.aliases);
                 for ta in type_args {
-                    rewrite_type_expr(ta, self.import_names);
+                    rewrite_type_expr(ta, self.aliases);
+                }
+            }
+            Expr::QualifiedAccess { segments } => {
+                // `m.State.Active` — rewrite the module segment onto the
+                // canonical prefix; the final resolve pass does the rest
+                if let Some(first) = segments.first_mut()
+                    && let Some(canon) = self.aliases.get(&first.node)
+                    && *canon != first.node
+                {
+                    first.node = canon.clone();
+                }
+            }
+            // Typed catch handlers may name an imported module's error
+            // declaration through the local binding
+            Expr::Catch { handlers, .. } => {
+                for handler in handlers.iter_mut() {
+                    if let CatchHandler::Typed { error_type, .. } = handler {
+                        realias_dotted_in_place(&mut error_type.node, self.aliases);
+                    }
                 }
             }
             Expr::MapLit { key_type, value_type, .. } => {
-                rewrite_type_expr(key_type, self.import_names);
-                rewrite_type_expr(value_type, self.import_names);
+                rewrite_type_expr(key_type, self.aliases);
+                rewrite_type_expr(value_type, self.aliases);
             }
             Expr::SetLit { elem_type, .. } => {
-                rewrite_type_expr(elem_type, self.import_names);
+                rewrite_type_expr(elem_type, self.aliases);
             }
             Expr::Cast { target_type, .. } => {
-                rewrite_type_expr(target_type, self.import_names);
+                rewrite_type_expr(target_type, self.aliases);
+            }
+            Expr::Closure { params, .. } => {
+                for p in params {
+                    rewrite_type_expr(&mut p.ty, self.aliases);
+                }
             }
             Expr::StringInterp { parts } => {
                 for part in parts {
@@ -1969,24 +2018,35 @@ impl VisitMut for QualifiedAccessRewriter<'_> {
         match &mut stmt.node {
             Stmt::Let { ty, .. } => {
                 if let Some(t) = ty {
-                    rewrite_type_expr(t, self.import_names);
+                    rewrite_type_expr(t, self.aliases);
                 }
             }
             Stmt::Match { arms, .. } => {
                 for arm in arms {
-                    if let MatchPattern::Variant { type_args, .. } = &mut arm.pattern {
+                    if let MatchPattern::Variant { enum_name, type_args, .. } = &mut arm.pattern {
+                        realias_dotted_in_place(&mut enum_name.node, self.aliases);
                         for ta in type_args {
-                            rewrite_type_expr(ta, self.import_names);
+                            rewrite_type_expr(ta, self.aliases);
                         }
                     }
                 }
             }
+            // Raise / expect_raises may name an imported module's error
+            // declaration through the local binding
+            Stmt::Raise { error_name, .. } => {
+                realias_dotted_in_place(&mut error_name.node, self.aliases);
+            }
+            Stmt::ExpectRaises { error_type, .. } => {
+                if let Some(et) = error_type {
+                    realias_dotted_in_place(&mut et.node, self.aliases);
+                }
+            }
             Stmt::LetChan { elem_type, .. } => {
-                rewrite_type_expr(elem_type, self.import_names);
+                rewrite_type_expr(elem_type, self.aliases);
             }
             Stmt::Scope { bindings, .. } => {
                 for binding in bindings {
-                    rewrite_type_expr(&mut binding.ty, self.import_names);
+                    rewrite_type_expr(&mut binding.ty, self.aliases);
                 }
             }
             _ => {}
@@ -1996,9 +2056,9 @@ impl VisitMut for QualifiedAccessRewriter<'_> {
     }
 }
 
-fn rewrite_block(block: &mut Block, import_names: &HashSet<String>) {
+fn rewrite_block(block: &mut Block, aliases: &HashMap<String, String>) {
     let mut rewriter = QualifiedAccessRewriter {
-        import_names,
+        aliases,
     };
     for stmt in &mut block.stmts {
         rewriter.visit_stmt_mut(stmt);
