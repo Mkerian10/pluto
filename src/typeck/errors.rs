@@ -804,6 +804,11 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
             collect_expr_effects(lhs, ctx);
             collect_expr_effects(rhs, ctx);
         }
+        Expr::CompareChain { operands, .. } => {
+            for operand in operands {
+                collect_expr_effects(operand, ctx);
+            }
+        }
         Expr::StaticTraitCall { args, .. } => {
             for arg in args {
                 collect_expr_effects(arg, ctx);
@@ -1372,6 +1377,12 @@ fn enforce_expr(
         Expr::NullCoalesce { lhs, rhs } => {
             enforce_expr(&lhs.node, lhs.span, current_fn, env, lenient)?;
             enforce_expr(&rhs.node, rhs.span, current_fn, env, lenient)
+        }
+        Expr::CompareChain { operands, .. } => {
+            for operand in operands {
+                enforce_expr(&operand.node, operand.span, current_fn, env, lenient)?;
+            }
+            Ok(())
         }
         Expr::StaticTraitCall { args, .. } => {
             for arg in args {

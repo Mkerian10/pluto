@@ -1292,8 +1292,19 @@ impl PrettyPrinter {
                 if need_parens {
                     self.write("(");
                 }
-                // Left child: same precedence (left-associative, no parens needed)
-                self.emit_expr(&lhs.node, prec);
+                // Left child: same precedence (left-associative, no parens
+                // needed) — except for comparisons, where a same-level left
+                // child needs parens: `(a == b) == c` printed bare would
+                // re-parse as the chain `a == b == c`.
+                let left_prec = if matches!(
+                    op,
+                    BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq
+                ) {
+                    prec + 1
+                } else {
+                    prec
+                };
+                self.emit_expr(&lhs.node, left_prec);
                 self.write(" ");
                 self.write(binop_str(*op));
                 self.write(" ");
@@ -1605,6 +1616,27 @@ impl PrettyPrinter {
                 self.emit_expr(&lhs.node, 2);
                 self.write(" ?? ");
                 self.emit_expr(&rhs.node, 1);
+            }
+            Expr::CompareChain { operands, ops } => {
+                // `a < b <= c`: all ops in a chain share one precedence
+                // level. Operands print at prec + 1 so a parenthesized
+                // same-level comparison operand (`(a == b) == c == d`)
+                // keeps its parens and does not re-parse into the chain.
+                let prec = binop_prec(ops[0]);
+                let need_parens = prec < parent_prec;
+                if need_parens {
+                    self.write("(");
+                }
+                self.emit_expr(&operands[0].node, prec + 1);
+                for (op, operand) in ops.iter().zip(&operands[1..]) {
+                    self.write(" ");
+                    self.write(binop_str(*op));
+                    self.write(" ");
+                    self.emit_expr(&operand.node, prec + 1);
+                }
+                if need_parens {
+                    self.write(")");
+                }
             }
             Expr::NullPropagate { expr } => {
                 self.emit_expr(&expr.node, 25);

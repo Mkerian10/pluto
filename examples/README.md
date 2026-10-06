@@ -161,6 +161,14 @@ Demonstrates if-as-expression: using `if` as an expression that returns a value,
 cargo run -- run examples/if_expressions.pt
 ```
 
+## chained_comparisons
+
+Demonstrates chained comparisons (`a < b < c` ≡ `a < b && b < c`): range guards like `0 <= x <= 100`, chains of any length with mixed directions, single evaluation of middle operands, short-circuiting of later links, `>` chains coexisting with `>>`, bounds guards (`0 <= i < xs.len()`) feeding flow-fact narrowing, and parentheses opting out of chaining.
+
+```bash
+cargo run -- run examples/chained_comparisons/main.pt
+```
+
 ## git-packages
 
 Demonstrates git-based dependencies via `pluto.toml`. A project declares a `strutils` dependency pointing to a git repository, then imports and uses string utility functions from it.

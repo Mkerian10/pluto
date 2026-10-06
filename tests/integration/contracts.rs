@@ -336,6 +336,26 @@ fn main() {
 }
 
 #[test]
+fn requires_rejects_chained_comparison() {
+    // Chained comparisons (#451) are not modeled by the contract prover;
+    // the explicit conjunction is required.
+    compile_should_fail_with(
+        r#"
+fn foo(x: int) int
+    requires 0 <= x < 10
+{
+    return x
+}
+
+fn main() {
+    print(foo(1))
+}
+"#,
+        "chained comparisons are not supported in contract expressions",
+    );
+}
+
+#[test]
 fn requires_rejects_function_call() {
     compile_should_fail_with(
         r#"

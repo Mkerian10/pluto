@@ -813,6 +813,9 @@ impl<'a> Analyzer<'a> {
             | Expr::NullCoalesce { lhs, rhs } => {
                 self.has_unsafe_call(&lhs.node) || self.has_unsafe_call(&rhs.node)
             }
+            Expr::CompareChain { operands, .. } => {
+                operands.iter().any(|o| self.has_unsafe_call(&o.node))
+            }
             Expr::UnaryOp { operand, .. } => self.has_unsafe_call(&operand.node),
             Expr::FieldAccess { object, .. } => self.has_unsafe_call(&object.node),
             Expr::Index { object, index } => {
@@ -990,6 +993,11 @@ impl<'a> Analyzer<'a> {
             Expr::BinOp { lhs, rhs, .. } | Expr::NullCoalesce { lhs, rhs } => {
                 self.scan_nested(&lhs.node);
                 self.scan_nested(&rhs.node);
+            }
+            Expr::CompareChain { operands, .. } => {
+                for operand in operands {
+                    self.scan_nested(&operand.node);
+                }
             }
             Expr::UnaryOp { operand, .. } => self.scan_nested(&operand.node),
             Expr::FieldAccess { object, .. } => self.scan_nested(&object.node),
@@ -1552,6 +1560,11 @@ impl<'a> Analyzer<'a> {
             Expr::BinOp { lhs, rhs, .. } | Expr::NullCoalesce { lhs, rhs } => {
                 self.alias_scan(lhs);
                 self.alias_scan(rhs);
+            }
+            Expr::CompareChain { operands, .. } => {
+                for operand in operands {
+                    self.alias_scan(operand);
+                }
             }
             Expr::UnaryOp { operand, .. } => self.alias_scan(operand),
             Expr::Call { args, .. }

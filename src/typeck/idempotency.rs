@@ -554,6 +554,9 @@ impl<'a> Analyzer<'a> {
             Expr::BinOp { lhs, rhs, .. } | Expr::NullCoalesce { lhs, rhs } => {
                 self.has_unsafe_call(&lhs.node) || self.has_unsafe_call(&rhs.node)
             }
+            Expr::CompareChain { operands, .. } => {
+                operands.iter().any(|o| self.has_unsafe_call(&o.node))
+            }
             Expr::UnaryOp { operand, .. } => self.has_unsafe_call(&operand.node),
             Expr::FieldAccess { object, .. } => self.has_unsafe_call(&object.node),
             Expr::Index { object, index } => {
@@ -639,6 +642,9 @@ impl<'a> Analyzer<'a> {
             Expr::Closure { .. } | Expr::ClosureCreate { .. } => false,
             Expr::BinOp { lhs, rhs, .. } | Expr::NullCoalesce { lhs, rhs } => {
                 self.contains_effect(lhs, exempt) || self.contains_effect(rhs, exempt)
+            }
+            Expr::CompareChain { operands, .. } => {
+                operands.iter().any(|o| self.contains_effect(o, exempt))
             }
             Expr::UnaryOp { operand, .. } => self.contains_effect(operand, exempt),
             Expr::FieldAccess { object, .. } => self.contains_effect(object, exempt),
@@ -948,6 +954,11 @@ impl<'a> Analyzer<'a> {
                 self.misuse_scan(lhs);
                 self.misuse_scan(rhs);
             }
+            Expr::CompareChain { operands, .. } => {
+                for operand in operands {
+                    self.misuse_scan(operand);
+                }
+            }
             Expr::UnaryOp { operand, .. } => self.misuse_scan(operand),
             Expr::Index { object, index } => {
                 self.misuse_scan(object);
@@ -1151,6 +1162,11 @@ impl<'a> Analyzer<'a> {
             Expr::BinOp { lhs, rhs, .. } | Expr::NullCoalesce { lhs, rhs } => {
                 self.scan_nested(&lhs.node);
                 self.scan_nested(&rhs.node);
+            }
+            Expr::CompareChain { operands, .. } => {
+                for operand in operands {
+                    self.scan_nested(&operand.node);
+                }
             }
             Expr::UnaryOp { operand, .. } => self.scan_nested(&operand.node),
             Expr::FieldAccess { object, .. } => self.scan_nested(&object.node),

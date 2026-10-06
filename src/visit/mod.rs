@@ -614,6 +614,11 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
             v.visit_expr(lhs);
             v.visit_expr(rhs);
         }
+        Expr::CompareChain { operands, .. } => {
+            for operand in operands {
+                v.visit_expr(operand);
+            }
+        }
         Expr::Spawn { call } => v.visit_expr(call),
         Expr::Cast {
             expr: inner,
@@ -1197,6 +1202,11 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, expr: &mut Spanned<Expr>) {
             v.visit_expr_mut(lhs);
             v.visit_expr_mut(rhs);
         }
+        Expr::CompareChain { operands, .. } => {
+            for operand in operands {
+                v.visit_expr_mut(operand);
+            }
+        }
         Expr::Spawn { call } => v.visit_expr_mut(call),
         Expr::Cast {
             expr: inner,
@@ -1421,6 +1431,7 @@ mod tests {
                 Expr::SetLit { .. } => "SetLit",
                 Expr::NullPropagate { .. } => "NullPropagate",
                 Expr::NullCoalesce { .. } => "NullCoalesce",
+                Expr::CompareChain { .. } => "CompareChain",
                 Expr::StaticTraitCall { .. } => "StaticTraitCall",
                 Expr::QualifiedAccess { .. } => "QualifiedAccess",
                 Expr::If { .. } => "If",

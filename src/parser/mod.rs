@@ -3819,6 +3819,45 @@ impl<'a> Parser<'a> {
             self.advance(); // consume operator
 
             let rhs = self.parse_expr(rbp)?;
+
+            // Comparison chaining (spec/src/expressions.md, "Comparison
+            // Chaining"): a *syntactic* run of comparison operators from the
+            // same precedence group — `a < b <= c`, `a == b == c` — groups
+            // into one CompareChain, evaluated as `a < b && b <= c` with `b`
+            // evaluated once. Only the literal operator run chains: a
+            // parenthesized comparison is an ordinary operand parsed by
+            // parse_prefix, so `(a == b) == c` stays a nested BinOp.
+            if let Some(group) = comparison_chain_group(op) {
+                let mut operands = vec![lhs, rhs];
+                let mut ops = vec![op];
+                while let Some(next_op) = self.peek_chain_comparison() {
+                    if comparison_chain_group(next_op) != Some(group) {
+                        break;
+                    }
+                    self.skip_newlines();
+                    self.advance(); // consume chained comparison operator
+                    let next_rhs = self.parse_expr(rbp)?;
+                    operands.push(next_rhs);
+                    ops.push(next_op);
+                }
+                let span = Span::new(
+                    operands[0].span.start,
+                    operands.last().expect("nonempty").span.end,
+                );
+                lhs = if ops.len() == 1 {
+                    let mut it = operands.into_iter();
+                    let l = it.next().expect("two operands");
+                    let r = it.next().expect("two operands");
+                    Spanned::new(
+                        Expr::BinOp { op, lhs: Box::new(l), rhs: Box::new(r) },
+                        span,
+                    )
+                } else {
+                    Spanned::new(Expr::CompareChain { operands, ops }, span)
+                };
+                continue;
+            }
+
             let span = Span::new(lhs.span.start, rhs.span.end);
             lhs = Spanned::new(
                 Expr::BinOp {
@@ -3831,6 +3870,28 @@ impl<'a> Parser<'a> {
         }
 
         Ok(lhs)
+    }
+
+    /// Peek the next token as a chainable comparison operator, without
+    /// consuming it. `>` immediately followed by an adjacent `>` is the
+    /// split-free spelling of `>>` (Shr) and is never a chained comparison
+    /// (mirrors the Shr detection in `parse_expr`).
+    fn peek_chain_comparison(&self) -> Option<BinOp> {
+        let tok = self.peek()?;
+        match tok.node {
+            Token::EqEq => Some(BinOp::Eq),
+            Token::BangEq => Some(BinOp::Neq),
+            Token::Lt => Some(BinOp::Lt),
+            Token::LtEq => Some(BinOp::LtEq),
+            Token::GtEq => Some(BinOp::GtEq),
+            Token::Gt => {
+                let shr = self.tokens.get(self.pos + 1).is_some_and(|next| {
+                    matches!(next.node, Token::Gt) && tok.span.end == next.span.start
+                });
+                if shr { None } else { Some(BinOp::Gt) }
+            }
+            _ => None,
+        }
     }
 
     /// True when the cursor sits on contextual `at` starting a placement
@@ -4642,6 +4703,19 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// Chaining group of a comparison operator (spec: Comparison Chaining).
+/// Operators chain only within their own precedence level: equality
+/// (`==`/`!=`) and relational (`<`/`<=`/`>`/`>=`) are distinct levels, so
+/// `a < b == c` keeps today's `(a < b) == c` reading (legal for bools)
+/// while `a == b == c` and `x >= 0 < y` chain.
+fn comparison_chain_group(op: BinOp) -> Option<u8> {
+    match op {
+        BinOp::Eq | BinOp::Neq => Some(0),
+        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => Some(1),
+        _ => None,
+    }
+}
+
 fn infix_binding_power(op: BinOp) -> (u8, u8) {
     match op {
         // (1, 2) is reserved for `??`, the lowest-precedence infix operator
@@ -4724,6 +4798,103 @@ mod tests {
                 }
             }
             _ => panic!("expected let"),
+        }
+    }
+
+    /// Helper: the expression of the first `let` in `main`.
+    fn first_let_expr(prog: &Program) -> &Expr {
+        match &prog.functions[0].node.body.node.stmts[0].node {
+            Stmt::Let { value, .. } => &value.node,
+            _ => panic!("expected let statement"),
+        }
+    }
+
+    #[test]
+    fn parse_comparison_chain() {
+        let prog = parse("fn main() {\n    let x = 1 < 2 <= 3\n}");
+        match first_let_expr(&prog) {
+            Expr::CompareChain { operands, ops } => {
+                assert_eq!(operands.len(), 3);
+                assert_eq!(ops, &[BinOp::Lt, BinOp::LtEq]);
+            }
+            other => panic!("expected CompareChain, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_four_element_comparison_chain() {
+        let prog = parse("fn main() {\n    let x = 1 <= 2 < 3 <= 4\n}");
+        match first_let_expr(&prog) {
+            Expr::CompareChain { operands, ops } => {
+                assert_eq!(operands.len(), 4);
+                assert_eq!(ops, &[BinOp::LtEq, BinOp::Lt, BinOp::LtEq]);
+            }
+            other => panic!("expected CompareChain, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_equality_chain() {
+        let prog = parse("fn main() {\n    let x = a == b == c\n}");
+        match first_let_expr(&prog) {
+            Expr::CompareChain { operands, ops } => {
+                assert_eq!(operands.len(), 3);
+                assert_eq!(ops, &[BinOp::Eq, BinOp::Eq]);
+            }
+            other => panic!("expected CompareChain, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_parenthesized_comparison_does_not_chain() {
+        // `(a == b) == c` — the parens make the left comparison an
+        // ordinary operand; no chain.
+        let prog = parse("fn main() {\n    let x = (a == b) == c\n}");
+        match first_let_expr(&prog) {
+            Expr::BinOp { op: BinOp::Eq, lhs, .. } => {
+                assert!(matches!(lhs.node, Expr::BinOp { op: BinOp::Eq, .. }));
+            }
+            other => panic!("expected nested BinOp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_mixed_levels_do_not_chain() {
+        // Equality binds looser than relational: `a == b < c` is
+        // `a == (b < c)` and `a < b == c` is `(a < b) == c`.
+        let prog = parse("fn main() {\n    let x = a == b < c\n}");
+        match first_let_expr(&prog) {
+            Expr::BinOp { op: BinOp::Eq, rhs, .. } => {
+                assert!(matches!(rhs.node, Expr::BinOp { op: BinOp::Lt, .. }));
+            }
+            other => panic!("expected BinOp Eq, got {other:?}"),
+        }
+        let prog = parse("fn main() {\n    let x = a < b == c\n}");
+        match first_let_expr(&prog) {
+            Expr::BinOp { op: BinOp::Eq, lhs, .. } => {
+                assert!(matches!(lhs.node, Expr::BinOp { op: BinOp::Lt, .. }));
+            }
+            other => panic!("expected BinOp Eq, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_gt_chain_vs_shr() {
+        // Separated `>` tokens chain; adjacent `>` `>` is a right shift.
+        let prog = parse("fn main() {\n    let x = a > b > c\n}");
+        assert!(matches!(first_let_expr(&prog), Expr::CompareChain { .. }));
+        let prog = parse("fn main() {\n    let x = a >> b\n}");
+        assert!(matches!(
+            first_let_expr(&prog),
+            Expr::BinOp { op: BinOp::Shr, .. }
+        ));
+        // Shift binds tighter: `a >> b > c` is `(a >> b) > c`.
+        let prog = parse("fn main() {\n    let x = a >> b > c\n}");
+        match first_let_expr(&prog) {
+            Expr::BinOp { op: BinOp::Gt, lhs, .. } => {
+                assert!(matches!(lhs.node, Expr::BinOp { op: BinOp::Shr, .. }));
+            }
+            other => panic!("expected BinOp Gt, got {other:?}"),
         }
     }
 

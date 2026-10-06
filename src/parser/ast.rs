@@ -695,6 +695,19 @@ pub enum Expr {
         expr: Box<Spanned<Expr>>,
         arms: Vec<MatchExprArm>,
     },
+    /// Chained comparison `a < b <= c` (spec: Comparison Chaining).
+    /// Equivalent to `a < b && b <= c` except each middle operand is
+    /// evaluated exactly once, and evaluation short-circuits: operand
+    /// `i + 1` and comparison `i` only run when comparisons `0..i` were
+    /// all true. Invariants: `operands.len() == ops.len() + 1`,
+    /// `ops.len() >= 2`, every op is a comparison from the same
+    /// precedence group (`==`/`!=`, or `<`/`<=`/`>`/`>=`). Built only by
+    /// the parser from a *syntactic* run of comparisons — a parenthesized
+    /// comparison operand stays a nested `BinOp`.
+    CompareChain {
+        operands: Vec<Spanned<Expr>>,
+        ops: Vec<BinOp>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

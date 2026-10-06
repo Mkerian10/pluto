@@ -1,0 +1,54 @@
+// Chained comparisons (spec: Comparison Chaining).
+//
+// `a < b < c` means `a < b && b < c`, with each middle operand evaluated
+// exactly once and later comparisons short-circuited: a failed link stops
+// the chain before the remaining operands run.
+
+fn clamp_check(x: int) {
+    // The classic range guard, no && needed.
+    if 0 <= x <= 100 {
+        print(f"{x} is a valid percentage")
+    } else {
+        print(f"{x} is out of range")
+    }
+}
+
+fn logged(tag: string, x: int) int {
+    print(f"  evaluating {tag}")
+    return x
+}
+
+fn main() {
+    // Range checks read like math.
+    clamp_check(42)
+    clamp_check(-3)
+    clamp_check(100)
+
+    // Chains of any length, mixed directions within a level.
+    let a = 1
+    let b = 2
+    let c = 3
+    print(a < b < c)          // 1 < 2 && 2 < 3 → true
+    print(a <= b < c <= 3)    // four operands, three links → true
+    print(c > b > a)          // separated `>` tokens chain; `>>` stays a shift
+    print(a == 1 == 1)        // equality chains too
+    print(b >= 0 < c)         // the spec's "unusual but valid" shape
+
+    // The middle operand runs once, and short-circuiting skips the rest.
+    print("middle operand evaluated once:")
+    print(1 < logged("middle", 2) < 3)
+    print("failed first link skips the right operand:")
+    print(1 < logged("left", 0) < logged("right", 99))
+
+    // Bounds guards feed the flow-fact engine like the explicit conjunction:
+    // inside the guard, i is known to be a safe index.
+    let xs = [10, 20, 30]
+    let i = 1
+    if 0 <= i < xs.len() {
+        print(f"xs[{i}] = {xs[i]}")
+    }
+
+    // Parentheses opt out: a parenthesized comparison is an ordinary
+    // operand, so this compares two bools instead of chaining.
+    print((a == b) == false)
+}

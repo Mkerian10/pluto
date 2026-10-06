@@ -214,6 +214,23 @@ pub(crate) fn infer_expr(
             ))
         }
         Expr::BinOp { op, lhs, rhs } => infer_binop(op, lhs, rhs, span, env),
+        Expr::CompareChain { operands, ops } => {
+            // `a < b <= c` — each operand types once (it also *evaluates*
+            // once), and every adjacent pair must satisfy the ordinary
+            // comparison rule for its operator.
+            let mut tys = Vec::with_capacity(operands.len());
+            for operand in operands {
+                tys.push(infer_expr(&operand.node, operand.span, env, None)?);
+            }
+            for (i, op) in ops.iter().enumerate() {
+                let pair_span = crate::span::Span::new(
+                    operands[i].span.start,
+                    operands[i + 1].span.end,
+                );
+                check_comparison(op, &tys[i], &tys[i + 1], pair_span)?;
+            }
+            Ok(PlutoType::Bool)
+        }
         Expr::UnaryOp { op, operand } => {
             let t = infer_expr(&operand.node, operand.span, env, None)?;
             match op {
@@ -1042,6 +1059,53 @@ fn validate_hashable_key(ty: &PlutoType, span: crate::span::Span) -> Result<(), 
     }
 }
 
+/// Type rule for one comparison `lt <op> rt` — shared by [`infer_binop`]
+/// and each adjacent operand pair of an [`Expr::CompareChain`].
+fn check_comparison(
+    op: &BinOp,
+    lt: &PlutoType,
+    rt: &PlutoType,
+    span: crate::span::Span,
+) -> Result<PlutoType, CompileError> {
+    match op {
+        BinOp::Eq | BinOp::Neq => {
+            if *lt == PlutoType::Bytes || *rt == PlutoType::Bytes {
+                return Err(CompileError::type_err(
+                    "cannot compare bytes with ==; use element-wise comparison".to_string(),
+                    span,
+                ));
+            }
+            // Allow comparing nullable types with none (Nullable(Void))
+            let compatible = lt == rt
+                || (matches!(lt, PlutoType::Nullable(_)) && *rt == PlutoType::Nullable(Box::new(PlutoType::Void)))
+                || (*lt == PlutoType::Nullable(Box::new(PlutoType::Void)) && matches!(rt, PlutoType::Nullable(_)));
+            if !compatible {
+                return Err(CompileError::type_err(
+                    format!("cannot compare {lt} with {rt}"),
+                    span,
+                ));
+            }
+            Ok(PlutoType::Bool)
+        }
+        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+            if lt != rt {
+                return Err(CompileError::type_err(
+                    format!("cannot compare {lt} with {rt}"),
+                    span,
+                ));
+            }
+            match lt {
+                PlutoType::Int | PlutoType::Float | PlutoType::Byte => Ok(PlutoType::Bool),
+                _ => Err(CompileError::type_err(
+                    format!("comparison not supported for type {lt}"),
+                    span,
+                )),
+            }
+        }
+        _ => unreachable!("check_comparison called with non-comparison operator"),
+    }
+}
+
 fn infer_binop(
     op: &BinOp,
     lhs: &Spanned<Expr>,
@@ -1087,39 +1151,8 @@ fn infer_binop(
                 )),
             }
         }
-        BinOp::Eq | BinOp::Neq => {
-            if lt == PlutoType::Bytes || rt == PlutoType::Bytes {
-                return Err(CompileError::type_err(
-                    "cannot compare bytes with ==; use element-wise comparison".to_string(),
-                    span,
-                ));
-            }
-            // Allow comparing nullable types with none (Nullable(Void))
-            let compatible = lt == rt
-                || (matches!(&lt, PlutoType::Nullable(_)) && rt == PlutoType::Nullable(Box::new(PlutoType::Void)))
-                || (lt == PlutoType::Nullable(Box::new(PlutoType::Void)) && matches!(&rt, PlutoType::Nullable(_)));
-            if !compatible {
-                return Err(CompileError::type_err(
-                    format!("cannot compare {lt} with {rt}"),
-                    span,
-                ));
-            }
-            Ok(PlutoType::Bool)
-        }
-        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-            if lt != rt {
-                return Err(CompileError::type_err(
-                    format!("cannot compare {lt} with {rt}"),
-                    span,
-                ));
-            }
-            match &lt {
-                PlutoType::Int | PlutoType::Float | PlutoType::Byte => Ok(PlutoType::Bool),
-                _ => Err(CompileError::type_err(
-                    format!("comparison not supported for type {lt}"),
-                    span,
-                )),
-            }
+        BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+            check_comparison(op, &lt, &rt, span)
         }
         BinOp::And | BinOp::Or => {
             if lt != PlutoType::Bool || rt != PlutoType::Bool {

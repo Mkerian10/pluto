@@ -109,10 +109,18 @@ fn precedence_equality_vs_comparison() {
 
 #[test]
 fn precedence_inequality_vs_equality() {
-    // 3 != 4 == true → (3 != 4) == true = true
-    let stdout = compile_and_run_stdout(r#"
+    // `3 != 4 == true` now chains (#451): 3 != 4 && 4 == true, whose
+    // second link is ill-typed. The bool-comparison reading needs parens.
+    compile_should_fail_with(r#"
         fn main() {
             let result = 3 != 4 == true
+        }
+    "#, "cannot compare int with bool");
+
+    // (3 != 4) == true → true == true = true
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let result = (3 != 4) == true
             if result { print("pass") } else { print("fail") }
         }
     "#);
@@ -216,20 +224,31 @@ fn precedence_not_and_or_chain() {
 
 #[test]
 fn precedence_comparison_chain() {
-    // 1 < 2 < 3 → (1 < 2) < 3 → true < 3 (type error)
-    compile_should_fail_with(r#"
+    // 1 < 2 < 3 chains (#451): 1 < 2 && 2 < 3 = true. The old
+    // `(1 < 2) < 3` reading was a type error and is no longer expressible.
+    let stdout = compile_and_run_stdout(r#"
         fn main() {
             let result = 1 < 2 < 3
+            if result { print("pass") } else { print("fail") }
         }
-    "#, "cannot compare bool with int");
+    "#);
+    assert_eq!(stdout.trim(), "pass");
 }
 
 #[test]
 fn precedence_equality_chain() {
-    // 1 == 1 == true → (1 == 1) == true → true == true → true
-    let stdout = compile_and_run_stdout(r#"
+    // `1 == 1 == true` now chains (#451): 1 == 1 && 1 == true, whose
+    // second link is ill-typed. Parens recover the bool comparison.
+    compile_should_fail_with(r#"
         fn main() {
             let result = 1 == 1 == true
+        }
+    "#, "cannot compare int with bool");
+
+    // (1 == 1) == true → true == true → true
+    let stdout = compile_and_run_stdout(r#"
+        fn main() {
+            let result = (1 == 1) == true
             if result { print("pass") } else { print("fail") }
         }
     "#);

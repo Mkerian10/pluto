@@ -207,6 +207,15 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
             span,
         )),
 
+        // Chained comparisons — the contract prover's symbolic machinery
+        // does not model the chain node (yet); ask for the explicit
+        // conjunction, which means the same thing in this pure fragment.
+        Expr::CompareChain { .. } => Err(CompileError::syntax(
+            "chained comparisons are not supported in contract expressions; \
+             write the explicit conjunction (e.g. '0 <= x && x < n')",
+            span,
+        )),
+
         // Null propagation — rejected (side-effectful)
         Expr::NullCoalesce { .. } => Err(CompileError::syntax(
             "null coalescing (??) is not allowed in contracts",

@@ -321,6 +321,10 @@ name = "precedence_extended"
 path = "tests/integration/precedence_extended.rs"
 
 [[test]]
+name = "chained_comparisons"
+path = "tests/integration/chained_comparisons.rs"
+
+[[test]]
 name = "expression_complexity"
 path = "tests/integration/expression_complexity.rs"
 

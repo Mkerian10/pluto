@@ -677,6 +677,81 @@ fn main() {
     assert_eq!(warnings.len(), 1, "expected exactly one warning: {warnings:?}");
 }
 
+// ── Chained comparisons (#451) ───────────────────────────────────────────────
+
+#[test]
+fn chain_decomposition_gives_both_facts() {
+    // `0 < x < 10` narrows like `x > 0 && x < 10`: both pair facts hold
+    // in the then-branch.
+    assert_single_warning(
+        r#"
+fn f(x: int) int {
+    if 0 < x < 10 {
+        if x > 20 {
+            return 1
+        }
+        return 2
+    }
+    return 3
+}
+
+fn main() {
+    print(f(5))
+}
+"#,
+        "condition is always false",
+    );
+}
+
+#[test]
+fn chain_bounds_guard_narrows_index() {
+    // The issue's motivating guard: `0 <= i < xs.len()` establishes both
+    // `i >= 0` and the `i < xs.len()` relation, so the inner re-check is
+    // decided.
+    assert_single_warning(
+        r#"
+fn f(xs: [int], i: int) int {
+    if 0 <= i < xs.len() {
+        if i >= 0 {
+            return xs[i]
+        }
+        return -2
+    }
+    return -1
+}
+
+fn main() {
+    print(f([10, 20, 30], 1))
+}
+"#,
+        "condition is always true",
+    );
+}
+
+#[test]
+fn chain_condition_decided_by_facts() {
+    // eval_condition understands a chain as the conjunction of its pairs:
+    // under x == 5, `0 <= x < 10` is proven.
+    assert_single_warning(
+        r#"
+fn f(x: int) int {
+    if x == 5 {
+        if 0 <= x < 10 {
+            return 1
+        }
+        return 2
+    }
+    return 3
+}
+
+fn main() {
+    print(f(5))
+}
+"#,
+        "condition is always true",
+    );
+}
+
 // ── Length terms (`xs.len()`) ────────────────────────────────────────────────
 
 #[test]

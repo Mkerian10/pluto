@@ -1927,7 +1927,7 @@ fn arg_may_alias_class(e: &Expr, env: &TypeEnv, cname: &str) -> bool {
         // (writes through the callee's parameter land on the fresh object).
         Expr::StructLit { .. } => false,
         // No operator overloading: operators yield primitives.
-        Expr::BinOp { .. } | Expr::UnaryOp { .. } => false,
+        Expr::BinOp { .. } | Expr::UnaryOp { .. } | Expr::CompareChain { .. } => false,
         Expr::NullCoalesce { lhs, rhs } => {
             arg_may_alias_class(&lhs.node, env, cname)
                 || arg_may_alias_class(&rhs.node, env, cname)
