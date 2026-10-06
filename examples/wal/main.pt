@@ -1,0 +1,105 @@
+import std.wal
+import std.fs
+
+// std.wal — the write-ahead log as evidence.
+//
+// Linearity is the discipline for the living process; the WAL is the
+// same discipline for the resurrected one. Intent is made durable
+// BEFORE the effect, so a process that dies mid-effect can be brought
+// back and finish the job. The protocol is a typestate:
+//
+//   wal.open(path) → recover() → replay()/latest() → append() →
+//   mark_applied() → checkpoint() → close()
+//
+// and every protocol violation is a compile error, not a review
+// finding: appending before recovery (the method does not exist on
+// Wal<Unrecovered>), leaking a live log (must_release), appending after
+// a failed sync (the error carries the log as Wal<Poisoned>, whose only
+// method is discard()).
+//
+// Run:
+//   cargo run -- run examples/wal/main.pt --stdlib stdlib
+
+// Apply one keyed intent to the "database" (here: a printout). In a
+// real system this is the effect whose durability lags the log's.
+fn apply(key: string, data: bytes) {
+    print(f"  applying {key} = {data.to_string()}")
+}
+
+fn main() {
+    let dir = fs.temp_dir() + "/wal_example"
+    fs.create_dir_all(dir)!
+    let path = dir + "/intents.log"
+    fs.remove(path) catch e {}
+
+    // ── Day one: log intent durably, crash before finishing ──────────
+    // recover() is the only door to a usable log — on first boot it
+    // finds an empty file and says so.
+    let intent = wal.open(path)
+    let mut w = intent.recover()!
+    print(f"boot: {w.recovery().recovered} pending entries")
+
+    // Each append is durable when it returns (write-all + data sync).
+    // The returned offsets increase monotonically within a generation.
+    w.append("user:42", "credit 100".to_bytes())!
+    w.append("user:7", "debit 30".to_bytes())!
+    print(f"logged 2 intents, {w.pending()} pending")
+
+    // "Crash": the process stops here without applying or
+    // checkpointing. close() releases the descriptor; the intent stays.
+    w.close()!
+
+    // ── Resurrection: the log remembers what we owed ─────────────────
+    let intent2 = wal.open(path)
+    let mut w2 = intent2.recover()!
+    let report = w2.recovery()
+    print(f"recovered: {report.recovered} entries, {report.truncated_bytes} torn bytes cut")
+
+    // Replay in order (or use latest() for the last-write-per-key view
+    // when re-application is keyed and idempotent).
+    let entries = w2.replay()
+    let mut i = 0
+    while i < entries.len() {
+        apply(entries[i].key, entries[i].data)
+        i = i + 1
+    }
+
+    // A checkpoint before acknowledging would drop history nothing has
+    // claimed — the typed outcome refuses, and the log is untouched.
+    let early = w2.checkpoint() catch e: wal.Degraded {
+        let p = e.wal
+        p.discard()
+        print("log degraded")
+        return
+    }
+    match early {
+        wal.Checkpoint.Done {
+            print("dropped unacknowledged history?!")
+        }
+        wal.Checkpoint.Refused { appended: a, applied: b } {
+            print(f"checkpoint refused: {b} of {a} acknowledged")
+        }
+    }
+
+    // Acknowledge what we applied, then the checkpoint goes through and
+    // a new generation begins.
+    w2.mark_applied()
+    let ck = w2.checkpoint() catch e: wal.Degraded {
+        let p = e.wal
+        p.discard()
+        print("log degraded")
+        return
+    }
+    match ck {
+        wal.Checkpoint.Done {
+            print(f"checkpointed; log is {fs.file_size(path)!} bytes")
+        }
+        wal.Checkpoint.Refused { appended: a, applied: b } {
+            print(f"refused {b}/{a}")
+        }
+    }
+
+    w2.close()!
+    fs.remove_dir_all(dir)!
+    print("done")
+}

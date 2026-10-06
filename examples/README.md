@@ -32,6 +32,14 @@ Durability with `std.fs`: `replace_all` (atomic durable config replace — same-
 cargo run -- run examples/durable_config/main.pt --stdlib stdlib
 ```
 
+## wal
+
+The write-ahead log as a stdlib module (`std.wal`): intent made durable before the effect, so a process that dies mid-effect can be resurrected and finish the job — linearity for the living process, the WAL for the resurrected one. The protocol is a typestate: `wal.open(path)` mints a `Wal<Unrecovered>` (an intent, not a handle — it has no append method), `recover()` is the only door to `Wal<Ready>` (it scans frames, verifies each record's CRC-32C, durably cuts the torn tail a crash mid-append leaves behind, and reports the cut in a typed `Recovery` outcome), `replay()`/`latest()` deliver what survived (in order, or deduplicated last-write-per-key for idempotent re-application), `append(key, data)` is durable when it returns and raises `Degraded` carrying the log as `Wal<Poisoned>` (only exit: `discard()`) when a write or sync destroys the warrant, and `checkpoint()` returns a typed `Refused` outcome — log untouched — until every record is acknowledged via `mark_applied()`. Leaking a live log, appending before recovery, or swallowing a `Degraded` payload are compile errors. Built on its stdlib siblings: `std.fs` for path operations, `std.hash` for CRC-32C.
+
+```bash
+cargo run -- run examples/wal/main.pt --stdlib stdlib
+```
+
 ## env_example
 
 Demonstrates the `std.env` module for environment variable access: `get` (retrieve variable or empty string), `get_or` (with default fallback), `set` (set variable), `exists` (check if set), `remove` (delete variable), and `list_names` (enumerate all variables).
