@@ -24,6 +24,12 @@ pub struct Program {
     /// via `satisfies` clauses.
     #[serde(default)]
     pub properties: Vec<Spanned<PropertyDecl>>,
+    /// `pub import fs.SyncError` — named re-exports (rfc-module-semantics
+    /// section 7): the item becomes part of this module's surface under
+    /// its own name. An aliasing entry resolved at flatten time, never a
+    /// copy — the re-exported name and the original are one declaration.
+    #[serde(default)]
+    pub reexports: Vec<Spanned<ReexportDecl>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +53,28 @@ pub struct TestInfo {
     /// M of seed N (a single run with run_seed = N + M).
     pub seed: Option<u64>,
     pub iteration: Option<u64>,
+}
+
+/// One `pub import module.Item` line. The path's last segment is the
+/// item; the preceding segments name a module this module imports. After
+/// a module's own imports are flattened, the path is canonicalized to the
+/// flattened declaration name (chains of re-exports resolve transitively).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReexportDecl {
+    pub path: Vec<Spanned<String>>,
+}
+
+impl ReexportDecl {
+    /// The surface name: the item's own last segment.
+    pub fn item_name(&self) -> &str {
+        &self.path.last().unwrap().node
+    }
+
+    /// The canonical (dotted) name of the declaration being re-exported,
+    /// as it appears inside the declaring module after flattening.
+    pub fn target_name(&self) -> String {
+        self.path.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join(".")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

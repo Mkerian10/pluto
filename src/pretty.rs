@@ -118,10 +118,19 @@ impl PrettyPrinter {
             };
         }
 
-        // 1. Imports
+        // 1. Imports, then `pub import` re-exports
         if !program.imports.is_empty() {
             for imp in &program.imports {
                 self.emit_import(&imp.node);
+                self.newline();
+            }
+            has_output = true;
+        }
+        if !program.reexports.is_empty() {
+            for r in &program.reexports {
+                self.write("pub import ");
+                let path: Vec<&str> = r.node.path.iter().map(|s| s.node.as_str()).collect();
+                self.write(&path.join("."));
                 self.newline();
             }
             has_output = true;
@@ -1859,6 +1868,15 @@ mod tests {
         let src = "fn add(a: int, b: int) int {\n    return a + b\n}\n";
         let result = pp(src);
         assert_eq!(result, "fn add(a: int, b: int) int {\n    return a + b\n}\n");
+        assert_roundtrip_stable(src);
+    }
+
+    #[test]
+    fn test_reexport_roundtrip() {
+        let src = "import fs\npub import fs.SyncError\n\nfn main() {\n}\n";
+        let result = pp(src);
+        assert!(result.contains("import fs\n"), "{result}");
+        assert!(result.contains("pub import fs.SyncError\n"), "{result}");
         assert_roundtrip_stable(src);
     }
 

@@ -169,6 +169,7 @@ fn create_simple_program() -> Program {
         tests: None,
         fallible_extern_fns: vec![],
         properties: vec![],
+        reexports: Vec::new(),
     }
 }
 
@@ -214,6 +215,7 @@ fn create_nested_program() -> Program {
         tests: None,
         fallible_extern_fns: vec![],
         properties: vec![],
+        reexports: Vec::new(),
     }
 }
 
@@ -266,6 +268,7 @@ fn create_program_with_types() -> Program {
         tests: None,
         fallible_extern_fns: vec![],
         properties: vec![],
+        reexports: Vec::new(),
     }
 }
 

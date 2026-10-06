@@ -253,6 +253,7 @@ mod tests {
             tests: None,
             fallible_extern_fns: vec![],
             properties: vec![],
+            reexports: vec![],
         }
     }
 
