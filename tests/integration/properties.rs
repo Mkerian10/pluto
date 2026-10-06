@@ -538,14 +538,15 @@ fn std_blob_authority_exports_its_theorem() {
         .class_infos
         .get(&class.node.id)
         .expect("class info present");
-    // The names carry the flattened module path: std.verify arrived through
-    // std.blob's own import, so the properties read blob.verify.* and the
-    // grant argument is the library's blob.WriteGrant.
+    // The names carry the canonical module path (issue #391): std.verify
+    // is ONE canonical module however it is reached, so the properties
+    // read verify.* through every import route, and the grant argument is
+    // the library's blob.WriteGrant.
     assert_eq!(
         info.provided_properties,
         vec![
-            "blob.verify.monotonic(self.epoch)".to_string(),
-            "blob.verify.fenced(self.data, self.epoch, blob.WriteGrant)".to_string(),
+            "verify.monotonic(self.epoch)".to_string(),
+            "verify.fenced(self.data, self.epoch, blob.WriteGrant)".to_string(),
         ],
         "the property names are the authority's exported facts"
     );
