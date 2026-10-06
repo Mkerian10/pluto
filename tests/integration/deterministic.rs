@@ -6231,3 +6231,134 @@ fn select_arm_choice_follows_seed() {
     }
     assert!(saw_arm1 && saw_arm2, "12 seeds never exercised both ready arms");
 }
+
+// ── Schedule pins: record, replay, diverge (rfc-test-harness phase 2) ───────
+
+const INTERLEAVING_FAIL_PROBE: &str = r#"
+fn producer(tx: Sender<int>, v: int) {
+    tx.send(v)!
+}
+
+tests[scheduler: Random] {
+    test "interleaving fail" {
+        let (tx, rx) = chan<int>(2)
+        let t1 = spawn producer(tx, 1)
+        let t2 = spawn producer(tx, 2)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        t1.get()!
+        t2.get()!
+        expect(a + b).to_equal(3)
+        // Fails only when t2's value arrives first — interleaving-dependent.
+        expect(a).to_equal(1)
+    }
+}
+"#;
+
+fn extract_schedule_token(stderr: &str, marker: &str) -> String {
+    stderr
+        .lines()
+        .find(|l| l.trim_start().starts_with(marker))
+        .unwrap_or_else(|| panic!("no '{marker}' line in stderr:\n{stderr}"))
+        .trim_start()
+        .trim_start_matches(marker)
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn expect_failure_prints_pin_and_replay_reproduces_it() {
+    // Some seed in 0..64 schedules t2's send first; the failure must print
+    // a full repro block.
+    let (_stdout, stderr, code) =
+        compile_test_and_run_with_env(INTERLEAVING_FAIL_PROBE, &[("PLUTO_TEST_ITERATIONS", "64")]);
+    assert_ne!(code, 0, "probe unexpectedly passed:\n{stderr}");
+    assert!(stderr.contains("expected 2 to equal 1"), "stderr: {stderr}");
+    assert!(stderr.contains("strategy: Random"), "stderr: {stderr}");
+    assert!(stderr.contains("schedule: ptsched:v1:"), "stderr: {stderr}");
+    assert!(stderr.contains("rerun:"), "stderr: {stderr}");
+
+    // Replaying the printed token reproduces the exact failure.
+    let token = extract_schedule_token(&stderr, "schedule: ");
+    let (_stdout2, stderr2, code2) =
+        compile_test_and_run_with_env(INTERLEAVING_FAIL_PROBE, &[("PLUTO_TEST_SCHEDULE", &token)]);
+    assert_ne!(code2, 0, "replay did not reproduce the failure:\n{stderr2}");
+    assert!(stderr2.contains("expected 2 to equal 1"), "replay found a different outcome: {stderr2}");
+    assert!(stderr2.contains("strategy: Replay"), "stderr: {stderr2}");
+}
+
+#[test]
+fn replay_divergence_fails_loudly() {
+    // ptsched:v1:AWM= decodes to a single decision (FIBER_PICK, 99) —
+    // fiber 99 never exists, so replay must hard-fail, never silently pass.
+    let (_stdout, stderr, code) = compile_test_and_run_with_env(
+        INTERLEAVING_FAIL_PROBE,
+        &[("PLUTO_TEST_SCHEDULE", "ptsched:v1:AWM=")],
+    );
+    assert_ne!(code, 0, "divergent replay must fail: {stderr}");
+    assert!(stderr.contains("replay diverged"), "stderr: {stderr}");
+}
+
+#[test]
+fn malformed_schedule_token_is_rejected() {
+    let (_stdout, stderr, code) = compile_test_and_run_with_env(
+        INTERLEAVING_FAIL_PROBE,
+        &[("PLUTO_TEST_SCHEDULE", "not-a-token")],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("malformed schedule token"), "stderr: {stderr}");
+}
+
+#[test]
+fn exhaustive_deadlock_prints_replayable_pin() {
+    // An exhaustive-found failure has no generating seed — the printed
+    // schedule token is its only repro artifact. It must replay to the
+    // same deadlock.
+    const DEADLOCK: &str = r#"
+fn worker(tx: Sender<int>, rx: Receiver<int>) {
+    let v = rx.recv()!
+    tx.send(v)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "deadlock" {
+        let (tx1, rx1) = chan<int>(0)
+        let (tx2, rx2) = chan<int>(0)
+        let t1 = spawn worker(tx1, rx2)
+        let t2 = spawn worker(tx2, rx1)
+        t1.get()!
+        t2.get()!
+    }
+}
+"#;
+    let (_stdout, stderr, code) = compile_test_and_run(DEADLOCK);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("failing schedule 0: ptsched:v1:"), "stderr: {stderr}");
+
+    let token = extract_schedule_token(&stderr, "failing schedule 0: ");
+    let (_stdout2, stderr2, code2) =
+        compile_test_and_run_with_env(DEADLOCK, &[("PLUTO_TEST_SCHEDULE", &token)]);
+    assert_ne!(code2, 0);
+    assert!(stderr2.contains("deadlock detected"), "replay missed the deadlock: {stderr2}");
+}
+
+#[test]
+fn test_filter_skips_and_reports_honestly() {
+    const TWO_TESTS: &str = r#"
+tests[scheduler: RoundRobin] {
+    test "alpha" {
+        expect(1).to_equal(1)
+    }
+
+    test "beta" {
+        expect(2).to_equal(2)
+    }
+}
+"#;
+    let (stdout, _stderr, code) =
+        compile_test_and_run_with_env(TWO_TESTS, &[("PLUTO_TEST_FILTER", "beta")]);
+    assert_eq!(code, 0, "stdout: {stdout}");
+    assert!(stdout.contains("test beta"), "stdout: {stdout}");
+    assert!(!stdout.contains("test alpha"), "filtered test still printed: {stdout}");
+    assert!(stdout.contains("1 tests passed (1 filtered out)"), "stdout: {stdout}");
+}
