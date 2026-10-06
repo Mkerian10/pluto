@@ -49,12 +49,29 @@ enum Commands {
     Test {
         /// Source file path
         file: PathBuf,
-        /// Override seed for random test strategies (for reproducibility)
-        #[arg(long)]
+        /// Override seed for random test strategies (decimal or 0x hex,
+        /// as printed by failure repro blocks)
+        #[arg(long, value_parser = parse_seed)]
         seed: Option<u64>,
         /// Override number of iterations for random test strategies
         #[arg(long)]
         iterations: Option<u64>,
+        /// Run only the test with this display name
+        #[arg(long = "test")]
+        test_filter: Option<String>,
+        /// Override the scheduler strategy (Sequential, RoundRobin, Random,
+        /// Exhaustive, Replay)
+        #[arg(long)]
+        strategy: Option<String>,
+        /// Replay a recorded schedule token (ptsched:v1:...); implies the
+        /// Replay strategy
+        #[arg(long)]
+        schedule: Option<String>,
+        /// Run random seeds until a failure is found, then print its pin.
+        /// Requires --test: iterations apply per test, so hunting without a
+        /// target would spin forever on the first passing test.
+        #[arg(long, requires = "test_filter")]
+        until_failure: bool,
         /// Disable test caching, run all tests
         #[arg(long)]
         no_cache: bool,
@@ -223,6 +240,15 @@ fn delegate_to_active_version() -> ! {
     std::process::exit(1);
 }
 
+/// Seed values round-trip through failure repro blocks, which print hex.
+fn parse_seed(s: &str) -> Result<u64, String> {
+    let (digits, radix) = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(hex) => (hex, 16),
+        None => (s, 10),
+    };
+    u64::from_str_radix(digits, radix).map_err(|e| format!("invalid seed '{s}': {e}"))
+}
+
 fn main() {
     // Auto-delegate to active version if needed (bypass for toolchain commands)
     if should_delegate() {
@@ -385,9 +411,16 @@ fn main() {
                 }
             }
         },
-        Commands::Test { file, seed, iterations, no_cache, coverage } => {
+        Commands::Test { file, seed, iterations, test_filter, strategy, schedule, until_failure, no_cache, coverage } => {
             let tmp = std::env::temp_dir().join("pluto_test");
-            let use_cache = !no_cache;
+            // A filter, strategy override, schedule, or failure hunt must
+            // actually run the targeted tests — the unchanged-test cache
+            // would skip them.
+            let use_cache = !no_cache
+                && test_filter.is_none()
+                && strategy.is_none()
+                && schedule.is_none()
+                && !until_failure;
             let coverage_map = match pluto::compile_file_for_tests_with_coverage(&file, &tmp, stdlib, use_cache, coverage) {
                 Ok(map) => map,
                 Err(err) => {
@@ -412,6 +445,25 @@ fn main() {
             }
             if let Some(i) = iterations {
                 cmd.env("PLUTO_TEST_ITERATIONS", i.to_string());
+            }
+            if let Some(t) = &test_filter {
+                cmd.env("PLUTO_TEST_FILTER", t);
+            }
+            if let Some(s) = &strategy {
+                cmd.env("PLUTO_TEST_STRATEGY", s);
+            }
+            if let Some(tok) = &schedule {
+                cmd.env("PLUTO_TEST_SCHEDULE", tok);
+            }
+            if until_failure {
+                // Hunt: random seeds until something breaks; the failure
+                // prints its own pin. Explicit --strategy/--iterations win.
+                if strategy.is_none() {
+                    cmd.env("PLUTO_TEST_STRATEGY", "Random");
+                }
+                if iterations.is_none() {
+                    cmd.env("PLUTO_TEST_ITERATIONS", "1000000000");
+                }
             }
             let status = cmd
                 .status()

@@ -170,7 +170,15 @@ void __pluto_entity_rdlock(void *entity);
 void __pluto_entity_wrlock(void *entity);
 void __pluto_entity_unlock(void *entity);
 
+// Test bookkeeping (builtins.c): current test display name for failure
+// repro blocks, and the --test filter flag (PLUTO_TEST_FILTER).
+const char *__pluto_test_current_name(void);
+int __pluto_test_should_skip(void);
+
 #ifdef PLUTO_TEST_MODE
+// Failure repro block (threading.c): strategy/seed/iteration plus the
+// recorded schedule token — printed on every failure path.
+void __pluto_test_print_repro(void);
 // Timed yield (threading.c): the degenerate timed wait backing
 // std.time.sleep in test mode — a yield point with an enabled timeout
 // choice; resumes when the scheduler picks it (duration erased).

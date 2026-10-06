@@ -47,7 +47,7 @@ static void task_raise_cancelled(void) {
 #define FIBER_STACK_SIZE (64 * 1024)   // 64KB per fiber stack
 #define MAX_FIBERS 256
 
-typedef enum { STRATEGY_SEQUENTIAL=0, STRATEGY_ROUND_ROBIN=1, STRATEGY_RANDOM=2, STRATEGY_EXHAUSTIVE=3 } Strategy;
+typedef enum { STRATEGY_SEQUENTIAL=0, STRATEGY_ROUND_ROBIN=1, STRATEGY_RANDOM=2, STRATEGY_EXHAUSTIVE=3, STRATEGY_REPLAY=4 } Strategy;
 typedef enum {
     FIBER_READY=0, FIBER_RUNNING=1,
     FIBER_BLOCKED_TASK=2, FIBER_BLOCKED_CHAN_SEND=3,
@@ -230,6 +230,213 @@ static void test_reset_determinism_streams(uint64_t run_seed) {
     __pluto_rng_reset_test(run_seed);
 }
 
+// ── Schedule trace: record and replay (rfc-test-harness phase 2) ───────────
+//
+// Every nondeterministic choice the runtime makes is recorded as a
+// (kind, choice) pair into a growable buffer, always on. On any failure
+// the buffer is printed as a versioned token — ptsched:v1:<base64 of the
+// LEB128 varint stream> — and STRATEGY_REPLAY feeds decisions back from a
+// decoded token (env PLUTO_TEST_SCHEDULE). A replay that diverges fails
+// loudly: a regression test that silently stopped testing its interleaving
+// is worse than a deleted one.
+
+#define DEC_FIBER_PICK 1
+#define DEC_SELECT_ARM 2
+
+static unsigned char *g_trace_buf = NULL;
+static size_t g_trace_len = 0;
+static size_t g_trace_cap = 0;
+
+// Decoded replay trace (STRATEGY_REPLAY), and the read cursor into it.
+static long *g_replay_kinds = NULL;
+static long *g_replay_choices = NULL;
+static size_t g_replay_count = 0;
+static size_t g_replay_pos = 0;
+
+// Repro context for the failure block (set by __pluto_test_run).
+static int g_repro_strategy = 0;
+static uint64_t g_repro_seed = 0;
+static long g_repro_iteration = 0;
+
+static void trace_reset(void) {
+    g_trace_len = 0;
+    g_replay_pos = 0;
+}
+
+static void trace_append_varint(unsigned long v) {
+    do {
+        if (g_trace_len + 1 > g_trace_cap) {
+            size_t cap = g_trace_cap ? g_trace_cap * 2 : 1024;
+            unsigned char *grown = (unsigned char *)realloc(g_trace_buf, cap);
+            if (!grown) return;  // recording is best-effort; execution is unaffected
+            g_trace_buf = grown;
+            g_trace_cap = cap;
+        }
+        unsigned char byte = (unsigned char)(v & 0x7F);
+        v >>= 7;
+        if (v) byte |= 0x80;
+        g_trace_buf[g_trace_len++] = byte;
+    } while (v);
+}
+
+static void trace_record(int kind, long choice) {
+    trace_append_varint((unsigned long)kind);
+    trace_append_varint((unsigned long)choice);
+}
+
+static const char B64_ALPHABET[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// Print the current trace as a ptsched:v1: token. Caller owns the framing.
+static void trace_print_token(FILE *out) {
+    fprintf(out, "ptsched:v1:");
+    for (size_t i = 0; i < g_trace_len; i += 3) {
+        unsigned long chunk = 0;
+        int have = 0;
+        for (int k = 0; k < 3; k++) {
+            chunk <<= 8;
+            if (i + (size_t)k < g_trace_len) {
+                chunk |= g_trace_buf[i + k];
+                have++;
+            }
+        }
+        fputc(B64_ALPHABET[(chunk >> 18) & 63], out);
+        fputc(B64_ALPHABET[(chunk >> 12) & 63], out);
+        fputc(have > 1 ? B64_ALPHABET[(chunk >> 6) & 63] : '=', out);
+        fputc(have > 2 ? B64_ALPHABET[chunk & 63] : '=', out);
+    }
+}
+
+static int b64_value(int c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+// Decode a ptsched:v1: token into the replay arrays. Returns 0 on success,
+// -1 on malformed input (reported by the caller).
+static int trace_decode_token(const char *token) {
+    const char *prefix = "ptsched:v1:";
+    size_t plen = strlen(prefix);
+    if (strncmp(token, prefix, plen) != 0) return -1;
+    const char *p = token + plen;
+
+    // Base64 → bytes
+    size_t in_len = strlen(p);
+    unsigned char *bytes = (unsigned char *)malloc(in_len / 4 * 3 + 3);
+    if (!bytes) return -1;
+    size_t n = 0;
+    unsigned long chunk = 0;
+    int bits = 0;
+    for (size_t i = 0; i < in_len; i++) {
+        if (p[i] == '=') break;
+        int v = b64_value((unsigned char)p[i]);
+        if (v < 0) { free(bytes); return -1; }
+        chunk = (chunk << 6) | (unsigned long)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            bytes[n++] = (unsigned char)((chunk >> bits) & 0xFF);
+        }
+    }
+
+    // Varint stream → (kind, choice) pairs
+    size_t cap = 64, count = 0;
+    long *kinds = (long *)malloc(cap * sizeof(long));
+    long *choices = (long *)malloc(cap * sizeof(long));
+    if (!kinds || !choices) { free(bytes); free(kinds); free(choices); return -1; }
+    size_t pos = 0;
+    while (pos < n) {
+        unsigned long vals[2];
+        for (int vi = 0; vi < 2; vi++) {
+            unsigned long v = 0;
+            int shift = 0;
+            while (1) {
+                if (pos >= n) { free(bytes); free(kinds); free(choices); return -1; }
+                unsigned char byte = bytes[pos++];
+                v |= (unsigned long)(byte & 0x7F) << shift;
+                if (!(byte & 0x80)) break;
+                shift += 7;
+            }
+            vals[vi] = v;
+        }
+        if (count == cap) {
+            cap *= 2;
+            long *k2 = (long *)realloc(kinds, cap * sizeof(long));
+            long *c2 = (long *)realloc(choices, cap * sizeof(long));
+            if (!k2 || !c2) { free(bytes); free(k2 ? k2 : kinds); free(c2 ? c2 : choices); return -1; }
+            kinds = k2;
+            choices = c2;
+        }
+        kinds[count] = (long)vals[0];
+        choices[count] = (long)vals[1];
+        count++;
+    }
+    free(bytes);
+    free(g_replay_kinds);
+    free(g_replay_choices);
+    g_replay_kinds = kinds;
+    g_replay_choices = choices;
+    g_replay_count = count;
+    g_replay_pos = 0;
+    return 0;
+}
+
+static const char *strategy_name(int s) {
+    switch (s) {
+        case STRATEGY_SEQUENTIAL:  return "Sequential";
+        case STRATEGY_ROUND_ROBIN: return "RoundRobin";
+        case STRATEGY_RANDOM:      return "Random";
+        case STRATEGY_EXHAUSTIVE:  return "Exhaustive";
+        case STRATEGY_REPLAY:      return "Replay";
+        default:                   return "?";
+    }
+}
+
+// The repro block, printed on EVERY failure path (expect failures call in
+// from builtins.c, deadlocks from __pluto_test_run). Everything needed to
+// pin the failing execution as a regression test.
+void __pluto_test_print_repro(void) {
+    const char *name = __pluto_test_current_name();
+    fprintf(stderr, "  strategy: %s  seed: 0x%llx  iteration: %ld\n",
+            strategy_name(g_repro_strategy),
+            (unsigned long long)g_repro_seed, g_repro_iteration);
+    fprintf(stderr, "  schedule: ");
+    trace_print_token(stderr);
+    fprintf(stderr, "\n  rerun:    pluto test <file> --test \"%s\" --schedule ",
+            name ? name : "?");
+    trace_print_token(stderr);
+    fprintf(stderr, "\n");
+}
+
+// Replay divergence: the program's concurrency structure no longer matches
+// the recorded schedule. Hard failure by design — never fall back.
+static void replay_diverged(const char *what, long detail) {
+    fprintf(stderr,
+            "FAIL: schedule replay diverged at decision %zu: %s (%ld)\n"
+            "  The test's concurrency structure changed since this schedule was\n"
+            "  recorded. Re-record it (run the seed shown when the bug was found,\n"
+            "  or use --until-failure) and update the pinned schedule.\n",
+            g_replay_pos, what, detail);
+    __pluto_test_print_repro();
+    exit(1);
+}
+
+// Next replay decision of the given kind, or divergence.
+static long replay_next(int kind) {
+    if (g_replay_pos >= g_replay_count) {
+        replay_diverged("trace ended before the program finished", (long)kind);
+    }
+    if (g_replay_kinds[g_replay_pos] != kind) {
+        replay_diverged("decision kind mismatch: trace has kind",
+                        g_replay_kinds[g_replay_pos]);
+    }
+    return g_replay_choices[g_replay_pos++];
+}
+
 // ── Exhaustive helper functions ─────────────────────────────────────────────
 
 static void exhaustive_record_channel(int fiber_id, void *channel) {
@@ -359,6 +566,25 @@ static int pick_next_fiber(void) {
         es->choices[es->depth] = choice;
         es->depth++;
         return choice;
+    } else if (g_scheduler->strategy == STRATEGY_REPLAY) {
+        // Replay: the recorded trace dictates the pick. Anything else can
+        // run means divergence must be detectable, so validate the choice
+        // against the live enabled set.
+        int any_enabled = 0;
+        for (int i = 0; i < n; i++) {
+            Fiber *f = &g_scheduler->fibers[i];
+            if (f->state == FIBER_READY || fiber_timed_blocked(f)) any_enabled = 1;
+        }
+        if (!any_enabled) return -1;  // genuine completion/deadlock path
+        long id = replay_next(DEC_FIBER_PICK);
+        if (id < 0 || id >= n) {
+            replay_diverged("picked fiber does not exist", id);
+        }
+        Fiber *f = &g_scheduler->fibers[id];
+        if (f->state != FIBER_READY && !fiber_timed_blocked(f)) {
+            replay_diverged("picked fiber is not runnable", id);
+        }
+        return (int)id;
     } else {
         // Random: collect all READY fibers, pick one using LCG
         int ready[MAX_FIBERS];
@@ -477,6 +703,10 @@ static void scheduler_run(void) {
             break;
         }
 
+        // Every dispatch is a recorded decision — the trace of these picks
+        // (plus select arms) IS the schedule token printed on failure.
+        trace_record(DEC_FIBER_PICK, next);
+
         // Dispatch = one tick of the logical clock (see __pluto_test_logical_ns)
         g_logical_ns += 1000000;
 
@@ -540,6 +770,9 @@ static int test_run_single(long fn_ptr, Strategy strategy, uint64_t run_seed) {
     g_scheduler->fiber_count = 1;
 
     test_reset_determinism_streams(run_seed);
+    trace_reset();
+    g_repro_strategy = (int)strategy;
+    g_repro_seed = run_seed;
 
     // Register fiber 0 with GC fiber stack scanner. Reset first: the previous
     // run's stacks were freed, so its registry entries are dangling.
@@ -564,10 +797,44 @@ static int test_run_single(long fn_ptr, Strategy strategy, uint64_t run_seed) {
 }
 
 void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
+    // --test filter: __pluto_test_start flagged this test as filtered out.
+    if (__pluto_test_should_skip()) return;
+
+    // CLI overrides (rfc-test-harness phase 2): --strategy and --schedule
+    // arrive as env vars; a schedule implies Replay.
+    char *env_strategy = getenv("PLUTO_TEST_STRATEGY");
+    if (env_strategy) {
+        if (strcmp(env_strategy, "Sequential") == 0)       strategy = STRATEGY_SEQUENTIAL;
+        else if (strcmp(env_strategy, "RoundRobin") == 0)  strategy = STRATEGY_ROUND_ROBIN;
+        else if (strcmp(env_strategy, "Random") == 0)      strategy = STRATEGY_RANDOM;
+        else if (strcmp(env_strategy, "Exhaustive") == 0)  strategy = STRATEGY_EXHAUSTIVE;
+        else if (strcmp(env_strategy, "Replay") == 0)      strategy = STRATEGY_REPLAY;
+        else {
+            fprintf(stderr, "pluto: unknown PLUTO_TEST_STRATEGY '%s' (expected Sequential, RoundRobin, Random, Exhaustive, or Replay)\n", env_strategy);
+            exit(1);
+        }
+    }
+    char *env_schedule = getenv("PLUTO_TEST_SCHEDULE");
+    if (env_schedule && *env_schedule) {
+        if (trace_decode_token(env_schedule) != 0) {
+            fprintf(stderr, "pluto: malformed schedule token in PLUTO_TEST_SCHEDULE (expected ptsched:v1:<base64>)\n");
+            exit(1);
+        }
+        strategy = STRATEGY_REPLAY;
+    }
+    if (strategy == STRATEGY_REPLAY && !env_schedule) {
+        fprintf(stderr, "pluto: Replay strategy requires a schedule token (PLUTO_TEST_SCHEDULE / --schedule)\n");
+        exit(1);
+    }
+
     if (strategy == STRATEGY_SEQUENTIAL) {
         char *env_sq = getenv("PLUTO_TEST_SEED");
         uint64_t sq_seed = env_sq ? (uint64_t)strtoull(env_sq, NULL, 0) : (uint64_t)seed;
         test_reset_determinism_streams(sq_seed);
+        trace_reset();
+        g_repro_strategy = STRATEGY_SEQUENTIAL;
+        g_repro_seed = sq_seed;
+        g_repro_iteration = 0;
         ((void(*)(void))fn_ptr)();
         return;
     }
@@ -602,12 +869,17 @@ void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
             es->fiber_count_snapshot = 0;  // infer from depth info
             g_exhaustive = NULL;
 
-            // Collect failure info
+            // Collect failure info. The trace buffer still holds THIS
+            // schedule's decisions — print the pin now, because no seed can
+            // regenerate an exhaustive-found schedule.
             if (had_deadlock && es->failure_count < EXHST_MAX_FAILURES) {
                 char msg[256];
                 snprintf(msg, sizeof(msg), "deadlock in schedule %d (depth %d)",
                          es->schedules_explored, es->depth);
                 es->failure_messages[es->failure_count++] = strdup(msg);
+                fprintf(stderr, "  failing schedule %d: ", es->schedules_explored);
+                trace_print_token(stderr);
+                fprintf(stderr, "\n");
             }
 
             // Update DPOR dependency matrix from this schedule's channel accesses.
@@ -658,7 +930,7 @@ void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
         return;
     }
 
-    // ── RoundRobin / Random strategies ──
+    // ── RoundRobin / Random / Replay strategies ──
     char *env_seed = getenv("PLUTO_TEST_SEED");
     if (env_seed) seed = (long)strtoull(env_seed, NULL, 0);
     char *env_iters = getenv("PLUTO_TEST_ITERATIONS");
@@ -669,10 +941,10 @@ void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
 
     for (int run = 0; run < num_runs; run++) {
         uint64_t run_seed = (uint64_t)seed + (uint64_t)run;
+        g_repro_iteration = run;
         int had_deadlock = test_run_single(fn_ptr, (Strategy)strategy, run_seed);
         if (had_deadlock) {
-            fprintf(stderr, "  (seed: 0x%llx, iteration: %d)\n",
-                    (unsigned long long)run_seed, run);
+            __pluto_test_print_repro();
             exit(1);
         }
     }
@@ -2035,44 +2307,69 @@ void __pluto_chan_sender_dec(long handle) {
 
 // ── Test mode: select (fiber-aware) ──
 
+static int select_arm_ready(long *handles, long *ops, int i) {
+    long *ch = (long *)handles[i];
+    if (ops[i] == 0) return ch[3] > 0;                 /* recv: buffered value */
+    return !ch[6] && ch[3] < ch[2];                    /* send: open + space  */
+}
+
+static long select_fire_arm(long *handles, long *ops, long *values, int i) {
+    long *ch = (long *)handles[i];
+    long *cbuf = (long *)ch[1];
+    if (ops[i] == 0) {
+        values[i] = cbuf[ch[4]];
+        ch[4] = (ch[4] + 1) % ch[2];
+        ch[3]--;
+    } else {
+        cbuf[ch[5]] = values[i];
+        ch[5] = (ch[5] + 1) % ch[2];
+        ch[3]++;
+    }
+    if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
+        wake_fibers_blocked_on_chan(ch);
+        wake_select_fibers_for_chan(ch);
+    }
+    return (long)i;
+}
+
 static long select_try_arms(long *handles, long *ops, long *values, int n, int *indices) {
     int all_closed = 1;
     for (int si = 0; si < n; si++) {
         int i = indices[si];
         long *ch = (long *)handles[i];
-        if (ops[i] == 0) {
-            /* recv */
-            if (ch[3] > 0) {
-                long *cbuf = (long *)ch[1];
-                long val = cbuf[ch[4]];
-                ch[4] = (ch[4] + 1) % ch[2];
-                ch[3]--;
-                values[i] = val;
-                if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
-                    wake_fibers_blocked_on_chan(ch);
-                    wake_select_fibers_for_chan(ch);
-                }
-                return (long)i;
-            }
-            if (!ch[6]) all_closed = 0;
-        } else {
-            /* send */
-            if (!ch[6] && ch[3] < ch[2]) {
-                long *cbuf = (long *)ch[1];
-                cbuf[ch[5]] = values[i];
-                ch[5] = (ch[5] + 1) % ch[2];
-                ch[3]++;
-                if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
-                    wake_fibers_blocked_on_chan(ch);
-                    wake_select_fibers_for_chan(ch);
-                }
-                return (long)i;
-            }
-            if (!ch[6]) all_closed = 0;
+        if (select_arm_ready(handles, ops, i)) {
+            return select_fire_arm(handles, ops, values, i);
         }
+        if (!ch[6]) all_closed = 0;
     }
     if (all_closed) return -2;
     return -3;  // no ready arm, not all closed
+}
+
+// The arm-choice decision point: records the chosen arm (DEC_SELECT_ARM),
+// and under Replay takes the arm the trace dictates instead of the shuffle's
+// preference. Readiness is deterministic given the replayed fiber picks, so
+// a recorded arm that is not ready means the schedule no longer matches.
+static long select_pick(long *handles, long *ops, long *values, int n, int *indices) {
+    if (g_scheduler && g_scheduler->strategy == STRATEGY_REPLAY) {
+        int all_closed = 1, any_ready = 0;
+        for (int i = 0; i < n; i++) {
+            long *ch = (long *)handles[i];
+            if (select_arm_ready(handles, ops, i)) any_ready = 1;
+            else if (!ch[6]) all_closed = 0;
+        }
+        if (!any_ready) return all_closed ? -2 : -3;
+        long k = replay_next(DEC_SELECT_ARM);
+        if (k < 0 || k >= n || !select_arm_ready(handles, ops, (int)k)) {
+            replay_diverged("replayed select arm is not ready", k);
+        }
+        long r = select_fire_arm(handles, ops, values, (int)k);
+        trace_record(DEC_SELECT_ARM, r);
+        return r;
+    }
+    long r = select_try_arms(handles, ops, values, n, indices);
+    if (r >= 0) trace_record(DEC_SELECT_ARM, r);
+    return r;
 }
 
 long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_ms) {
@@ -2114,7 +2411,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                 cur->has_timeout = 0;
                 return -4;
             }
-            long result = select_try_arms(handles, ops, values, n, indices);
+            long result = select_pick(handles, ops, values, n, indices);
             if (result >= 0) {
                 cur->has_timeout = 0;
                 cur->timed_out = 0;
@@ -2137,7 +2434,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
     }
 
     // Sequential mode: single pass
-    long result = select_try_arms(handles, ops, values, n, indices);
+    long result = select_pick(handles, ops, values, n, indices);
     if (result >= 0) return result;
     if (has_default) return -1;
     if (result == -2) {

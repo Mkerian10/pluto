@@ -3804,17 +3804,42 @@ double __pluto_log(double x) {
 
 // ── Test framework ────────────────────────────────────────────────────────────
 
+// Current test bookkeeping (rfc-test-harness phase 2): the display name
+// feeds the failure repro block, the skip flag implements --test filtering
+// (PLUTO_TEST_FILTER), and runtime pass/skip counts keep the summary honest
+// when a filter is active.
+static char *g_current_test_name = NULL;
+static int g_current_test_skip = 0;
+static long g_tests_passed = 0;
+static long g_tests_skipped = 0;
+
+const char *__pluto_test_current_name(void) {
+    return g_current_test_name;
+}
+
+int __pluto_test_should_skip(void) {
+    return g_current_test_skip;
+}
+
+// Every expect failure exits through here: print the schedule pin first.
+static void test_fail_exit(void) {
+#ifdef PLUTO_TEST_MODE
+    __pluto_test_print_repro();
+#endif
+    exit(1);
+}
+
 void __pluto_expect_equal_int(long actual, long expected, long line) {
     if (actual != expected) {
         fprintf(stderr, "FAIL (line %ld): expected %ld to equal %ld\n", line, actual, expected);
-        exit(1);
+        test_fail_exit();
     }
 }
 
 void __pluto_expect_equal_float(double actual, double expected, long line) {
     if (actual != expected) {
         fprintf(stderr, "FAIL (line %ld): expected %f to equal %f\n", line, actual, expected);
-        exit(1);
+        test_fail_exit();
     }
 }
 
@@ -3823,7 +3848,7 @@ void __pluto_expect_equal_bool(long actual, long expected, long line) {
     const char *e_str = expected ? "true" : "false";
     if (actual != expected) {
         fprintf(stderr, "FAIL (line %ld): expected %s to equal %s\n", line, a_str, e_str);
-        exit(1);
+        test_fail_exit();
     }
 }
 
@@ -3835,21 +3860,21 @@ void __pluto_expect_equal_string(void *actual, void *expected, long line) {
         __pluto_string_data(expected, &data_e, &len_e);
         fprintf(stderr, "FAIL (line %ld): expected \"%.*s\" to equal \"%.*s\"\n",
                 line, (int)len_a, data_a, (int)len_e, data_e);
-        exit(1);
+        test_fail_exit();
     }
 }
 
 void __pluto_expect_true(long actual, long line) {
     if (!actual) {
         fprintf(stderr, "FAIL (line %ld): expected true but got false\n", line);
-        exit(1);
+        test_fail_exit();
     }
 }
 
 void __pluto_expect_false(long actual, long line) {
     if (actual) {
         fprintf(stderr, "FAIL (line %ld): expected false but got true\n", line);
-        exit(1);
+        test_fail_exit();
     }
 }
 
@@ -3884,16 +3909,39 @@ void __pluto_test_start(void *name_str) {
     const char *data;
     long len;
     __pluto_string_data(name_str, &data, &len);
+    free(g_current_test_name);
+    g_current_test_name = (char *)malloc((size_t)len + 1);
+    if (g_current_test_name) {
+        memcpy(g_current_test_name, data, (size_t)len);
+        g_current_test_name[len] = '\0';
+    }
+    const char *filter = getenv("PLUTO_TEST_FILTER");
+    if (filter && *filter && (!g_current_test_name || strcmp(filter, g_current_test_name) != 0)) {
+        g_current_test_skip = 1;  // silently filtered; __pluto_test_run returns early
+        return;
+    }
+    g_current_test_skip = 0;
     printf("test %.*s ... ", (int)len, data);
     fflush(stdout);
 }
 
 void __pluto_test_pass(void) {
+    if (g_current_test_skip) {
+        g_current_test_skip = 0;
+        g_tests_skipped++;
+        return;
+    }
+    g_tests_passed++;
     printf("ok\n");
 }
 
 void __pluto_test_summary(long count) {
-    printf("\n%ld tests passed\n", count);
+    (void)count;  // counted at runtime now — a --test filter skips some
+    if (g_tests_skipped > 0) {
+        printf("\n%ld tests passed (%ld filtered out)\n", g_tests_passed, g_tests_skipped);
+    } else {
+        printf("\n%ld tests passed\n", g_tests_passed);
+    }
 }
 
 
