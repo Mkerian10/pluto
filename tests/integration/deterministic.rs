@@ -6154,3 +6154,80 @@ test "huge after fires" {
     assert!(stdout.contains("1 tests passed"), "stdout: {stdout}\nstderr: {stderr}");
     assert_eq!(code, 0);
 }
+
+// ── Runtime side-stream determinism (rfc-test-harness phase 1) ──────────────
+//
+// A fixed PLUTO_TEST_SEED must pin EVERY observable: select arm choice
+// (previously seeded from the wall clock), std.random (previously lazily
+// seeded from real entropy), and time values (previously real clocks).
+
+const DETERMINISM_PROBE: &str = r#"
+import std.random
+import std.time
+
+tests[scheduler: Random] {
+    test "determinism probe" {
+        let (tx1, rx1) = chan<int>(1)
+        let (tx2, rx2) = chan<int>(1)
+        tx1.send(1)!
+        tx2.send(2)!
+        let mut got = 0
+        select {
+            v = rx1.recv() { got = v }
+            w = rx2.recv() { got = w }
+        }
+        print(f"select: {got}")
+        print(f"rand: {random.next()}")
+        print(f"mono: {time.monotonic_ns()}")
+        print(f"wall: {time.now_ns()}")
+    }
+}
+"#;
+
+#[test]
+fn fixed_seed_pins_select_random_and_time() {
+    let seed7: &[(&str, &str)] = &[("PLUTO_TEST_SEED", "7"), ("PLUTO_TEST_ITERATIONS", "1")];
+    let results = compile_test_with_stdlib_run_each(DETERMINISM_PROBE, &[seed7, seed7]);
+    assert_eq!(results[0].2, 0, "probe failed: {}\n{}", results[0].0, results[0].1);
+    // Byte-identical across independent processes with the same seed.
+    assert_eq!(results[0].0, results[1].0, "same seed produced different output");
+    // The virtual clock, not the OS clock: synthetic epoch (1760000000s)
+    // plus the synthetic 1000s boot offset.
+    assert!(results[0].0.contains("wall: 1760001000"), "expected synthetic epoch: {}", results[0].0);
+}
+
+#[test]
+fn select_arm_choice_follows_seed() {
+    // Across a spread of seeds, both ready arms must be chosen at least once
+    // (the shuffle is live and seed-driven), and each seed must reproduce
+    // its own choice exactly.
+    let envs: Vec<Vec<(String, String)>> = (0..12u64)
+        .flat_map(|s| {
+            let e = vec![
+                ("PLUTO_TEST_SEED".to_string(), s.to_string()),
+                ("PLUTO_TEST_ITERATIONS".to_string(), "1".to_string()),
+            ];
+            [e.clone(), e]
+        })
+        .collect();
+    let env_refs: Vec<Vec<(&str, &str)>> = envs
+        .iter()
+        .map(|e| e.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+        .collect();
+    let run_slices: Vec<&[(&str, &str)]> = env_refs.iter().map(|e| e.as_slice()).collect();
+    let results = compile_test_with_stdlib_run_each(DETERMINISM_PROBE, &run_slices);
+
+    let mut saw_arm1 = false;
+    let mut saw_arm2 = false;
+    for pair in results.chunks(2) {
+        assert_eq!(pair[0].2, 0, "probe failed: {}\n{}", pair[0].0, pair[0].1);
+        assert_eq!(pair[0].0, pair[1].0, "same seed produced different select choice");
+        if pair[0].0.contains("select: 1") {
+            saw_arm1 = true;
+        }
+        if pair[0].0.contains("select: 2") {
+            saw_arm2 = true;
+        }
+    }
+    assert!(saw_arm1 && saw_arm2, "12 seeds never exercised both ready arms");
+}

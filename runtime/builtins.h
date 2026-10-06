@@ -175,6 +175,12 @@ void __pluto_entity_unlock(void *entity);
 // std.time.sleep in test mode — a yield point with an enabled timeout
 // choice; resumes when the scheduler picks it (duration erased).
 void __pluto_test_timed_yield(void);
+// Logical clock (threading.c): the only time source user code observes in
+// test mode. +1ms per scheduler dispatch, +1us per query; reset per run.
+long __pluto_test_logical_ns(void);
+// Per-run std.random reseed (builtins.c), called by the scheduler at the
+// start of every schedule run with that run's seed.
+void __pluto_rng_reset_test(unsigned long long seed);
 // Fiber stack API for scheduler (test mode only). The registry is run-scoped:
 // reset must be called at the start of every schedule run, before fiber 0
 // registers (stacks are freed per run; stale entries poison the scanner).

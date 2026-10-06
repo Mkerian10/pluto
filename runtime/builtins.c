@@ -1380,6 +1380,21 @@ void __pluto_register_exit_check(void) {
 }
 
 // Time
+#ifdef PLUTO_TEST_MODE
+// Virtual clock (rfc-test-harness phase 1): tests observe the scheduler's
+// logical clock (threading.c), never the OS clock. Durations are already
+// erased in test mode (sleep yields, timeouts are scheduler choices), so
+// time VALUES are virtualized too — a fixed seed now pins every observed
+// timestamp. Monotonic starts at 0 per run; wall time starts at a fixed,
+// obviously-synthetic epoch (2025-10-09T03:33:20Z).
+long __pluto_time_ns(void) {
+    return __pluto_test_logical_ns();
+}
+
+long __pluto_time_wall_ns(void) {
+    return 1760000000000000000L + __pluto_test_logical_ns();
+}
+#else
 long __pluto_time_ns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -1391,6 +1406,7 @@ long __pluto_time_wall_ns(void) {
     clock_gettime(CLOCK_REALTIME, &ts);
     return (long)ts.tv_sec * 1000000000L + (long)ts.tv_nsec;
 }
+#endif
 
 void __pluto_time_sleep_ns(long ns) {
 #ifdef PLUTO_TEST_MODE
@@ -1416,13 +1432,33 @@ static int __pluto_rng_seeded = 0;
 
 static void __pluto_rng_ensure_seeded(void) {
     if (!__pluto_rng_seeded) {
+#ifdef PLUTO_TEST_MODE
+        // Deterministic fallback — the harness reseeds per run via
+        // __pluto_rng_reset_test before any user code, so this constant is
+        // only reachable if random is used outside a test run. Never the
+        // clock: real entropy breaks fixed-seed reproducibility.
+        __pluto_rng_state = 0x9E3779B97F4A7C15ULL;
+#else
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
         __pluto_rng_state = (unsigned long long)ts.tv_sec * 1000000000ULL + (unsigned long long)ts.tv_nsec;
+#endif
         if (__pluto_rng_state == 0) __pluto_rng_state = 1;
         __pluto_rng_seeded = 1;
     }
 }
+
+#ifdef PLUTO_TEST_MODE
+// Per-run reseed from the schedule run's seed (rfc-test-harness phase 1):
+// std.random is deterministic given (seed, iteration), and independent runs
+// of one iteration are bit-identical. An explicit random.seed() call by the
+// program still wins — it executes after this and overwrites the state.
+void __pluto_rng_reset_test(unsigned long long seed) {
+    __pluto_rng_state = seed ^ 0xD1B54A32D192ED03ULL;
+    if (__pluto_rng_state == 0) __pluto_rng_state = 1;
+    __pluto_rng_seeded = 1;
+}
+#endif
 
 void __pluto_random_seed(long seed) {
     __pluto_rng_state = (unsigned long long)seed;

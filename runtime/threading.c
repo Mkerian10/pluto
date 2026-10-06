@@ -193,6 +193,43 @@ static uint64_t lcg_next(uint64_t *seed) {
     return *seed;
 }
 
+// ── Deterministic time and runtime RNG (rfc-test-harness phase 1) ───────────
+//
+// Logical clock: the only time source user code observes in test mode
+// (builtins.c routes __pluto_time_ns / __pluto_time_wall_ns here).
+// Durations are already erased (sleeps yield, timeouts are scheduler
+// choices — channels.md), so observed time VALUES are virtualized too:
+// +1ms per scheduler dispatch, +1us per query. Strictly monotonic within
+// a run, reset per schedule run — reproducible given the schedule.
+static long g_logical_ns = 0;
+
+long __pluto_test_logical_ns(void) {
+    g_logical_ns += 1000;
+    return g_logical_ns;
+}
+
+// Scheduler-owned RNG stream for runtime-internal choices (the select arm
+// shuffle). Deliberately distinct from the strategy seed — drawing from it
+// must not perturb RANDOM's fiber picks — and from std.random's stream, so
+// user draws do not shift runtime choices. Reset per run from the run seed.
+static uint64_t g_runtime_rng = 0x9E3779B97F4A7C15ULL;
+
+static uint64_t runtime_rng_next(void) {
+    return lcg_next(&g_runtime_rng);
+}
+
+// Per-run reset of every deterministic side stream. Called at the start of
+// each schedule run (and by the sequential entry), so every run of one
+// (seed, iteration) is bit-identical regardless of what ran before it.
+static void test_reset_determinism_streams(uint64_t run_seed) {
+    // Start at a synthetic "1000 seconds since boot": real monotonic clocks
+    // are nonzero, and stdlib contracts (monotonic() > 0 in milliseconds)
+    // hold from the first query.
+    g_logical_ns = 1000000000000L;
+    g_runtime_rng = run_seed ^ 0x9E3779B97F4A7C15ULL;
+    __pluto_rng_reset_test(run_seed);
+}
+
 // ── Exhaustive helper functions ─────────────────────────────────────────────
 
 static void exhaustive_record_channel(int fiber_id, void *channel) {
@@ -440,6 +477,9 @@ static void scheduler_run(void) {
             break;
         }
 
+        // Dispatch = one tick of the logical clock (see __pluto_test_logical_ns)
+        g_logical_ns += 1000000;
+
         // Restore next fiber's TLS state
         g_scheduler->current_fiber = next;
         __pluto_gc_set_current_fiber(next);  // Tell GC which fiber is running
@@ -499,6 +539,8 @@ static int test_run_single(long fn_ptr, Strategy strategy, uint64_t run_seed) {
     makecontext(&f->context, (void(*)(void))test_main_fiber_entry, 0);
     g_scheduler->fiber_count = 1;
 
+    test_reset_determinism_streams(run_seed);
+
     // Register fiber 0 with GC fiber stack scanner. Reset first: the previous
     // run's stacks were freed, so its registry entries are dangling.
     __pluto_gc_reset_fiber_stacks();
@@ -523,6 +565,9 @@ static int test_run_single(long fn_ptr, Strategy strategy, uint64_t run_seed) {
 
 void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
     if (strategy == STRATEGY_SEQUENTIAL) {
+        char *env_sq = getenv("PLUTO_TEST_SEED");
+        uint64_t sq_seed = env_sq ? (uint64_t)strtoull(env_sq, NULL, 0) : (uint64_t)seed;
+        test_reset_determinism_streams(sq_seed);
         ((void(*)(void))fn_ptr)();
         return;
     }
@@ -2038,12 +2083,14 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
     long *ops     = &buf[count];
     long *values  = &buf[2 * count];
 
-    /* Fisher-Yates shuffle for fairness */
+    /* Fisher-Yates shuffle for fairness. Seeded from the scheduler's own
+     * RNG stream — never the clock or an address, which made select arm
+     * order non-reproducible even under a fixed PLUTO_TEST_SEED. */
     int indices[64];
     int n = (int)count;
     if (n > 64) n = 64;
     for (int i = 0; i < n; i++) indices[i] = i;
-    unsigned long seed = (unsigned long)buffer_ptr ^ (unsigned long)__pluto_time_ns();
+    unsigned long seed = (unsigned long)runtime_rng_next();
     for (int i = n - 1; i > 0; i--) {
         seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
         int j = (int)((seed >> 33) % (unsigned long)(i + 1));
@@ -2123,8 +2170,12 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
     int n = (int)count;
     if (n > 64) n = 64;
     for (int i = 0; i < n; i++) indices[i] = i;
-    /* simple LCG seeded from time + address entropy */
-    unsigned long seed = (unsigned long)buffer_ptr ^ (unsigned long)__pluto_time_ns();
+    /* LCG seeded from a process-local sequence + address entropy. Fairness
+     * only needs the order to VARY between polls, not to be unpredictable;
+     * the clock added nothing but a nondeterminism source. */
+    static unsigned long g_select_salt = 0;
+    unsigned long salt = __atomic_add_fetch(&g_select_salt, 0x9E3779B97F4A7C15UL, __ATOMIC_RELAXED);
+    unsigned long seed = (unsigned long)buffer_ptr ^ salt;
 
     for (int i = n - 1; i > 0; i--) {
         seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
