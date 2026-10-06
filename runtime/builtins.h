@@ -175,7 +175,12 @@ void __pluto_entity_unlock(void *entity);
 // std.time.sleep in test mode — a yield point with an enabled timeout
 // choice; resumes when the scheduler picks it (duration erased).
 void __pluto_test_timed_yield(void);
-// Fiber stack API for scheduler (test mode only)
+// Fiber stack API for scheduler (test mode only). The registry is run-scoped:
+// reset must be called at the start of every schedule run, before fiber 0
+// registers (stacks are freed per run; stale entries poison the scanner).
+void __pluto_gc_reset_fiber_stacks(void);
+void __pluto_gc_set_main_stack_floor(void *floor);
+void __pluto_gc_set_scheduler_region(void *base, size_t size);
 void __pluto_gc_register_fiber_stack(char *base, size_t size);
 void __pluto_gc_mark_fiber_complete(int fiber_id);
 void __pluto_gc_set_current_fiber(int fiber_id);

@@ -5113,6 +5113,47 @@ tests[scheduler: Exhaustive] {
 }
 
 #[test]
+fn exhaustive_many_reruns_gc_registry_reset() {
+    // Regression (rfc-test-harness phase 0): the GC fiber-stack registry was
+    // append-only across schedule re-runs while test_run_single freed every
+    // stack per run — dangling registry entries segfaulted __pluto_gc_collect
+    // once exploration triggered a collection, registration silently stopped
+    // at the 256-entry cap, and mark_fiber_complete's per-run fiber id
+    // misindexed the cumulative array. This exact shape (3 producers x 2
+    // messages, 4 fibers, thousands of re-runs) crashed with SIGSEGV before
+    // the per-run reset.
+    let (stdout, stderr, code) = compile_test_and_run_with_env(r#"
+fn producer(tx: Sender<int>) {
+    tx.send(1)!
+    tx.send(1)!
+}
+
+tests[scheduler: Exhaustive] {
+    test "gc registry survives re-runs" {
+        let (tx, rx) = chan<int>(1)
+        let t1 = spawn producer(tx)
+        let t2 = spawn producer(tx)
+        let t3 = spawn producer(tx)
+        let mut sum = 0
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        sum = sum + rx.recv()!
+        t1.get()!
+        t2.get()!
+        t3.get()!
+        expect(sum).to_equal(6)
+    }
+}
+"#, &[("PLUTO_MAX_SCHEDULES", "3000")]);
+    assert_eq!(code, 0, "Expected pass (no crash), got stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("1 tests passed"), "Expected pass, got stdout: {stdout}");
+    assert!(stderr.contains("schedule"), "Expected schedule info: {stderr}");
+}
+
+#[test]
 fn exhaustive_independent_fibers_dpor_prunes() {
     // Two spawned tasks that don't share any channels — DPOR should prune.
     let (stdout, stderr, code) = compile_test_and_run(r#"

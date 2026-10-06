@@ -407,6 +407,14 @@ static void test_main_fiber_entry(void) {
 }
 
 static void scheduler_run(void) {
+    // Record the main-stack floor for fiber-triggered collections: while a
+    // fiber runs, the main thread's live frames are everything above this
+    // anchor (main → __pluto_test_run → test_run_single → here). Below it
+    // sit only swapcontext internals, which hold no GC references.
+    volatile long gc_floor_anchor = 0;
+    (void)gc_floor_anchor;
+    __pluto_gc_set_main_stack_floor((void *)&gc_floor_anchor);
+
     while (1) {
         int next = pick_next_fiber();
         if (next == -1) {
@@ -467,6 +475,10 @@ static void scheduler_run(void) {
 // Returns 1 if deadlock occurred, 0 otherwise.
 static int test_run_single(long fn_ptr, Strategy strategy, uint64_t run_seed) {
     g_scheduler = (Scheduler *)calloc(1, sizeof(Scheduler));
+    // The Scheduler holds GC references nothing else does (un-awaited
+    // tasks, pending spawn closures, parked send values, suspended fibers'
+    // saved registers): expose it to the collector as a root region.
+    __pluto_gc_set_scheduler_region(g_scheduler, sizeof(Scheduler));
     g_scheduler->strategy = strategy;
     g_scheduler->seed = run_seed;
     g_scheduler->main_fn_ptr = fn_ptr;
@@ -487,7 +499,9 @@ static int test_run_single(long fn_ptr, Strategy strategy, uint64_t run_seed) {
     makecontext(&f->context, (void(*)(void))test_main_fiber_entry, 0);
     g_scheduler->fiber_count = 1;
 
-    // Register fiber 0 with GC fiber stack scanner
+    // Register fiber 0 with GC fiber stack scanner. Reset first: the previous
+    // run's stacks were freed, so its registry entries are dangling.
+    __pluto_gc_reset_fiber_stacks();
     __pluto_gc_register_fiber_stack(f->stack, FIBER_STACK_SIZE);
     __pluto_gc_set_current_fiber(-1);
     __pluto_gc_enable_fiber_scanning();
@@ -500,6 +514,7 @@ static int test_run_single(long fn_ptr, Strategy strategy, uint64_t run_seed) {
 
     for (int i = 0; i < fiber_count; i++)
         free(g_scheduler->fibers[i].stack);
+    __pluto_gc_set_scheduler_region(NULL, 0);
     free(g_scheduler);
     g_scheduler = NULL;
 
