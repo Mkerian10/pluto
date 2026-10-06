@@ -758,6 +758,76 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        // Optional per-test config: test "name" [schedule: "...", seed: N,
+        // iteration: M] { ... } (rfc-test-harness pins)
+        let name_span = name_tok.span;
+        let mut schedule: Option<String> = None;
+        let mut seed: Option<u64> = None;
+        let mut iteration: Option<u64> = None;
+        if matches!(self.peek().map(|t| &t.node), Some(Token::LBracket)) {
+            self.advance();
+            loop {
+                let key_tok = self.expect_ident()?;
+                let key = key_tok.node.clone();
+                let key_span = key_tok.span;
+                self.expect(&Token::Colon)?;
+                match key.as_str() {
+                    "schedule" => {
+                        let (val_node, val_span) = match self.advance() {
+                            Some(t) => (t.node.clone(), t.span),
+                            None => {
+                                return Err(CompileError::syntax(
+                                    "expected schedule token (string literal)",
+                                    key_span,
+                                ));
+                            }
+                        };
+                        match val_node {
+                            Token::StringLit(s) if s.starts_with("ptsched:") => schedule = Some(s),
+                            Token::StringLit(_) => {
+                                return Err(CompileError::syntax(
+                                    "schedule must be a recorded token (\"ptsched:v1:...\") — copy it from a failure's repro block",
+                                    val_span,
+                                ));
+                            }
+                            _ => {
+                                return Err(CompileError::syntax(
+                                    "expected schedule token (string literal)",
+                                    val_span,
+                                ));
+                            }
+                        }
+                    }
+                    "seed" => seed = Some(self.parse_test_config_int()?),
+                    "iteration" => iteration = Some(self.parse_test_config_int()?),
+                    other => {
+                        return Err(CompileError::syntax(
+                            format!("unknown test config key '{}' (expected schedule, seed, or iteration)", other),
+                            key_span,
+                        ));
+                    }
+                }
+                if matches!(self.peek().map(|t| &t.node), Some(Token::Comma)) {
+                    self.advance();
+                    continue;
+                }
+                break;
+            }
+            self.expect(&Token::RBracket)?;
+            if schedule.is_some() && (seed.is_some() || iteration.is_some()) {
+                return Err(CompileError::syntax(
+                    "a test pins either a schedule or a seed, not both",
+                    name_span,
+                ));
+            }
+            if iteration.is_some() && seed.is_none() {
+                return Err(CompileError::syntax(
+                    "iteration requires a seed (the pin is seed + iteration)",
+                    name_span,
+                ));
+            }
+        }
+
         // Parse test body
         self.skip_newlines();
         let body = self.parse_block()?;
@@ -768,6 +838,9 @@ impl<'a> Parser<'a> {
         let info = TestInfo {
             display_name,
             fn_name: fn_name.clone(),
+            schedule,
+            seed,
+            iteration,
         };
         let func = Spanned::new(Function {
             id: Uuid::new_v4(),
@@ -787,36 +860,74 @@ impl<'a> Parser<'a> {
         Ok((info, func))
     }
 
-    /// Parse `tests[scheduler: Strategy] { test "name" { ... } ... }`
-    fn parse_tests_decl(&mut self, existing_tests: &[TestInfo], existing_fns: &[Spanned<Function>]) -> Result<(Spanned<TestsDecl>, Vec<TestInfo>, Vec<Spanned<Function>>), CompileError> {
-        let tests_tok = self.expect(&Token::Tests)?;
-        let start = tests_tok.span.start;
+    /// Parse an integer value in a tests/test config bracket.
+    fn parse_test_config_int(&mut self) -> Result<u64, CompileError> {
+        let val = self.advance().ok_or_else(|| {
+            CompileError::syntax("expected integer value", Span::new(0, 0))
+        })?;
+        match &val.node {
+            Token::IntLit(n) if *n >= 0 => Ok(*n as u64),
+            _ => Err(CompileError::syntax(
+                "expected a non-negative integer literal",
+                val.span,
+            )),
+        }
+    }
 
-        // Parse bracket dep: [scheduler: Ident]
+    /// Parse `tests[scheduler: Strategy, seed: N, iterations: M] { test "name" { ... } ... }`
+    fn parse_tests_decl(&mut self, existing_tests: &[TestInfo], existing_fns: &[Spanned<Function>]) -> Result<(Spanned<TestsDecl>, Vec<TestInfo>, Vec<Spanned<Function>>), CompileError> {
+        let tests_span = self.expect(&Token::Tests)?.span;
+        let start = tests_span.start;
+
+        // Parse bracket config: [scheduler: Ident, seed: Int, iterations: Int]
         self.expect(&Token::LBracket)?;
-        let key_tok = self.expect_ident()?;
-        if key_tok.node != "scheduler" {
+        let mut strategy = "Sequential".to_string();
+        let mut saw_scheduler = false;
+        let mut block_seed: Option<u64> = None;
+        let mut block_iterations: Option<u64> = None;
+        loop {
+            let key_tok = self.expect_ident()?;
+            let key = key_tok.node.clone();
+            let key_span = key_tok.span;
+            self.expect(&Token::Colon)?;
+            match key.as_str() {
+                "scheduler" => {
+                    let strategy_tok = self.expect_ident()?;
+                    strategy = match strategy_tok.node.as_str() {
+                        "Sequential" => "Sequential".to_string(),
+                        "RoundRobin" => "RoundRobin".to_string(),
+                        "Random" => "Random".to_string(),
+                        "Exhaustive" => "Exhaustive".to_string(),
+                        other => {
+                            return Err(CompileError::syntax(
+                                format!("unknown scheduler strategy '{}' (expected Sequential, RoundRobin, Random, or Exhaustive)", other),
+                                strategy_tok.span,
+                            ));
+                        }
+                    };
+                    saw_scheduler = true;
+                }
+                "seed" => block_seed = Some(self.parse_test_config_int()?),
+                "iterations" => block_iterations = Some(self.parse_test_config_int()?),
+                other => {
+                    return Err(CompileError::syntax(
+                        format!("unknown tests config key '{}' (expected scheduler, seed, or iterations)", other),
+                        key_span,
+                    ));
+                }
+            }
+            if matches!(self.peek().map(|t| &t.node), Some(Token::Comma)) {
+                self.advance();
+                continue;
+            }
+            break;
+        }
+        if !saw_scheduler {
             return Err(CompileError::syntax(
-                format!("expected 'scheduler' in tests bracket, found '{}'", key_tok.node),
-                key_tok.span,
+                "tests config must name a scheduler (Sequential, RoundRobin, Random, or Exhaustive)",
+                tests_span,
             ));
         }
-        self.expect(&Token::Colon)?;
-
-        // Expect strategy name: Sequential, RoundRobin, Random, Exhaustive
-        let strategy_tok = self.expect_ident()?;
-        let strategy = match strategy_tok.node.as_str() {
-            "Sequential" => "Sequential".to_string(),
-            "RoundRobin" => "RoundRobin".to_string(),
-            "Random" => "Random".to_string(),
-            "Exhaustive" => "Exhaustive".to_string(),
-            other => {
-                return Err(CompileError::syntax(
-                    format!("unknown scheduler strategy '{}' (expected Sequential, RoundRobin, Random, or Exhaustive)", other),
-                    strategy_tok.span,
-                ));
-            }
-        };
         self.expect(&Token::RBracket)?;
 
         // Parse body: { test "name" { ... } ... }
@@ -850,6 +961,8 @@ impl<'a> Parser<'a> {
         let decl = Spanned::new(TestsDecl {
             id: Uuid::new_v4(),
             strategy,
+            seed: block_seed,
+            iterations: block_iterations,
         }, Span::new(start, end));
 
         Ok((decl, block_tests, block_functions))

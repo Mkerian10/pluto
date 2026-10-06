@@ -312,6 +312,17 @@ fn compute_test_dependency_hashes(program: &Program) -> BTreeMap<String, String>
 
         // Hash the sorted dependency list along with function bodies
         let mut hasher = DefaultHasher::new();
+        // The test's pin config is part of its identity: editing a
+        // [schedule:/seed:] bracket must re-run the test even when the
+        // body is unchanged.
+        test_info.schedule.hash(&mut hasher);
+        test_info.seed.hash(&mut hasher);
+        test_info.iteration.hash(&mut hasher);
+        if let Some(tests_decl) = &program.tests {
+            tests_decl.node.strategy.hash(&mut hasher);
+            tests_decl.node.seed.hash(&mut hasher);
+            tests_decl.node.iterations.hash(&mut hasher);
+        }
         for dep_name in &deps {
             // Hash the name
             dep_name.hash(&mut hasher);

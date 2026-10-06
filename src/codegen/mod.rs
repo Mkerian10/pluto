@@ -959,24 +959,56 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             let string_new_ref = module.declare_func_in_func(runtime.get("__pluto_string_new"), builder.func);
             let test_run_ref = module.declare_func_in_func(runtime.get("__pluto_test_run"), builder.func);
 
-            // Determine strategy from program.tests (or default to Sequential for bare tests)
-            let (strategy_int, seed_int, iterations_int) = if let Some(tests_decl) = &program.tests {
+            // Block-level config from program.tests (bare tests → Sequential,
+            // 1 iteration). CLI env vars still override at runtime.
+            let (block_strategy, block_seed, block_iterations) = if let Some(tests_decl) = &program.tests {
                 let s = match tests_decl.node.strategy.as_str() {
                     "RoundRobin" => 1i64,
                     "Random" => 2i64,
                     "Exhaustive" => 3i64,
                     _ => 0i64, // Sequential
                 };
-                (s, 0i64, 100i64) // seed + iterations come from CLI env vars at runtime
+                (
+                    s,
+                    tests_decl.node.seed.unwrap_or(0) as i64,
+                    tests_decl.node.iterations.unwrap_or(100) as i64,
+                )
             } else {
-                (0i64, 0i64, 1i64) // bare tests → Sequential, 1 iteration
+                (0i64, 0i64, 1i64)
             };
 
-            let strategy_val = builder.ins().iconst(types::I64, strategy_int);
-            let seed_val = builder.ins().iconst(types::I64, seed_int);
-            let iterations_val = builder.ins().iconst(types::I64, iterations_int);
-
             for test in &program.test_info {
+                // Per-test pins override the block (rfc-test-harness):
+                // a schedule pin replays its trace; a seed pin runs exactly
+                // Random iteration M of seed N (one run, run_seed = N + M).
+                let (strategy_int, seed_int, iterations_int) = if test.schedule.is_some() {
+                    (4i64, 0i64, 1i64) // Replay
+                } else if let Some(s) = test.seed {
+                    let run_seed = s.wrapping_add(test.iteration.unwrap_or(0)) as i64;
+                    (2i64, run_seed, 1i64) // Random, single pinned run
+                } else {
+                    (block_strategy, block_seed, block_iterations)
+                };
+                let strategy_val = builder.ins().iconst(types::I64, strategy_int);
+                let seed_val = builder.ins().iconst(types::I64, seed_int);
+                let iterations_val = builder.ins().iconst(types::I64, iterations_int);
+
+                // Pinned schedule token as a NUL-terminated data object
+                // (0 = no pin).
+                let schedule_val = if let Some(token) = &test.schedule {
+                    let mut data_desc = DataDescription::new();
+                    let mut bytes = token.as_bytes().to_vec();
+                    bytes.push(0);
+                    data_desc.define(bytes.into_boxed_slice());
+                    let data_id = module.declare_anonymous_data(false, false)
+                        .map_err(|e| CompileError::codegen(format!("declare schedule data error: {e}")))?;
+                    module.define_data(data_id, &data_desc)
+                        .map_err(|e| CompileError::codegen(format!("define schedule data error: {e}")))?;
+                    let gv = module.declare_data_in_func(data_id, builder.func);
+                    builder.ins().global_value(types::I64, gv)
+                } else {
+                    builder.ins().iconst(types::I64, 0)
+                };
                 // Create Pluto string for the test name
                 let mut data_desc = DataDescription::new();
                 let mut bytes = test.display_name.as_bytes().to_vec();
@@ -1002,8 +1034,8 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                 let test_func_ref = module.declare_func_in_func(*test_func_id, builder.func);
                 let fn_addr = builder.ins().func_addr(types::I64, test_func_ref);
 
-                // call __pluto_test_run(fn_ptr, strategy, seed, iterations)
-                builder.ins().call(test_run_ref, &[fn_addr, strategy_val, seed_val, iterations_val]);
+                // call __pluto_test_run(fn_ptr, strategy, seed, iterations, schedule)
+                builder.ins().call(test_run_ref, &[fn_addr, strategy_val, seed_val, iterations_val, schedule_val]);
 
                 // call __pluto_test_pass()
                 builder.ins().call(test_pass_ref, &[]);

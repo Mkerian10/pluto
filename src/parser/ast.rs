@@ -29,13 +29,24 @@ pub struct Program {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestsDecl {
     pub id: Uuid,
-    pub strategy: String,  // "Sequential", "RoundRobin", "Random"
+    pub strategy: String,  // "Sequential", "RoundRobin", "Random", "Exhaustive"
+    /// Block-level `seed:` — base seed for Random runs.
+    pub seed: Option<u64>,
+    /// Block-level `iterations:` — Random run count.
+    pub iterations: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestInfo {
     pub display_name: String,
     pub fn_name: String,
+    /// Per-test `[schedule: "ptsched:v1:..."]` pin (rfc-test-harness): the
+    /// test replays this recorded trace, overriding the block strategy.
+    pub schedule: Option<String>,
+    /// Per-test `[seed: N, iteration: M]` pin: run exactly Random iteration
+    /// M of seed N (a single run with run_seed = N + M).
+    pub seed: Option<u64>,
+    pub iteration: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

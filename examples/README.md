@@ -104,6 +104,14 @@ Demonstrates Pluto's built-in test framework with `test` blocks, `expect()` asse
 cargo run -- test examples/testing/main.pt
 ```
 
+## deterministic-testing
+
+Demonstrates the deterministic scheduler harness: a `tests[scheduler: Random, seed: N, iterations: M]` block that fixes the schedule sampling in source, and a per-test pin (`test "name" [seed: N, iteration: M]`) that re-runs one exact interleaving as a permanent regression test. Failure output prints a repro block (strategy, seed, schedule token) that can be replayed with `pluto test --schedule ptsched:v1:...` or pinned with `[schedule: "..."]`.
+
+```bash
+cargo run -- test examples/deterministic-testing/main.pt
+```
+
 ## wrapping
 
 Demonstrates integer overflow semantics: signed 64-bit overflow on `+`/`-`/`*` is a defect that aborts the program (never a catchable error), and the `wrapping_add`/`wrapping_sub`/`wrapping_mul` builtins are the explicit escape hatch for deliberately-modular arithmetic (an FNV-style string mixer whose state multiply wraps mod 2^64).
