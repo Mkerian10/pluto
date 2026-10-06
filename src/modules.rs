@@ -1473,6 +1473,18 @@ impl VisitMut for ModuleRewriter<'_> {
                 }
                 return;
             }
+            // Typed catch handlers name error declarations, which Raise
+            // already prefixes — a module catching its own (or a nested
+            // import's) errors needs both sides renamed together.
+            Expr::Catch { handlers, .. } => {
+                for handler in handlers.iter_mut() {
+                    if let CatchHandler::Typed { error_type, .. } = handler {
+                        if self.module_prog.errors.iter().any(|e| e.node.name.node == error_type.node) {
+                            error_type.node = prefix_name(self.module_name, &error_type.node);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         // Recurse into sub-expressions
@@ -1510,6 +1522,15 @@ impl VisitMut for ModuleRewriter<'_> {
             Stmt::Scope { bindings, .. } => {
                 for binding in bindings {
                     prefix_type_expr(&mut binding.ty.node, self.module_name, self.module_prog);
+                }
+            }
+            // Same renaming as typed catch handlers: the asserted error
+            // type must track the declaration's prefixed name.
+            Stmt::ExpectRaises { error_type, .. } => {
+                if let Some(et) = error_type
+                    && self.module_prog.errors.iter().any(|e| e.node.name.node == et.node)
+                {
+                    et.node = prefix_name(self.module_name, &et.node);
                 }
             }
             _ => {}

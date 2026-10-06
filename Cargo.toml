@@ -762,3 +762,7 @@ harness = false
 [[bench]]
 name = "visitor_overhead"
 harness = false
+
+[[test]]
+name = "wal"
+path = "tests/integration/wal.rs"

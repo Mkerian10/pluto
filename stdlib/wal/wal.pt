@@ -1,0 +1,592 @@
+// std.wal — a write-ahead log, as evidence.
+//
+// The library answer to crash-ambiguity: make the INTENT durable before
+// the EFFECT, so a process that dies mid-effect can be resurrected and
+// finish the job. Linearity is the discipline for the living process;
+// the WAL is the same discipline for the resurrected one — the log
+// entry is the obligation that survives the crash.
+//
+// The protocol is the typestate:
+//
+//   wal.open(path)        → Wal<Unrecovered>   (an intent, not a handle)
+//   .recover()            → Wal<Ready>         (the only door to appends)
+//   .replay() / .latest()                      (what survived the crash)
+//   .append(key, data)                         (durable when it returns)
+//   .mark_applied()                            (acknowledge effects)
+//   .checkpoint()                              (drop acknowledged history)
+//   .close()              → Wal<Closed>        (inert)
+//
+// A Wal<Unrecovered> has NO append method: using a log before reading
+// what it already holds is the classic replay bug, and here it is a
+// compile error — the method exists only where S == Ready. All live
+// states are must_release, so abandoning a log mid-protocol (leaking
+// its fd, or dropping unacknowledged intent on the floor) is also a
+// compile error, not a review finding.
+//
+// Durability: append() writes the record and then fdatasync-equivalents
+// it (full-durability sync on Darwin, see std.fs) — when append returns,
+// the intent is on disk. A failed write or sync destroys the durability
+// warrant for the descriptor exactly as in std.fs, and the same honesty
+// applies: the error carries the log as Wal<Poisoned>, whose only
+// method is discard(). There is no way to keep appending to a log whose
+// warrant is gone.
+//
+// Recovery and the torn tail: a crash can leave a partial record at the
+// end of the file. recover() scans frames, verifies each record's
+// CRC-32C, stops at the first frame that is short or fails its
+// checksum, and TRUNCATES the file there — the torn tail is cut, cut
+// durably, and reported in the Recovery outcome (truncated_bytes), not
+// silently swallowed and not an error: a torn tail is the expected
+// signature of a crash mid-append. Everything before the cut is intact
+// by checksum; everything after a bad frame is unreachable by
+// construction (framing is sequential), which is the honest limit of
+// any sequential log.
+//
+// Keyed entries: every record carries a caller key. Replay is delivered
+// both raw (replay(), in append order, with offsets) and deduplicated
+// (latest(), last write per key) — the dedup half of exactly-once
+// across crashes: re-applying by key is idempotent when the applier
+// honors keys.
+//
+// Counters and checkpointing: the log tracks appended vs applied record
+// counts (recovered entries count as appended-but-unapplied, so a
+// freshly recovered log cannot be checkpointed before its replay is
+// acknowledged). `invariant self.applied <= self.appended` is
+// discharged at every write site. checkpoint() returns a typed
+// Refused outcome (log untouched) unless everything appended has been
+// acknowledged via mark_applied(); then it durably truncates the log
+// to empty, starts a new generation, and returns Done. Record offsets
+// returned by append() are strictly increasing within a generation;
+// checkpoint resets them to zero.
+//
+// On-disk format (all integers big-endian unsigned 32-bit):
+//
+//   record  := payload_len(4) | crc32c(payload)(4) | payload
+//   payload := key_len(4) | key utf-8 bytes | data bytes
+//
+// std.wal is pure Pluto over its stdlib siblings: std.fs for the
+// one-shot path operations and std.hash for CRC-32C. The long-lived
+// append descriptor is bound directly to the runtime's fs externs —
+// the same authority std.fs binds — because must-release evidence
+// cannot live in a field: a Wal cannot CONTAIN a File, so the Wal is
+// itself the linear evidence, holding the raw descriptor privately.
+// (The fs errors std.wal absorbs are re-raised as wal errors below;
+// the wrapping is exactly the tax module re-exports would remove.)
+
+// Sibling imports: resolved relative to this module's own directory
+// (child first, then one parent hop), so the stdlib names its own
+// layout instead of its mount point.
+import fs
+import hash
+
+// ── Errors ───────────────────────────────────────────────────────────
+
+// A definite local failure (open, read, recovery truncate, close): the
+// raw errno is captured at the syscall site. For close(), the fd is
+// released regardless — as in std.fs, a close report is testimony, not
+// a retry invitation.
+pub error WalError {
+    path: string
+    code: int
+    message: string
+}
+
+// A write or sync on the live log failed: the durability warrant for
+// the descriptor is destroyed, and the log degrades. The payload is the
+// log in its honest post-failure state — must-release, so a wildcard
+// catch cannot swallow it; only a typed handler that discards (and then
+// re-opens and re-recovers) is legal.
+pub error Degraded {
+    wal: Wal<Poisoned>
+    code: int
+    message: string
+}
+
+// ── Runtime externs ──────────────────────────────────────────────────
+// The append descriptor's operations, bound to the same runtime symbols
+// std.fs binds (see the header for why the fd lives here).
+
+extern fn __pluto_fs_open_append(path: string) int
+extern fn __pluto_fs_write_bytes(fd: int, data: bytes) int
+extern fn __pluto_fs_truncate(fd: int, len: int) int
+extern fn __pluto_fs_sync(fd: int) int
+extern fn __pluto_fs_sync_data(fd: int) int
+extern fn __pluto_fs_close(fd: int) int
+extern fn __pluto_fs_errstr(code: int) string
+
+// ── Typestate markers ────────────────────────────────────────────────
+// Plain classes used as phantom type arguments; never constructed.
+
+pub class Unrecovered { tag: int }
+pub class Ready { tag: int }
+pub class Poisoned { tag: int }
+pub class Closed { tag: int }
+
+// ── Values ───────────────────────────────────────────────────────────
+
+// One surviving record, delivered at replay: the caller's key, the
+// caller's bytes, and the byte offset the record starts at.
+pub class Entry {
+    key: string
+    data: bytes
+    offset: int
+}
+
+// The typed outcome of recover(): how much intent survived, and how
+// many bytes of torn tail were cut (0 on a clean start or clean
+// shutdown — nonzero is the signature of a crash mid-append, durably
+// repaired, not an error).
+pub class Recovery {
+    recovered: int
+    truncated_bytes: int
+}
+
+// The outcome of a checkpoint attempt. Refused is the EXPECTED case
+// when intent lacks acknowledgment — the log is untouched, and the
+// exhaustive match makes the caller look. It is a value, not an error,
+// deliberately: the error channel of a typestate method is reserved for
+// failures that destroy the warrant (the linearity analysis treats any
+// raising call as consuming the binding on the error path, so mixing a
+// benign refusal into the error set would cost callers their log over
+// a refusal that touched nothing).
+pub enum Checkpoint {
+    Done
+    Refused { appended: int, applied: int }
+}
+
+// ── The log ──────────────────────────────────────────────────────────
+
+pub class Wal<S> {
+    priv fd: int           // append descriptor; meaningful only in Ready/Poisoned
+    priv path: string
+    priv appended: int     // records this generation owes acknowledgment for
+    priv applied: int      // records acknowledged via mark_applied()
+    priv tail: int         // byte offset of the log's end (next append lands here)
+    priv entries: [Entry]  // what recovery delivered (Ready only)
+    priv cut: int          // torn-tail bytes removed at recovery
+
+    // Discharged at every construction and write site. applied never
+    // overtakes appended: checkpoint's refusal is backed by a proof,
+    // not a convention.
+    invariant self.appended >= 0
+    invariant self.applied >= 0
+    invariant self.applied <= self.appended
+    invariant self.tail >= 0
+    invariant self.cut >= 0
+
+    // Live states carry obligations: an Unrecovered log is unexecuted
+    // intent-to-recover, a Ready log is an open descriptor plus
+    // possibly-unacknowledged intent, a Poisoned log is a descriptor
+    // whose warrant died. None may be silently dropped.
+    must_release S == Unrecovered
+    must_release S == Ready
+    must_release S == Poisoned
+
+    // ── Recovery ─────────────────────────────────────────────────────
+
+    // Read what survived, cut the torn tail durably, open the append
+    // descriptor. The only door to Ready: a log is never appendable
+    // before its surviving intent has been surfaced. Raises WalError.
+    fn recover(self) Wal<Ready>
+        where S == Unrecovered
+    {
+        let data = load_log(self.path)!
+        let n = data.len()
+
+        // Scan frames; stop at the first short or checksum-failing one.
+        let mut found: [Entry] = []
+        let mut off = 0
+        let mut good = 0
+        let mut scanning = true
+        while scanning {
+            if n - off < 8 {
+                scanning = false
+            } else {
+                let plen = be32(data, off)
+                if plen < 4 {
+                    scanning = false
+                } else if off + 8 + plen > n {
+                    scanning = false
+                } else {
+                    let stored_crc = be32(data, off + 4)
+                    let mut payload = bytes_new()
+                    let mut i = off + 8
+                    let stop = off + 8 + plen
+                    while i < stop {
+                        payload.push(data[i])
+                        i = i + 1
+                    }
+                    if hash.crc32c(payload) != stored_crc {
+                        scanning = false
+                    } else {
+                        let klen = be32(payload, 0)
+                        if klen > plen - 4 {
+                            scanning = false
+                        } else {
+                            let mut keyb = bytes_new()
+                            let mut j = 4
+                            while j < 4 + klen {
+                                keyb.push(payload[j])
+                                j = j + 1
+                            }
+                            let mut body = bytes_new()
+                            while j < plen {
+                                body.push(payload[j])
+                                j = j + 1
+                            }
+                            found.push(Entry { key: keyb.to_string(), data: body, offset: off })
+                            off = off + 8 + plen
+                            good = off
+                        }
+                    }
+                }
+            }
+        }
+
+        // Cut the torn tail, then open the descriptor and make the cut
+        // durable through it. A failure anywhere here leaves no live
+        // descriptor behind.
+        // The scan stops at or before the buffer's end, so 0 <= good <= n —
+        // but that bound lives across loop iterations, outside the prover's
+        // reach. Assert it to feed the construction proofs below (and to
+        // trap loudly if the scanner is ever broken).
+        let torn = n - good
+        assert good >= 0
+        assert torn >= 0
+        if torn > 0 {
+            fs.truncate(self.path, good) catch e: fs.NotFound {
+                raise WalError { path: self.path, code: 0, message: "log vanished during recovery" }
+            } catch e: fs.FileError {
+                raise WalError { path: self.path, code: e.code, message: e.message }
+            }
+        }
+        let fd = __pluto_fs_open_append(self.path)
+        if fd < 0 {
+            let code = 0 - fd
+            raise WalError { path: self.path, code: code, message: __pluto_fs_errstr(code) }
+        }
+        if torn > 0 {
+            let r = __pluto_fs_sync(fd)
+            if r < 0 {
+                let code = 0 - r
+                __pluto_fs_close(fd)
+                raise WalError { path: self.path, code: code, message: __pluto_fs_errstr(code) }
+            }
+        }
+
+        // Recovered intent counts as appended-but-unapplied: a fresh
+        // recovery cannot be checkpointed until its replay is
+        // acknowledged.
+        return Wal<Ready> {
+            fd: fd,
+            path: self.path,
+            appended: found.len(),
+            applied: 0,
+            tail: good,
+            entries: found,
+            cut: torn
+        }
+    }
+
+    // Walk away from an unrecovered log without touching the file: the
+    // intent on disk stays for the next recover(). Discharges the
+    // obligation explicitly — the one thing a must_release value cannot
+    // do silently.
+    fn abandon(self) Wal<Closed>
+        where S == Unrecovered
+    {
+        return Wal<Closed> {
+            fd: 0 - 1,
+            path: self.path,
+            appended: 0,
+            applied: 0,
+            tail: 0,
+            entries: [],
+            cut: 0
+        }
+    }
+
+    // ── Reading what survived ────────────────────────────────────────
+
+    // The surviving records, in append order.
+    fn replay(self) [Entry]
+        where S == Ready
+    {
+        return self.entries
+    }
+
+    // Last write per key — the dedup view for idempotent re-application.
+    fn latest(self) Map<string, bytes>
+        where S == Ready
+    {
+        let mut m = Map<string, bytes> {}
+        let mut i = 0
+        let n = self.entries.len()
+        while i < n {
+            m.insert(self.entries[i].key, self.entries[i].data)
+            i = i + 1
+        }
+        return m
+    }
+
+    // The typed recovery outcome: what survived, what was cut.
+    fn recovery(self) Recovery
+        where S == Ready
+    {
+        return Recovery { recovered: self.entries.len(), truncated_bytes: self.cut }
+    }
+
+    // ── Appending ────────────────────────────────────────────────────
+
+    // Append one keyed record and make it durable before returning:
+    // write-all, then data sync. Returns the byte offset the record
+    // landed at (strictly increasing within a generation). On failure
+    // the prefix state of the file is unknown and the descriptor's
+    // warrant is destroyed: the log degrades, and this binding is
+    // consumed into the Degraded payload.
+    //
+    // A record's payload must fit the 32-bit frame header. The refusal
+    // is checked BEFORE any byte is written, so it raises WalError with
+    // the log sound — the same input-condition/destroyed-warrant split
+    // fs.truncate draws.
+    fn append(mut self, key: string, data: bytes) int
+        where S == Ready
+    {
+        let keyb = key.to_bytes()
+        let klen = keyb.len()
+        if klen + data.len() + 4 > 0xFFFFFFFF {
+            raise WalError {
+                path: self.path,
+                code: 0,
+                message: "append: record exceeds the 4 GiB frame limit"
+            }
+        }
+        let mut payload = push_be32(bytes_new(), klen)
+        let mut i = 0
+        while i < klen {
+            payload.push(keyb[i])
+            i = i + 1
+        }
+        let dlen = data.len()
+        i = 0
+        while i < dlen {
+            payload.push(data[i])
+            i = i + 1
+        }
+
+        let mut frame = push_be32(bytes_new(), payload.len())
+        frame = push_be32(frame, hash.crc32c(payload))
+        i = 0
+        let plen = payload.len()
+        while i < plen {
+            frame.push(payload[i])
+            i = i + 1
+        }
+
+        let w = __pluto_fs_write_bytes(self.fd, frame)
+        if w < 0 {
+            let code = 0 - w
+            raise Degraded {
+                wal: Wal<Poisoned> {
+                    fd: self.fd,
+                    path: self.path,
+                    appended: self.appended,
+                    applied: self.applied,
+                    tail: self.tail,
+                    entries: self.entries,
+                    cut: self.cut
+                },
+                code: code,
+                message: __pluto_fs_errstr(code)
+            }
+        }
+        let r = __pluto_fs_sync_data(self.fd)
+        if r < 0 {
+            let code = 0 - r
+            raise Degraded {
+                wal: Wal<Poisoned> {
+                    fd: self.fd,
+                    path: self.path,
+                    appended: self.appended,
+                    applied: self.applied,
+                    tail: self.tail,
+                    entries: self.entries,
+                    cut: self.cut
+                },
+                code: code,
+                message: __pluto_fs_errstr(code)
+            }
+        }
+
+        let off = self.tail
+        self.tail = self.tail + frame.len()
+        self.appended = self.appended + 1
+        return off
+    }
+
+    // ── Acknowledgment and checkpoint ────────────────────────────────
+
+    // Acknowledge every record appended (or recovered) so far: the
+    // caller asserts their effects have been applied. This is the
+    // caller's testimony — the log cannot see the effects — and it is
+    // what unlocks checkpoint().
+    fn mark_applied(mut self)
+        where S == Ready
+    {
+        self.applied = self.appended
+    }
+
+    // Records appended (or recovered) but not yet acknowledged.
+    fn pending(self) int
+        where S == Ready
+    {
+        return self.appended - self.applied
+    }
+
+    // Drop acknowledged history: durably truncate the log to empty and
+    // begin a new generation (offsets restart at zero). Returns Refused
+    // — log untouched — while any record lacks acknowledgment. A failed
+    // truncate or sync destroys the warrant like any other write
+    // failure: the log degrades.
+    fn checkpoint(mut self) Checkpoint
+        where S == Ready
+    {
+        if self.applied < self.appended {
+            return Checkpoint.Refused { appended: self.appended, applied: self.applied }
+        }
+        let t = __pluto_fs_truncate(self.fd, 0)
+        if t < 0 {
+            let code = 0 - t
+            raise Degraded {
+                wal: Wal<Poisoned> {
+                    fd: self.fd,
+                    path: self.path,
+                    appended: self.appended,
+                    applied: self.applied,
+                    tail: self.tail,
+                    entries: self.entries,
+                    cut: self.cut
+                },
+                code: code,
+                message: __pluto_fs_errstr(code)
+            }
+        }
+        let r = __pluto_fs_sync(self.fd)
+        if r < 0 {
+            let code = 0 - r
+            raise Degraded {
+                wal: Wal<Poisoned> {
+                    fd: self.fd,
+                    path: self.path,
+                    appended: self.appended,
+                    applied: self.applied,
+                    tail: self.tail,
+                    entries: self.entries,
+                    cut: self.cut
+                },
+                code: code,
+                message: __pluto_fs_errstr(code)
+            }
+        }
+        self.tail = 0
+        self.appended = 0
+        self.applied = 0
+        self.entries = []
+        self.cut = 0
+        return Checkpoint.Done
+    }
+
+    // ── Exits ────────────────────────────────────────────────────────
+
+    // Release the descriptor and discharge the obligation. Unapplied
+    // intent stays in the file for the next recover() — closing is
+    // legal at any point; losing the fd silently is not. Surfaces the
+    // close() result as WalError; either way the fd is gone.
+    fn close(self) Wal<Closed>
+        where S == Ready
+    {
+        let r = __pluto_fs_close(self.fd)
+        if r < 0 {
+            let code = 0 - r
+            raise WalError { path: self.path, code: code, message: __pluto_fs_errstr(code) }
+        }
+        return Wal<Closed> {
+            fd: self.fd,
+            path: self.path,
+            appended: 0,
+            applied: 0,
+            tail: 0,
+            entries: [],
+            cut: 0
+        }
+    }
+
+    // The only exit from Poisoned. Closes the fd and never raises: the
+    // warrant is already destroyed, so a close report would be
+    // testimony about nothing. Recovery is open() → recover() — the
+    // intent that reached the disk durably is still there.
+    fn discard(self) Wal<Closed>
+        where S == Poisoned
+    {
+        __pluto_fs_close(self.fd)
+        return Wal<Closed> {
+            fd: self.fd,
+            path: self.path,
+            appended: 0,
+            applied: 0,
+            tail: 0,
+            entries: [],
+            cut: 0
+        }
+    }
+}
+
+// ── Opening ──────────────────────────────────────────────────────────
+
+// Name a log. No descriptor is opened and nothing is read: the value is
+// intent-to-recover, and the type system will not let it do anything
+// else (or be dropped) until recover() runs.
+pub fn open(path: string) Wal<Unrecovered> {
+    return Wal<Unrecovered> {
+        fd: 0 - 1,
+        path: path,
+        appended: 0,
+        applied: 0,
+        tail: 0,
+        entries: [],
+        cut: 0
+    }
+}
+
+// ── Internal helpers ─────────────────────────────────────────────────
+
+// Read the whole log; a missing file is an empty log (first boot), any
+// other failure is a WalError.
+fn load_log(path: string) bytes {
+    let b = fs.read_all_bytes(path) catch e: fs.NotFound {
+        return bytes_new()
+    } catch e: fs.FileError {
+        raise WalError { path: path, code: e.code, message: e.message }
+    }
+    return b
+}
+
+// Big-endian unsigned 32-bit read. Caller guarantees off+4 <= data.len().
+fn be32(data: bytes, off: int) int {
+    return ((data[off] as int) << 24)
+        | ((data[off + 1] as int) << 16)
+        | ((data[off + 2] as int) << 8)
+        | (data[off + 3] as int)
+}
+
+// Big-endian unsigned 32-bit append; returns the extended buffer
+// (bytes are values — mutating a parameter would mutate a copy).
+// append() guards the frame limit before encoding, so v fits 32 bits.
+fn push_be32(buf: bytes, v: int) bytes {
+    let mut b = buf
+    b.push(((v >> 24) & 0xFF) as byte)
+    b.push(((v >> 16) & 0xFF) as byte)
+    b.push(((v >> 8) & 0xFF) as byte)
+    b.push((v & 0xFF) as byte)
+    return b
+}
