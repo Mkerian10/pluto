@@ -1,0 +1,45 @@
+import cache
+
+// Module re-exports (rfc-module-semantics section 7).
+//
+// `cache` is built on a lower-level `backend` module, and parts of
+// backend are honestly part of cache's own surface: cache.put() raises
+// backend's StoreFull, and cache hands out backend's Entry values. With
+//
+//   pub import backend.StoreFull
+//   pub import backend.Entry
+//
+// in cache.pt, this program imports ONLY cache and still names both —
+// `cache.StoreFull` in a typed catch, `cache.Entry` in a type position.
+// The re-export is an alias, not a copy: the error raised deep inside
+// backend and the one caught here as cache.StoreFull are a single
+// declaration, so typed-catch coverage and structural identity agree.
+//
+// Without re-exports, every consumer of cache would need `import
+// backend` too — leaking the dependency and doubling the import list
+// (std.wal hit exactly this against std.fs).
+//
+// Run:
+//   cargo run -- run examples/reexports/main.pt
+
+fn main() {
+    let mut c = cache.new_cache(2)
+    c.put("a", 1) catch e: cache.StoreFull {
+        print("unexpected: store full")
+        return
+    }
+    c.put("b", 2) catch e: cache.StoreFull {
+        print("unexpected: store full")
+        return
+    }
+
+    // The third put overflows: the error arrives under cache's name.
+    c.put("c", 3) catch e: cache.StoreFull {
+        print(f"store full at {e.capacity} entries")
+    }
+
+    let found: cache.Entry? = c.get("b")
+    if found != none {
+        print(f"b = {found.value}")
+    }
+}

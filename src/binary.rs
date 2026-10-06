@@ -45,7 +45,8 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// v23: TestsDecl.seed/iterations, TestInfo.schedule/seed/iteration —
 /// in-source test pins (rfc-test-harness phase 3).
 /// v24: DerivedInfo.perception_surface — decode-validated invariants (rfc-module-semantics section 4).
-const SCHEMA_VERSION: u32 = 24;
+/// v25: Program.reexports — `pub import module.Item` named re-exports (rfc-module-semantics section 7).
+const SCHEMA_VERSION: u32 = 25;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;

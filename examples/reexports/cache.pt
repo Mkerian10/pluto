@@ -1,0 +1,25 @@
+import backend
+pub import backend.StoreFull
+pub import backend.Entry
+
+// A thin caching layer over `backend`. The two re-exports above are the
+// parts of backend that are honestly part of this module's surface:
+// put() propagates backend.StoreFull, and get() returns backend.Entry
+// values. Consumers write cache.StoreFull / cache.Entry and never
+// import backend themselves.
+
+pub class Cache {
+    store: backend.Store
+
+    fn put(mut self, key: string, value: int) {
+        self.store.insert(key, value)!
+    }
+
+    fn get(self, key: string) backend.Entry? {
+        return self.store.find(key)
+    }
+}
+
+pub fn new_cache(capacity: int) Cache {
+    return Cache { store: backend.new_store(capacity) }
+}

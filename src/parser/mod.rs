@@ -421,10 +421,22 @@ impl<'a> Parser<'a> {
         let mut properties = Vec::new();
         self.skip_newlines();
 
-        // Parse imports first
-        while self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Import) {
-            imports.push(self.parse_import()?);
-            self.skip_newlines();
+        // Parse imports (and `pub import` re-exports) first
+        let mut reexports = Vec::new();
+        loop {
+            if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Import) {
+                imports.push(self.parse_import()?);
+                self.skip_newlines();
+            } else if self.peek().is_some()
+                && matches!(self.peek().expect("token should exist after is_some check").node, Token::Pub)
+                && self.peek_nth(1).is_some_and(|t| matches!(t.node, Token::Import))
+            {
+                self.advance(); // consume 'pub'
+                reexports.push(self.parse_reexport()?);
+                self.skip_newlines();
+            } else {
+                break;
+            }
         }
 
         while let Some(tok) = self.peek() {
@@ -490,6 +502,17 @@ impl<'a> Parser<'a> {
                         ));
                     }
                     app = Some(app_decl);
+                }
+                // `pub import module.Item` below the import block: still a
+                // re-export (a plain mid-file `import` stays an error).
+                Token::Import if is_pub => {
+                    if lifecycle != Lifecycle::Singleton {
+                        return Err(CompileError::syntax(
+                            "lifecycle modifiers (scoped, transient) can only be used on classes",
+                            tok.span,
+                        ));
+                    }
+                    reexports.push(self.parse_reexport()?);
                 }
                 Token::Class => {
                     let mut class = self.parse_class()?;
@@ -727,7 +750,7 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        Ok(Program { imports, functions, extern_fns,  classes, traits, enums, app, stages, system, errors, test_info, tests, fallible_extern_fns: Vec::new(), properties })
+        Ok(Program { imports, functions, extern_fns,  classes, traits, enums, app, stages, system, errors, test_info, tests, fallible_extern_fns: Vec::new(), properties, reexports })
     }
 
     /// Parse a bare `test "name" { body }` block into a TestInfo + synthetic Function.
@@ -996,6 +1019,31 @@ impl<'a> Parser<'a> {
 
         self.consume_statement_end()?;
         Ok(Spanned::new(ImportDecl { path, alias }, Span::new(start, end)))
+    }
+
+    /// `pub import fs.SyncError` — the `pub` is consumed by the caller.
+    /// The path needs at least two segments: the module(s), then the item.
+    fn parse_reexport(&mut self) -> Result<Spanned<ReexportDecl>, CompileError> {
+        let import_tok = self.expect(&Token::Import)?;
+        let start = import_tok.span.start;
+        let first = self.expect_ident()?;
+        let mut path = vec![first];
+        while self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Dot) {
+            self.advance(); // consume '.'
+            path.push(self.expect_ident()?);
+        }
+        let end = path.last().unwrap().span.end;
+        if path.len() < 2 {
+            return Err(CompileError::syntax(
+                format!(
+                    "a re-export names an item of an imported module: `pub import {}.<Item>` (to import a module, drop the `pub`)",
+                    path[0].node
+                ),
+                Span::new(start, end),
+            ));
+        }
+        self.consume_statement_end()?;
+        Ok(Spanned::new(ReexportDecl { path }, Span::new(start, end)))
     }
 
     fn parse_extern_fn(&mut self, is_pub: bool) -> Result<Spanned<ExternFnDecl>, CompileError> {

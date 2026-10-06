@@ -40,6 +40,14 @@ The write-ahead log as a stdlib module (`std.wal`): intent made durable before t
 cargo run -- run examples/wal/main.pt --stdlib stdlib
 ```
 
+## reexports
+
+Module re-exports (rfc-module-semantics section 7): `pub import backend.StoreFull` in a module makes the item part of that module's surface under its own name — an alias for the one declaration, never a copy, so an error raised deep inside the lower module and the one caught under the re-exporting module's name are a single type (typed-catch coverage and structural identity agree). The example is a `cache` module built on a `backend` module: cache re-exports backend's error and entry class, and `main.pt` imports only cache yet catches `cache.StoreFull` and types values as `cache.Entry?`. One item per line, no globs, no renaming; chains of re-exports canonicalize to the original declaration. Re-exporting something unimported, private, missing, or name-colliding is a compile error.
+
+```bash
+cargo run -- run examples/reexports/main.pt
+```
+
 ## env_example
 
 Demonstrates the `std.env` module for environment variable access: `get` (retrieve variable or empty string), `get_or` (with default fallback), `set` (set variable), `exists` (check if set), `remove` (delete variable), and `list_names` (enumerate all variables).

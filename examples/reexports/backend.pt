@@ -1,0 +1,39 @@
+// The low-level store: a bounded key-value list with a typed overflow
+// error. Nothing here knows about cache — the re-exports in cache.pt
+// decide which of these names become part of cache's surface.
+
+pub error StoreFull {
+    capacity: int
+}
+
+pub class Entry {
+    key: string
+    value: int
+}
+
+pub class Store {
+    capacity: int
+    entries: [Entry]
+
+    fn insert(mut self, key: string, value: int) {
+        if self.entries.len() >= self.capacity {
+            raise StoreFull { capacity: self.capacity }
+        }
+        self.entries.push(Entry { key: key, value: value })
+    }
+
+    fn find(self, key: string) Entry? {
+        let mut i = 0
+        while i < self.entries.len() {
+            if self.entries[i].key == key {
+                return self.entries[i]
+            }
+            i = i + 1
+        }
+        return none
+    }
+}
+
+pub fn new_store(capacity: int) Store {
+    return Store { capacity: capacity, entries: [] }
+}

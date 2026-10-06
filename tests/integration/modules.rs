@@ -563,6 +563,191 @@ app MyApp {
 // Transitive imports
 // ============================================================
 
+// ============================================================
+// Re-exports (rfc-module-semantics section 7): `pub import module.Item`
+// makes the item part of this module's surface under its own name — an
+// alias for the one declaration, never a copy.
+// ============================================================
+
+#[test]
+fn reexport_error_caught_under_alias() {
+    // The motivating shape: b builds on c and re-exports c's error, so
+    // b's consumers can catch it without importing c. The raise happens
+    // inside c's code; the catch names b.Boom; both are one declaration.
+    let out = run_project(&[
+        ("main.pluto", r#"import b
+
+fn main() {
+    let v = b.attempt() catch e: b.Boom {
+        f"caught {e.why}"
+    }
+    print(v)
+}
+"#),
+        ("b.pluto", r#"import c
+pub import c.Boom
+
+pub fn attempt() string {
+    return c.risky()!
+}
+"#),
+        ("c.pluto", r#"pub error Boom {
+    why: string
+}
+
+pub fn risky() string {
+    raise Boom { why: "as asked" }
+}
+"#),
+    ]);
+    assert_eq!(out, "caught as asked\n");
+}
+
+#[test]
+fn reexport_class_and_fn() {
+    let out = run_project(&[
+        ("main.pluto", r#"import b
+
+fn main() {
+    let p: b.Point = b.Point { x: 3, y: 4 }
+    print(b.norm1(p))
+}
+"#),
+        ("b.pluto", r#"import geom
+pub import geom.Point
+pub import geom.norm1
+"#),
+        ("geom.pluto", r#"pub class Point {
+    x: int
+    y: int
+}
+
+pub fn norm1(p: Point) int {
+    return p.x + p.y
+}
+"#),
+    ]);
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn reexport_enum_match() {
+    let out = run_project(&[
+        ("main.pluto", r#"import b
+
+fn main() {
+    let c = b.Color.Red
+    match c {
+        b.Color.Red {
+            print("red")
+        }
+        b.Color.Blue {
+            print("blue")
+        }
+    }
+}
+"#),
+        ("b.pluto", r#"import palette
+pub import palette.Color
+"#),
+        ("palette.pluto", r#"pub enum Color {
+    Red
+    Blue
+}
+"#),
+    ]);
+    assert_eq!(out, "red\n");
+}
+
+#[test]
+fn reexport_chain_resolves_to_one_declaration() {
+    // a re-exports b's re-export of c's error; the alias canonicalizes
+    // through the chain, so main's catch still names the one declaration.
+    let out = run_project(&[
+        ("main.pluto", r#"import a
+
+fn main() {
+    a.go() catch e: a.Boom {
+        print(f"caught {e.why}")
+        return
+    }
+    print("missed")
+}
+"#),
+        ("a.pluto", r#"import b
+pub import b.Boom
+
+pub fn go() {
+    b.go()!
+}
+"#),
+        ("b.pluto", r#"import c
+pub import c.Boom
+
+pub fn go() {
+    c.go()!
+}
+"#),
+        ("c.pluto", r#"pub error Boom {
+    why: string
+}
+
+pub fn go() {
+    raise Boom { why: "deep" }
+}
+"#),
+    ]);
+    assert_eq!(out, "caught deep\n");
+}
+
+#[test]
+fn reexport_of_unimported_module_rejected() {
+    compile_project_should_fail_with(
+        &[
+            ("main.pluto", "import b\n\nfn main() {\n    print(1)\n}\n"),
+            ("b.pluto", "pub import c.Boom\n\npub fn f() int {\n    return 1\n}\n"),
+            ("c.pluto", "pub error Boom {\n    why: string\n}\n"),
+        ],
+        "module 'c' is not imported here",
+    );
+}
+
+#[test]
+fn reexport_of_private_item_rejected() {
+    compile_project_should_fail_with(
+        &[
+            ("main.pluto", "import b\n\nfn main() {\n    print(1)\n}\n"),
+            ("b.pluto", "import c\npub import c.hidden\n"),
+            ("c.pluto", "fn hidden() int {\n    return 1\n}\n"),
+        ],
+        "it is private to module 'c'",
+    );
+}
+
+#[test]
+fn reexport_of_missing_item_rejected() {
+    compile_project_should_fail_with(
+        &[
+            ("main.pluto", "import b\n\nfn main() {\n    print(1)\n}\n"),
+            ("b.pluto", "import c\npub import c.Nowhere\n"),
+            ("c.pluto", "pub fn real() int {\n    return 1\n}\n"),
+        ],
+        "no such item in module 'c'",
+    );
+}
+
+#[test]
+fn reexport_colliding_with_local_declaration_rejected() {
+    compile_project_should_fail_with(
+        &[
+            ("main.pluto", "import b\n\nfn main() {\n    print(1)\n}\n"),
+            ("b.pluto", "import c\npub import c.Boom\n\npub error Boom {\n    code: int\n}\n"),
+            ("c.pluto", "pub error Boom {\n    why: string\n}\n"),
+        ],
+        "collides with a declaration of the same name",
+    );
+}
+
 #[test]
 fn module_typed_catch_of_own_error() {
     // The flattener prefixes an imported module's raise sites; typed

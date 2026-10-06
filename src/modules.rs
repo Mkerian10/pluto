@@ -276,6 +276,7 @@ fn load_directory_module(
             tests: None,
             fallible_extern_fns: Vec::new(),
             properties: Vec::new(),
+            reexports: Vec::new(),
         };
 
         let source_files = collect_source_files(dir)?;
@@ -283,6 +284,7 @@ fn load_directory_module(
         for file_path in source_files {
             let (program, _file_id) = load_file_auto(&file_path, source_map)?;
             merged.properties.extend(program.properties);
+            merged.reexports.extend(program.reexports);
             merged.functions.extend(program.functions);
             merged.extern_fns.extend(program.extern_fns);
             merged.classes.extend(program.classes);
@@ -427,6 +429,13 @@ fn resolve_module_imports(
     parent_origin: ImportOrigin,
 ) -> Result<(), CompileError> {
     if program.imports.is_empty() {
+        if let Some(r) = program.reexports.first() {
+            return Err(CompileError::module(format!(
+                "cannot re-export '{}': module '{}' is not imported here",
+                r.node.target_name(),
+                r.node.path[0].node
+            )));
+        }
         return Ok(());
     }
 
@@ -744,6 +753,181 @@ fn add_prefixed_items(
     Ok(())
 }
 
+/// Collect the re-export alias surface of a set of resolved imports:
+/// for each `pub import sub.Item` in module `m`, the name `m.Item` is an
+/// alias for the flattened declaration `m.sub.Item`. The imported
+/// modules' own re-export paths are already canonical (chains resolved
+/// when each module's own imports were flattened), so one join suffices.
+fn collect_alias_map(imports: &[(String, Program, ImportOrigin)]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for (module_name, module_prog, _origin) in imports {
+        for r in &module_prog.reexports {
+            let alias = prefix_name(module_name, r.node.item_name());
+            let canonical = prefix_name(module_name, &r.node.target_name());
+            map.insert(alias, canonical);
+        }
+    }
+    map
+}
+
+/// Applies re-export aliasing after flattening: every reference to an
+/// alias surface name is renamed to the canonical declaration name, so
+/// the alias and the original are one declaration everywhere downstream
+/// (typed catches match, struct identities agree, codegen sees one type).
+struct AliasRenamer<'a> {
+    renames: &'a HashMap<String, String>,
+}
+
+impl AliasRenamer<'_> {
+    fn rename(&self, name: &mut String) {
+        if let Some(canon) = self.renames.get(name.as_str()) {
+            *name = canon.clone();
+        }
+    }
+}
+
+impl VisitMut for AliasRenamer<'_> {
+    fn visit_type_expr_mut(&mut self, te: &mut Spanned<TypeExpr>) {
+        match &mut te.node {
+            TypeExpr::Named(name) => self.rename(name),
+            TypeExpr::Generic { name, .. } => self.rename(name),
+            TypeExpr::Qualified { module, name } => {
+                let joined = format!("{module}.{name}");
+                if let Some(canon) = self.renames.get(&joined) {
+                    te.node = TypeExpr::Named(canon.clone());
+                }
+            }
+            _ => {}
+        }
+        walk_type_expr_mut(self, te);
+    }
+
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        match &mut expr.node {
+            Expr::Call { name, .. } => self.rename(&mut name.node),
+            Expr::StructLit { name, .. } => self.rename(&mut name.node),
+            Expr::EnumUnit { enum_name, .. } | Expr::EnumData { enum_name, .. } => {
+                self.rename(&mut enum_name.node)
+            }
+            Expr::Ident(name) => self.rename(name),
+            Expr::Catch { handlers, .. } => {
+                for handler in handlers.iter_mut() {
+                    if let CatchHandler::Typed { error_type, .. } = handler {
+                        self.rename(&mut error_type.node);
+                    }
+                }
+            }
+            _ => {}
+        }
+        walk_expr_mut(self, expr);
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        match &mut stmt.node {
+            Stmt::Raise { error_name, .. } => self.rename(&mut error_name.node),
+            Stmt::ExpectRaises { error_type, .. } => {
+                if let Some(et) = error_type {
+                    self.rename(&mut et.node);
+                }
+            }
+            Stmt::Match { arms, .. } => {
+                for arm in arms {
+                    if let MatchPattern::Variant { enum_name, .. } = &mut arm.pattern {
+                        self.rename(&mut enum_name.node);
+                    }
+                }
+            }
+            _ => {}
+        }
+        walk_stmt_mut(self, stmt);
+    }
+}
+
+fn apply_alias_renames(program: &mut Program, renames: &HashMap<String, String>) {
+    if renames.is_empty() {
+        return;
+    }
+    let mut renamer = AliasRenamer { renames };
+    renamer.visit_program_mut(program);
+}
+
+/// Validate and canonicalize this program's own `pub import` re-exports,
+/// after its imports have been flattened in. Each must name a public
+/// declaration of an imported module (re-exports of re-exports resolve
+/// through `import_alias_map` to the canonical declaration), and the
+/// surface name must be free — no clash with a local declaration or
+/// another re-export.
+fn resolve_own_reexports(
+    program: &mut Program,
+    import_alias_map: &HashMap<String, String>,
+    import_names: &HashSet<String>,
+) -> Result<(), CompileError> {
+    if program.reexports.is_empty() {
+        return Ok(());
+    }
+
+    // Declaration table: flattened name -> is_pub.
+    let mut decls: HashMap<String, bool> = HashMap::new();
+    for f in &program.functions { decls.insert(f.node.name.node.clone(), f.node.is_pub); }
+    for c in &program.classes { decls.insert(c.node.name.node.clone(), c.node.is_pub); }
+    for e in &program.enums { decls.insert(e.node.name.node.clone(), e.node.is_pub); }
+    for e in &program.errors { decls.insert(e.node.name.node.clone(), e.node.is_pub); }
+    for t in &program.traits { decls.insert(t.node.name.node.clone(), t.node.is_pub); }
+
+    let mut seen: HashSet<String> = HashSet::new();
+    for r in &mut program.reexports {
+        let first = r.node.path[0].node.clone();
+        let written = r.node.target_name();
+        if !import_names.contains(&first) {
+            return Err(CompileError::module(format!(
+                "cannot re-export '{written}': module '{first}' is not imported here"
+            )));
+        }
+
+        // Chained re-exports: the written path may itself be an alias of
+        // the imported module; canonicalize so the stored path always
+        // names the real declaration.
+        let mut target = written.clone();
+        if let Some(canon) = import_alias_map.get(&target) {
+            target = canon.clone();
+            let span = r.span;
+            r.node.path = target
+                .split('.')
+                .map(|seg| Spanned::new(seg.to_string(), span))
+                .collect();
+        }
+
+        match decls.get(&target) {
+            None => {
+                return Err(CompileError::module(format!(
+                    "cannot re-export '{written}': no such item in module '{first}' \
+(re-exportable items are functions, classes, enums, errors, and traits)"
+                )));
+            }
+            Some(false) => {
+                return Err(CompileError::module(format!(
+                    "cannot re-export '{written}': it is private to module '{first}'; \
+declare it `pub` there first"
+                )));
+            }
+            Some(true) => {}
+        }
+
+        let item = r.node.item_name().to_string();
+        if decls.contains_key(&item) {
+            return Err(CompileError::module(format!(
+                "re-export '{item}' collides with a declaration of the same name in this module"
+            )));
+        }
+        if !seen.insert(item.clone()) {
+            return Err(CompileError::module(format!(
+                "duplicate re-export '{item}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Flatten resolved imports into a program by prefixing names.
 /// Used for sub-module flattening (within a module's own imports).
 /// Adds ALL items (not just pub) since visibility is deferred.
@@ -755,11 +939,20 @@ fn flatten_into_program(
 
     validate_imported_modules(&imports)?;
 
+    let alias_map = collect_alias_map(&imports);
+
     for (module_name, module_prog, _origin) in &imports {
         add_prefixed_items(program, module_name, module_prog)?;
     }
 
     rewrite_program(program, &import_names);
+
+    // Re-export aliasing: references to imported modules' re-exported
+    // names canonicalize to the real declarations, and this program's
+    // own re-exports are validated (and chained ones canonicalized) so
+    // the next flattening level sees only real names.
+    apply_alias_renames(program, &alias_map);
+    resolve_own_reexports(program, &alias_map, &import_names)?;
 
     Ok(())
 }
@@ -1270,11 +1463,19 @@ pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), C
         add_prefixed_items(&mut graph.root, module_name, module_prog)?;
     }
 
+    let alias_map = collect_alias_map(&graph.imports);
+
     // Rewrite qualified references in root program's AST
     rewrite_program(&mut graph.root, &import_names);
 
     // Resolve QualifiedAccess nodes: convert to FieldAccess or keep for type checker
     resolve_qualified_access_in_program(&mut graph.root, &import_names);
+
+    // Re-export aliasing (after both rewrites, so references are in
+    // their final dotted-name shape): `wal.SyncError` becomes the one
+    // canonical declaration `wal.fs.SyncError` everywhere.
+    apply_alias_renames(&mut graph.root, &alias_map);
+    resolve_own_reexports(&mut graph.root, &alias_map, &import_names)?;
 
     // Clear imports since they've been flattened
     graph.root.imports.clear();
