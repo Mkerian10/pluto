@@ -769,3 +769,52 @@ fn test_analyze_bytes_read_loop_elides() {
         "stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn test_analyze_prints_perception_surface() {
+    // `pluto analyze` reports the perception surface (rfc-module-semantics.md
+    // section 4): every boundary-crossing type whose invariants are
+    // re-checked at decode. Pinned output shape, including the empty form.
+
+    let temp = TempDir::new().unwrap();
+    let pt_file = temp.path().join("percep.pt");
+    std::fs::write(
+        &pt_file,
+        "import std.wire\n\nclass Account {\n    balance: int\n    invariant self.balance >= 0\n}\n\nstage Api {\n    pub fn get(self) Account {\n        return Account { balance: 1 }\n    }\n\n    fn main(self) {\n    }\n}\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&pt_file)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "analyze command failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("perception surface: 1 boundary type validated at decode"),
+        "expected perception surface line, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Account — self.balance >= 0"),
+        "expected the Account entry, got:\n{stdout}"
+    );
+
+    // A program with no boundary types reports the empty form.
+    let plain = temp.path().join("plain.pt");
+    std::fs::write(&plain, "fn main() {\n    print(1)\n}\n").unwrap();
+    let output2 = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .arg("analyze")
+        .arg(&plain)
+        .arg("--stdlib")
+        .arg("stdlib")
+        .output()
+        .unwrap();
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    assert!(
+        stdout2.contains("perception surface: empty"),
+        "expected empty perception surface, got:\n{stdout2}"
+    );
+}

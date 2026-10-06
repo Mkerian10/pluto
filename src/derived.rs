@@ -90,6 +90,30 @@ pub struct DerivedInfo {
     /// interval proof (src/typeck/arith_fit.rs).
     #[serde(default)]
     pub shift_sites_elided: usize,
+    /// The perception surface (rfc-module-semantics.md section 4): every
+    /// boundary-crossing type whose single-state invariants are re-checked
+    /// at decode (raising wire.WireError on violation). Decoded data is
+    /// testimony; these checks are how the receiver upgrades it to
+    /// perception. Rendered by `pluto analyze` beside the assumption
+    /// surface and the arithmetic residue.
+    #[serde(default)]
+    pub perception_surface: Vec<PerceptionEntry>,
+}
+
+/// One perception entry: a boundary-crossing type and the invariant
+/// predicates validated at its decode funnel.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PerceptionEntry {
+    /// The decoded type's flattened name, e.g. `blob.WriteGrant`.
+    pub type_name: String,
+    /// Rendered invariant predicates, e.g. `self.epoch >= 0`.
+    pub invariants: Vec<String>,
+}
+
+impl std::fmt::Display for PerceptionEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} — {}", self.type_name, self.invariants.join("; "))
+    }
 }
 
 /// One checked claim: the providing method, the property, its
@@ -678,6 +702,30 @@ impl DerivedInfo {
             .arith_fit_candidates
             .len()
             .saturating_sub(arith_sites_elided);
+        // Perception surface: a class contributes when it carries value
+        // invariants AND sits in the boundary seed set (the types phase B
+        // generates decode funnels for). Computed from the seed, not from
+        // generated functions, so light pipelines (analyze) report the same
+        // surface as full compiles; check_decode_coverage separately
+        // guarantees real compiles actually generated every funnel.
+        let boundary_classes = crate::marshal::perception_boundary_classes(program);
+        let mut perception_surface: Vec<PerceptionEntry> = Vec::new();
+        for class in &program.classes {
+            let cname = &class.node.name.node;
+            if !boundary_classes.contains(cname) {
+                continue;
+            }
+            let invariants = crate::marshal::decode_validated_invariants(&class.node);
+            if invariants.is_empty() {
+                continue;
+            }
+            perception_surface.push(PerceptionEntry {
+                type_name: cname.clone(),
+                invariants,
+            });
+        }
+        perception_surface.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+
         let shift_sites_elided = env.proven_shift_spans.len();
         let shift_sites_checked = env
             .shift_check_candidates
@@ -702,6 +750,7 @@ impl DerivedInfo {
             arith_sites_elided,
             shift_sites_checked,
             shift_sites_elided,
+            perception_surface,
         }
     }
 
