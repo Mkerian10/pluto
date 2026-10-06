@@ -564,6 +564,75 @@ app MyApp {
 // ============================================================
 
 #[test]
+fn module_typed_catch_of_own_error() {
+    // The flattener prefixes an imported module's raise sites; typed
+    // catch handlers naming the same declarations must be renamed with
+    // them, or the module cannot catch its own errors once imported.
+    let out = run_project(&[
+        ("main.pluto", r#"import b
+
+fn main() {
+    print(b.attempt())
+}
+"#),
+        ("b.pluto", r#"pub error Boom {
+    why: string
+}
+
+fn risky() {
+    raise Boom { why: "as asked" }
+}
+
+pub fn attempt() string {
+    risky() catch e: Boom {
+        return "caught " + e.why
+    }
+    return "ok"
+}
+"#),
+    ]);
+    assert_eq!(out, "caught as asked
+");
+}
+
+#[test]
+fn transitive_typed_catch_of_nested_module_error() {
+    // b catches an error declared in its own import c; after b is
+    // flattened into main, the declaration is named b-side as c.Boom
+    // and both the raise and the typed catch must track it.
+    let out = run_project(&[
+        ("main.pluto", r#"import b
+
+fn main() {
+    print(b.attempt())
+}
+"#),
+        ("b.pluto", r#"import c
+
+pub fn attempt() string {
+    let v = c.risky(true) catch e: c.Boom {
+        return "caught " + e.why
+    }
+    return v
+}
+"#),
+        ("c.pluto", r#"pub error Boom {
+    why: string
+}
+
+pub fn risky(fail: bool) string {
+    if fail {
+        raise Boom { why: "as asked" }
+    }
+    return "ok"
+}
+"#),
+    ]);
+    assert_eq!(out, "caught as asked
+");
+}
+
+#[test]
 fn transitive_import_basic() {
     // A imports B, B imports C
     let out = run_project(&[
