@@ -143,6 +143,7 @@ impl Diagnostic {
             CompileError::Syntax { msg, span } => (msg.clone(), Some(*span)),
             CompileError::Type { msg, span } => (msg.clone(), Some(*span)),
             CompileError::Codegen { msg } => (msg.clone(), None),
+            CompileError::Module { msg } => (msg.clone(), None),
             CompileError::Link { msg } => (msg.clone(), None),
             CompileError::Manifest { msg, .. } => (msg.clone(), None),
             CompileError::SiblingFile { source, .. } => {

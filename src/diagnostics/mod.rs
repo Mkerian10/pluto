@@ -13,6 +13,11 @@ pub enum CompileError {
     #[error("Codegen error: {msg}")]
     Codegen { msg: String },
 
+    /// Module-resolution failure (import graph, flattening) — reported as
+    /// its own phase so a resolution problem never masquerades as codegen.
+    #[error("Module error: {msg}")]
+    Module { msg: String },
+
     #[error("Link error: {msg}")]
     Link { msg: String },
 
@@ -47,6 +52,10 @@ impl CompileError {
 
     pub fn codegen(msg: impl Into<String>) -> Self {
         Self::Codegen { msg: sanitize_message(&msg.into()) }
+    }
+
+    pub fn module(msg: impl Into<String>) -> Self {
+        Self::Module { msg: msg.into() }
     }
 
     pub fn link(msg: impl Into<String>) -> Self {
@@ -258,6 +267,7 @@ pub fn render_error(source: &str, _filename: &str, err: &CompileError) {
                 .unwrap();
         }
         CompileError::Codegen { msg }
+        | CompileError::Module { msg }
         | CompileError::Link { msg }
         | CompileError::Toolchain(msg)
         | CompileError::Network(msg)

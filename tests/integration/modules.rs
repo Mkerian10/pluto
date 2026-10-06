@@ -1493,3 +1493,85 @@ fn dotted_comparison_not_parsed_as_generic_literal() {
     ]);
     assert_eq!(out, "less\n");
 }
+
+// ============================================================
+// Module resolution (rfc-module-semantics.md section 6):
+// sibling imports (#413), transitive same-name exclusion (#437),
+// and resolution-phase error attribution
+// ============================================================
+
+/// #413: a directory module's own imports resolve child-first, then among
+/// its siblings — the normal multi-file library shape.
+#[test]
+fn directory_module_sibling_import() {
+    let out = run_project(&[
+        ("marks/marks.pluto", "pub class Held {\n    n: int\n}\n\npub fn tag() string {\n    return \"held\"\n}"),
+        ("locks/locks.pluto", "import marks\n\npub fn describe() string {\n    return marks.tag()\n}"),
+        ("main.pluto", "import locks\n\nfn main() {\n    print(locks.describe())\n}"),
+    ]);
+    assert_eq!(out, "held\n");
+}
+
+/// #413: single-file sibling modules importing each other work the same way.
+#[test]
+fn single_file_module_sibling_import_via_directory() {
+    let out = run_project(&[
+        ("util/util.pluto", "pub fn two() int {\n    return 2\n}"),
+        ("calc/calc.pluto", "import util\n\npub fn double(x: int) int {\n    return x * util.two()\n}"),
+        ("main.pluto", "import calc\n\nfn main() {\n    print(calc.double(21))\n}"),
+    ]);
+    assert_eq!(out, "42\n");
+}
+
+/// A sibling import cycle still reports as a circular import, in the
+/// resolution phase ("Module error"), never as codegen.
+#[test]
+fn sibling_import_cycle_rejected_as_module_error() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, content) in [
+        ("a/a.pluto", "import b\n\npub fn ping() int {\n    return b.pong()\n}"),
+        ("b/b.pluto", "import a\n\npub fn pong() int {\n    return a.ping()\n}"),
+        ("main.pluto", "import a\n\nfn main() {\n    print(a.ping())\n}"),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, content).unwrap();
+    }
+    let entry = dir.path().join("main.pluto");
+    let bin = dir.path().join("test_bin");
+    match pluto::compile_file(&entry, &bin) {
+        Ok(_) => panic!("cycle should be rejected"),
+        Err(e) => {
+            let msg = format!("{e}");
+            assert!(msg.contains("circular import detected"), "got: {msg}");
+            assert!(msg.starts_with("Module error:"), "cycle must report as a resolution-phase error, got: {msg}");
+        }
+    }
+}
+
+/// #437, directory form: two modules exporting the same class name arrive
+/// transitively through a middle module with distinct prefixed names.
+#[test]
+fn transitive_same_named_classes_do_not_collide() {
+    let out = run_project(&[
+        ("alpha/alpha.pluto", "pub class Foo {\n    n: int\n}\n\npub fn make() Foo {\n    return Foo { n: 1 }\n}"),
+        ("beta/beta.pluto", "pub class Foo {\n    n: int\n}\n\npub fn make() Foo {\n    return Foo { n: 2 }\n}"),
+        ("mid/mid.pluto", "import alpha\nimport beta\n\npub fn total() int {\n    return alpha.make().n + beta.make().n\n}"),
+        ("main.pluto", "import mid\n\nfn main() {\n    print(mid.total())\n}"),
+    ]);
+    assert_eq!(out, "3\n");
+}
+
+/// #437, flat single-file form: a sibling consumed as a module anywhere in
+/// the import graph is excluded from entry auto-merge — no double
+/// inclusion, no bare-name collision.
+#[test]
+fn transitively_imported_siblings_excluded_from_auto_merge() {
+    let out = run_project(&[
+        ("alpha.pluto", "pub class Foo {\n    n: int\n}\n\npub fn make() Foo {\n    return Foo { n: 1 }\n}"),
+        ("beta.pluto", "pub class Foo {\n    n: int\n}\n\npub fn make() Foo {\n    return Foo { n: 2 }\n}"),
+        ("mid.pluto", "import alpha\nimport beta\n\npub fn total() int {\n    return alpha.make().n + beta.make().n\n}"),
+        ("main.pluto", "import mid\n\nfn main() {\n    print(mid.total())\n}"),
+    ]);
+    assert_eq!(out, "3\n");
+}

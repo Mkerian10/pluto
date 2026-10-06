@@ -398,6 +398,13 @@ pub fn compile_error_to_diagnostic(err: &pluto::diagnostics::CompileError, sourc
             span: Some(make_span(*span)),
             path: None,
         },
+        pluto::diagnostics::CompileError::Module { msg } => DiagnosticInfo {
+            severity: "error".to_string(),
+            kind: "module".to_string(),
+            message: msg.clone(),
+            span: None,
+            path: None,
+        },
         pluto::diagnostics::CompileError::Codegen { msg } => DiagnosticInfo {
             severity: "error".to_string(),
             kind: "codegen".to_string(),
