@@ -796,12 +796,14 @@ static int test_run_single(long fn_ptr, Strategy strategy, uint64_t run_seed) {
     return had_deadlock;
 }
 
-void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
+void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations, long schedule_ptr) {
     // --test filter: __pluto_test_start flagged this test as filtered out.
     if (__pluto_test_should_skip()) return;
 
     // CLI overrides (rfc-test-harness phase 2): --strategy and --schedule
-    // arrive as env vars; a schedule implies Replay.
+    // arrive as env vars; a schedule implies Replay. An in-source pin
+    // (test "x" [schedule: "..."], passed by codegen as schedule_ptr)
+    // yields to the CLI so a stale pin can be re-recorded without editing.
     char *env_strategy = getenv("PLUTO_TEST_STRATEGY");
     if (env_strategy) {
         if (strcmp(env_strategy, "Sequential") == 0)       strategy = STRATEGY_SEQUENTIAL;
@@ -814,15 +816,21 @@ void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations) {
             exit(1);
         }
     }
+    const char *schedule = NULL;
     char *env_schedule = getenv("PLUTO_TEST_SCHEDULE");
     if (env_schedule && *env_schedule) {
-        if (trace_decode_token(env_schedule) != 0) {
-            fprintf(stderr, "pluto: malformed schedule token in PLUTO_TEST_SCHEDULE (expected ptsched:v1:<base64>)\n");
+        schedule = env_schedule;
+    } else if (schedule_ptr && !env_strategy) {
+        schedule = (const char *)schedule_ptr;
+    }
+    if (schedule) {
+        if (trace_decode_token(schedule) != 0) {
+            fprintf(stderr, "pluto: malformed schedule token (expected ptsched:v1:<base64>)\n");
             exit(1);
         }
         strategy = STRATEGY_REPLAY;
     }
-    if (strategy == STRATEGY_REPLAY && !env_schedule) {
+    if (strategy == STRATEGY_REPLAY && !schedule) {
         fprintf(stderr, "pluto: Replay strategy requires a schedule token (PLUTO_TEST_SCHEDULE / --schedule)\n");
         exit(1);
     }

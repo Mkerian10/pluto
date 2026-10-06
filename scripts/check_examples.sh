@@ -12,8 +12,8 @@ for f in examples/*/main.pt; do
   case "$name" in
     # Fetches a git dependency at compile time — needs network; skipped in CI.
     git-packages) continue ;;
-    # A test file (no main); exercised through the test runner instead.
-    testing)
+    # Test files (no main); exercised through the test runner instead.
+    testing|deterministic-testing)
       if ! "$BIN" test "$f" > /dev/null 2>&1; then
         echo "FAIL (pluto test): $name"
         "$BIN" test "$f" 2>&1 | head -5

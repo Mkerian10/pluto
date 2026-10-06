@@ -1,0 +1,58 @@
+// Deterministic concurrency testing (docs/design/rfc-test-harness.md).
+//
+// Tests run on a deterministic fiber scheduler. The tests block picks the
+// strategy and can fix the seed and iteration count in source:
+//
+//   tests[scheduler: Random, seed: 7, iterations: 50]
+//
+// Every failure prints a repro block — strategy, seed, iteration, and a
+// recorded schedule token:
+//
+//   FAIL (line 12): expected 2 to equal 1
+//     strategy: Random  seed: 0x3  iteration: 1
+//     schedule: ptsched:v1:AQABAgEAAQEBAA==
+//     rerun:    pluto test <file> --test "..." --schedule ptsched:v1:...
+//
+// Copy the pin into the test header to make it a permanent regression test:
+//
+//   test "regression: lost send, #512" [seed: 3, iteration: 0] { ... }     — re-runs that exact random iteration
+//   test "regression: lost send, #512" [schedule: "ptsched:v1:..."] { ... } — replays the recorded interleaving
+//
+// A replayed schedule that no longer matches the code's concurrency
+// structure fails loudly (never silently passes). CLI flags override
+// in-source pins: `pluto test --test "name" --strategy Random` hunts fresh,
+// `--until-failure` loops seeds until something breaks and prints its pin.
+
+fn producer(tx: Sender<int>, v: int) {
+    tx.send(v)!
+}
+
+tests[scheduler: Random, seed: 7, iterations: 50] {
+    // Order-independent property: passes under every interleaving the
+    // 50 seeded runs explore.
+    test "sum is order independent" {
+        let (tx, rx) = chan<int>(2)
+        let t1 = spawn producer(tx, 1)
+        let t2 = spawn producer(tx, 2)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        t1.get()!
+        t2.get()!
+        expect(a + b).to_equal(3)
+    }
+
+    // A pinned iteration: this exact schedule once delivered t2's value
+    // first. The pin re-runs only that interleaving — if the ordering
+    // property ever regresses under it, this test catches it alone, in one
+    // run, without hunting.
+    test "regression: t2 delivers first" [seed: 10, iteration: 0] {
+        let (tx, rx) = chan<int>(2)
+        let t1 = spawn producer(tx, 1)
+        let t2 = spawn producer(tx, 2)
+        let a = rx.recv()!
+        let b = rx.recv()!
+        t1.get()!
+        t2.get()!
+        expect(a + b).to_equal(3)
+    }
+}

@@ -203,7 +203,14 @@ impl PrettyPrinter {
         // 10. Test blocks
         if let Some(tests_decl) = &program.tests {
             sep!(self, has_output);
-            self.write(&format!("tests[scheduler: {}]", tests_decl.node.strategy));
+            self.write(&format!("tests[scheduler: {}", tests_decl.node.strategy));
+            if let Some(seed) = tests_decl.node.seed {
+                self.write(&format!(", seed: {seed}"));
+            }
+            if let Some(iterations) = tests_decl.node.iterations {
+                self.write(&format!(", iterations: {iterations}"));
+            }
+            self.write("]");
             self.write(" {");
             self.newline();
             self.indent();
@@ -857,6 +864,19 @@ impl PrettyPrinter {
         self.write("test \"");
         self.write(&escape_string(&test.display_name));
         self.write("\" ");
+        if test.schedule.is_some() || test.seed.is_some() {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(schedule) = &test.schedule {
+                parts.push(format!("schedule: \"{}\"", escape_string(schedule)));
+            }
+            if let Some(seed) = test.seed {
+                parts.push(format!("seed: {seed}"));
+            }
+            if let Some(iteration) = test.iteration {
+                parts.push(format!("iteration: {iteration}"));
+            }
+            self.write(&format!("[{}] ", parts.join(", ")));
+        }
         self.emit_block(&func.body.node);
     }
 

@@ -214,3 +214,49 @@ tests[scheduler: Exhaustive] {
 ```
 
 Either worker may answer first; the test asserts only what must hold in every ordering. Exhaustive then runs all distinct orderings and confirms it.
+
+## Pinning a Failure as a Regression Test
+
+Every test run records its scheduling decisions. When anything fails — an
+`expect`, a deadlock, an exhaustive-found interleaving — the runner prints a
+repro block:
+
+```
+FAIL (line 19): expected 2 to equal 1
+  strategy: Random  seed: 0x3  iteration: 1
+  schedule: ptsched:v1:AQABAgEAAQEBAA==
+  rerun:    pluto test <file> --test "transfer" --schedule ptsched:v1:AQABAgEAAQEBAA==
+```
+
+The `rerun:` line reproduces the failure immediately. To keep it reproduced
+forever, copy the pin into the test header:
+
+```
+tests[scheduler: Random, seed: 7, iterations: 1000] {
+    // Re-runs exactly that random iteration:
+    test "regression: lost transfer, #512" [seed: 3, iteration: 1] { ... }
+
+    // Or replays the recorded interleaving decision by decision:
+    test "regression: lost transfer, #512" [schedule: "ptsched:v1:AQABAgEAAQEBAA=="] { ... }
+}
+```
+
+A seed pin is compact and survives unrelated refactors; a schedule pin is
+exact and is the only repro form for failures found by Exhaustive (no seed
+generates a DPOR schedule). A replayed schedule that no longer matches the
+code's concurrency structure **fails loudly** rather than silently passing —
+re-record it with `--until-failure` and update the pin.
+
+The block header also takes `seed:` and `iterations:` to fix Random's
+sampling in source, and the CLI can override everything:
+
+```
+pluto test file.pt --test "one test"             # filter to one test
+pluto test file.pt --strategy Exhaustive         # override the block strategy
+pluto test file.pt --seed 0x3                    # hex seeds, as printed
+pluto test file.pt --test "t" --until-failure    # hunt seeds until a failure, print its pin
+pluto test file.pt --test "t" --schedule ptsched:v1:...   # replay a token
+```
+
+CLI flags beat in-source pins, so a stale pin can be re-hunted without
+editing the file.

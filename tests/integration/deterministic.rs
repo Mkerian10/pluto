@@ -541,7 +541,7 @@ tests[strategy: RoundRobin] {
         expect(true).to_be_true()
     }
 }
-"#, "expected 'scheduler'");
+"#, "unknown tests config key 'strategy'");
 }
 
 #[test]
@@ -3563,7 +3563,7 @@ tests[sched: RoundRobin] {
         expect(true).to_be_true()
     }
 }
-"#, "expected 'scheduler'");
+"#, "unknown tests config key 'sched'");
 }
 
 // ============================================================================
@@ -6361,4 +6361,119 @@ tests[scheduler: RoundRobin] {
     assert!(stdout.contains("test beta"), "stdout: {stdout}");
     assert!(!stdout.contains("test alpha"), "filtered test still printed: {stdout}");
     assert!(stdout.contains("1 tests passed (1 filtered out)"), "stdout: {stdout}");
+}
+
+// ── In-source test pins (rfc-test-harness phase 3) ──────────────────────────
+
+#[test]
+fn in_source_pins_reproduce_hunted_failure() {
+    // Hunt a failing iteration with env, then pin it two ways in source:
+    // by (seed, iteration) and by schedule token. Both must reproduce the
+    // failure deterministically with a single run.
+    let (_stdout, stderr, code) =
+        compile_test_and_run_with_env(INTERLEAVING_FAIL_PROBE, &[("PLUTO_TEST_ITERATIONS", "64")]);
+    assert_ne!(code, 0, "probe unexpectedly passed:\n{stderr}");
+    let seed_line = stderr
+        .lines()
+        .find(|l| l.trim_start().starts_with("strategy: "))
+        .expect("no strategy line");
+    // "  strategy: Random  seed: 0xN  iteration: M" — the printed seed is
+    // the full failing run_seed.
+    let run_seed = seed_line
+        .split("seed: ")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .expect("no seed in repro");
+    let run_seed_val = u64::from_str_radix(run_seed.trim_start_matches("0x"), 16).unwrap();
+    let token = extract_schedule_token(&stderr, "schedule: ");
+
+    // Seed pin.
+    let pinned_by_seed = INTERLEAVING_FAIL_PROBE.replace(
+        "test \"interleaving fail\" {",
+        &format!("test \"interleaving fail\" [seed: {run_seed_val}, iteration: 0] {{"),
+    );
+    let (_s1, stderr1, code1) = compile_test_and_run(&pinned_by_seed);
+    assert_ne!(code1, 0, "seed pin did not reproduce: {stderr1}");
+    assert!(stderr1.contains("expected 2 to equal 1"), "stderr: {stderr1}");
+
+    // Schedule pin.
+    let pinned_by_schedule = INTERLEAVING_FAIL_PROBE.replace(
+        "test \"interleaving fail\" {",
+        &format!("test \"interleaving fail\" [schedule: \"{token}\"] {{"),
+    );
+    let (_s2, stderr2, code2) = compile_test_and_run(&pinned_by_schedule);
+    assert_ne!(code2, 0, "schedule pin did not reproduce: {stderr2}");
+    assert!(stderr2.contains("strategy: Replay"), "stderr: {stderr2}");
+    assert!(stderr2.contains("expected 2 to equal 1"), "stderr: {stderr2}");
+
+    // CLI strategy override wins over the in-source pin: RoundRobin order
+    // delivers t1's value first, so the pinned test passes.
+    let (stdout3, stderr3, code3) =
+        compile_test_and_run_with_env(&pinned_by_schedule, &[("PLUTO_TEST_STRATEGY", "RoundRobin")]);
+    assert_eq!(code3, 0, "CLI override failed: {stdout3}\n{stderr3}");
+    assert!(stdout3.contains("1 tests passed"), "stdout: {stdout3}");
+}
+
+#[test]
+fn block_seed_and_iterations_config() {
+    let (stdout, stderr, code) = compile_test_and_run(r#"
+fn producer(tx: Sender<int>) {
+    tx.send(1)!
+}
+
+tests[scheduler: Random, seed: 7, iterations: 4] {
+    test "block config" {
+        let (tx, rx) = chan<int>(1)
+        let t = spawn producer(tx)
+        expect(rx.recv()!).to_equal(1)
+        t.get()!
+    }
+}
+"#);
+    assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("1 tests passed"), "stdout: {stdout}");
+}
+
+#[test]
+fn test_pin_parse_error_schedule_and_seed() {
+    compile_test_should_fail_with(r#"
+tests[scheduler: Random] {
+    test "bad" [schedule: "ptsched:v1:AA==", seed: 1] {
+        expect(true).to_be_true()
+    }
+}
+"#, "either a schedule or a seed");
+}
+
+#[test]
+fn test_pin_parse_error_iteration_without_seed() {
+    compile_test_should_fail_with(r#"
+tests[scheduler: Random] {
+    test "bad" [iteration: 3] {
+        expect(true).to_be_true()
+    }
+}
+"#, "iteration requires a seed");
+}
+
+#[test]
+fn test_pin_parse_error_non_token_schedule() {
+    compile_test_should_fail_with(r#"
+tests[scheduler: Random] {
+    test "bad" [schedule: "not-a-token"] {
+        expect(true).to_be_true()
+    }
+}
+"#, "schedule must be a recorded token");
+}
+
+#[test]
+fn tests_decl_parse_error_unknown_config_key() {
+    compile_test_should_fail_with(r#"
+tests[scheduler: Random, retries: 3] {
+    test "bad" {
+        expect(true).to_be_true()
+    }
+}
+"#, "unknown tests config key");
 }
