@@ -1311,32 +1311,12 @@ pub(super) fn root_variable(expr: &Expr) -> Option<&str> {
 /// one requires a mutable binding — the same rule as index assignment and
 /// user-defined `mut self` methods (#395). Everything else on these types
 /// (len, contains, slice, keys, ...) reads without modifying.
+/// The classification itself lives in the builtin-method registry
+/// (`typeck/builtins.rs`), where each method's `mutating` flag sits next to
+/// its signature and lowering — so a new mutating method cannot be added
+/// without classifying it.
 pub(super) fn is_mutating_builtin(receiver: &PlutoType, method: &str) -> bool {
-    match receiver {
-        PlutoType::Array(_) => matches!(
-            method,
-            "push" | "pop" | "clear" | "reverse" | "remove_at" | "insert_at"
-        ),
-        PlutoType::Map(_, _) => matches!(method, "insert" | "remove"),
-        PlutoType::Set(_) => matches!(method, "insert" | "remove"),
-        // slice/find/compare/read_* return new values without modifying
-        // the buffer; the bulk ops and fixed-width writes mutate in place.
-        PlutoType::Bytes => matches!(
-            method,
-            "push"
-                | "extend"
-                | "fill"
-                | "copy_from"
-                | "write_u8"
-                | "write_u16_le"
-                | "write_u16_be"
-                | "write_u32_le"
-                | "write_u32_be"
-                | "write_i64_le"
-                | "write_i64_be"
-        ),
-        _ => false,
-    }
+    super::builtins::lookup_for_type(receiver, method).is_some_and(|m| m.mutating)
 }
 
 /// Collect all `Expr::Ident` names referenced in a block.
