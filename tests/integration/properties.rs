@@ -1073,6 +1073,24 @@ fn dedup_foreign_insert_rejected() {
         &format!(
             "{DEDUP_PROP}object P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{ return self.total }}\n        self.seen.insert(k)\n        self.total = self.total + 1\n        return self.total\n    }}\n}}\n\nfn main() {{\n    let mut p = P {{ seen: Set<string> {{}}, total: 0 }}\n    p.seen.insert(\"sneak\")\n}}\n"
         ),
+        // The entity field-access rule (rfc-module-semantics.md section 3)
+        // now rejects the reference-shaped read itself, before idempotency's
+        // narrower foreign-insert diagnostic can fire — the attack is still
+        // dead, one gate earlier. The idempotency diagnostic keeps its own
+        // coverage via the value-class receiver below.
+        &["cannot read field 'seen' of entity 'P'", "reference-shaped"],
+    );
+}
+
+/// The same foreign-insert attack through a value-class receiver, where the
+/// entity read rule does not apply: idempotency's own monotonicity guard is
+/// the gate, and its diagnostic stays pinned.
+#[test]
+fn dedup_foreign_insert_rejected_value_class() {
+    compile_should_fail_with_all(
+        &format!(
+            "{DEDUP_PROP}class P {{\n    seen: Set<string>\n    total: int\n\n    fn apply(mut self, k: string) int provides idempotent(key = k) {{\n        if self.seen.contains(k) {{ return self.total }}\n        self.seen.insert(k)\n        self.total = self.total + 1\n        return self.total\n    }}\n}}\n\nfn main() {{\n    let mut p = P {{ seen: Set<string> {{}}, total: 0 }}\n    p.seen.insert(\"sneak\")\n}}\n"
+        ),
         &["dedup field 'seen'", "only be inserted through 'self'"],
     );
 }

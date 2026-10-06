@@ -3448,7 +3448,22 @@ impl<'a> LowerContext<'a> {
                         })?;
                     let offset = (field_idx as i32) * POINTER_SIZE;
                     let cl_type = pluto_to_cranelift(field_type);
-                    Ok(self.builder.ins().load(cl_type, MemFlags::new(), ptr, Offset32::new(offset)))
+                    // External entity field reads go through the instance
+                    // read lock (rfc-module-semantics.md section 3): typeck
+                    // admits only scalar-shaped fields here, and the locked
+                    // load gives the read ordering with the serialized
+                    // methods' stores. Bare-self reads stay plain — the
+                    // enclosing method already holds the instance lock.
+                    let external_entity_read = self.env.object_types.contains(class_name)
+                        && !matches!(&object.node, Expr::Ident(n) if n == "self");
+                    if external_entity_read {
+                        self.call_runtime_void("__pluto_entity_rdlock", &[ptr]);
+                        let val = self.builder.ins().load(cl_type, MemFlags::new(), ptr, Offset32::new(offset));
+                        self.call_runtime_void("__pluto_entity_unlock", &[ptr]);
+                        Ok(val)
+                    } else {
+                        Ok(self.builder.ins().load(cl_type, MemFlags::new(), ptr, Offset32::new(offset)))
+                    }
                 } else if obj_type == PlutoType::Error && field.node == "message" {
                     Ok(self.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(0)))
                 } else {

@@ -305,9 +305,34 @@ pub(crate) fn infer_expr(
                             object.span,
                         )
                     })?;
-                    class_info.fields.iter()
+                    let resolved = class_info.fields.iter()
                         .find(|(n, _, _)| *n == field.node)
-                        .map(|(_, t, _)| t.clone())
+                        .map(|(_, t, _)| t.clone());
+                    // Entity field reads from outside the entity's own
+                    // methods (rfc-module-semantics.md section 3): a
+                    // scalar-shaped field is a locked single read; a
+                    // reference-shaped field would hand out a live reference
+                    // into serialized state (`e.arr[0] = 1`, `e.cfg.x = 1`
+                    // mutate past the lock), so it goes through a method.
+                    if let Some(ft) = &resolved
+                        && env.object_types.contains(class_name)
+                        && !matches!(&object.node, Expr::Ident(n) if n == "self")
+                        && !crate::typeck::types::entity_field_externally_readable(ft, env)
+                    {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "cannot read field '{}' of entity '{class_name}' from outside its \
+                                 own methods: its type ({ft}) is reference-shaped, and the raw read \
+                                 would hand out a live reference into state the entity's lock \
+                                 serializes — read it through a method that returns a copy \
+                                 (scalar-shaped fields may be read directly; they are loaded under \
+                                 the read lock)",
+                                field.node
+                            ),
+                            field.span,
+                        ));
+                    }
+                    resolved
                         .ok_or_else(|| {
                             // A skolem stands in for an opaque type parameter:
                             // no field on T is visible in a generic body.

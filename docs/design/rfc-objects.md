@@ -137,6 +137,26 @@ validates that evidence at the point of effect. Full treatment — degradable st
 must-release, the lease-window liveness/safety split, and the Blob acceptance test —
 in [rfc-verification.md](rfc-verification.md).
 
+## Field access (settled 2026-10-05, rfc-module-semantics.md section 3)
+
+Entities speak in messages; raw field access from outside is the one
+carve-out, and it is narrow. External **writes** are rejected outright
+(#427 — a plain store takes no lock and races every serialized method).
+External **reads** of scalar-shaped fields (`int`, `float`, `bool`,
+`byte`, `string`, unit-variant enums, entity handles, nullables of those)
+are allowed and are lowered through the instance read lock, so `server.port`
+stays one word without tearing or reordering against method stores.
+External reads of reference-shaped fields (arrays, maps, sets, `bytes`,
+value classes, data-carrying enums) are rejected: the raw read hands out a
+live reference into lock-serialized state (`e.arr[0] = 1`, `e.cfg.x = 1`
+mutate past the lock); the honest interface is a method returning a
+deliberate copy. Cross-field consistency is a method, by doctrine — only a
+lock held across the whole observation can provide it. External literal
+construction stays legal: it happens before the value is shared, race-free
+by happens-before. The sweep that ratified this found zero reference-shaped
+external reads in the entire tree — the methods-only idiom was already
+universal; the rule makes it law.
+
 ## Open questions (genuinely unsettled)
 
 1. **Construction and identity origin.** Who mints an entity? DI (objects as wired singletons/scoped instances) covers services; but `Secret` above is more like a *handle* to pre-existing external state. Are there two construction stories (wired vs. adopted), or one?

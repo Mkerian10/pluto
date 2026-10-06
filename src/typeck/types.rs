@@ -865,3 +865,32 @@ pub(crate) fn nested_entity_in_value(
     }
     find_object_type(t, env)
 }
+
+/// Whether an entity field of this type may be read from outside the
+/// entity's own methods (rfc-module-semantics.md section 3). Scalar-shaped
+/// types cannot smuggle mutation: the locked 8-byte load hands out a value
+/// (or an immutable string, or an entity HANDLE — sharing handles is what
+/// entities are for; the handle's own lock governs its use). Everything
+/// reference-shaped — arrays, maps, sets, bytes, value classes, data-carrying
+/// enums, traits, fn values, tasks, channels, streams — hands out a live
+/// reference into serialized state, so it goes through a method returning a
+/// deliberate copy instead.
+pub fn entity_field_externally_readable(t: &PlutoType, env: &crate::typeck::env::TypeEnv) -> bool {
+    match t {
+        PlutoType::Int
+        | PlutoType::Float
+        | PlutoType::Bool
+        | PlutoType::Byte
+        | PlutoType::String => true,
+        // Unit-only enums are tags; a data-carrying variant is heap state.
+        PlutoType::Enum(name) => env
+            .enums
+            .get(name)
+            .is_some_and(|e| e.variants.iter().all(|(_, fields)| fields.is_empty())),
+        // An entity handle: identity is meant to be shared; its own lock
+        // serializes whatever is done with it.
+        PlutoType::Class(name) => env.object_types.contains(name),
+        PlutoType::Nullable(inner) => entity_field_externally_readable(inner, env),
+        _ => false,
+    }
+}
