@@ -44,7 +44,8 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// v22: Stmt::ExpectRaises — raises-assertion test construct (#394).
 /// v23: TestsDecl.seed/iterations, TestInfo.schedule/seed/iteration —
 /// in-source test pins (rfc-test-harness phase 3).
-const SCHEMA_VERSION: u32 = 23;
+/// v24: DerivedInfo.perception_surface — decode-validated invariants (rfc-module-semantics section 4).
+const SCHEMA_VERSION: u32 = 24;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;

@@ -319,6 +319,58 @@ pub fn generate_marshalers_phase_b(
     qualify_wire_names(&mut generated_functions, &wire_prefix);
     program.functions.extend(generated_functions);
 
+    check_decode_coverage(program, &types_to_marshal)?;
+
+    Ok(())
+}
+
+/// Perception coverage (rfc-module-semantics.md section 4): a boundary
+/// type that carries decode-validated invariants or priv fields MUST have
+/// its decode funnel generated — for exactly these types a silent skip
+/// would ship an unvalidated external constructor, the failure family that
+/// produced #384 and #426 one instance at a time. Invariant-less,
+/// priv-less types keep best-effort semantics (a skip there surfaces at
+/// codegen or as an honest dispatch rejection); these fail loudly, at
+/// compile time, naming the type.
+fn check_decode_coverage(
+    program: &Program,
+    boundary_types: &HashSet<String>,
+) -> Result<(), CompileError> {
+    let fn_names: HashSet<&str> = program
+        .functions
+        .iter()
+        .map(|f| f.node.name.node.as_str())
+        .collect();
+    for type_name in boundary_types {
+        let Some(cd) = program
+            .classes
+            .iter()
+            .find(|c| &c.node.name.node == type_name && c.node.type_params.is_empty())
+        else {
+            continue;
+        };
+        let invariants = decode_validated_invariants(&cd.node);
+        let has_priv = cd.node.fields.iter().any(|f| f.is_priv);
+        if invariants.is_empty() && !has_priv {
+            continue;
+        }
+        let sanitized = type_name.replace("$$", "__");
+        if !fn_names.contains(format!("__unmarshal_{sanitized}").as_str()) {
+            let what = if !invariants.is_empty() && has_priv {
+                "invariants and priv fields"
+            } else if has_priv {
+                "priv fields"
+            } else {
+                "invariants"
+            };
+            return Err(CompileError::module(format!(
+                "boundary type '{type_name}' carries {what}, but its decode validator could \
+                 not be generated — decoded values of this type would arrive unvalidated. \
+                 This is a compiler coverage failure, not a program error; please report it \
+                 with this program's boundary declarations"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -1087,7 +1139,7 @@ fn generate_unmarshal_class(class_decl: &ClassDecl) -> Result<Spanned<Function>,
         //   return __out
         stmts.push(mk_let("__out", None, mk_struct_lit(class_name, field_inits)));
         for inv in &value_invariants {
-            stmts.push(mk_invariant_guard(class_name, &inv.node.expr.node));
+            stmts.push(mk_invariant_guard(class_name, &inv.node.expr.node)?);
         }
         stmts.push(mk_return(mk_var("__out")));
     }
@@ -1660,42 +1712,86 @@ fn generate_wire_decode(type_name: &str) -> Spanned<Function> {
                 Some(TypeExpr::Named(type_name.to_string())), body)
 }
 
+/// Read-only: the boundary-crossing class names this program's stage and
+/// entity surfaces imply — the same seed set phase B generates decode
+/// funnels for. Usable from pipelines that never run generation (`pluto
+/// analyze` persists the pre-lowering AST), so the perception surface is
+/// identical whichever pipeline computed it. Best-effort on pre-mono
+/// programs: unresolvable (still-generic) signatures contribute nothing.
+pub fn perception_boundary_classes(program: &Program) -> HashSet<String> {
+    let mut set = collect_types_from_stage_methods(program).unwrap_or_default();
+    set.extend(collect_entity_signature_types(program));
+    set
+}
+
+/// The invariant predicates a type's decode funnel validates, rendered —
+/// single-state value invariants only (must_release annotations and
+/// two-state `old(...)` clauses are code-path obligations, not value
+/// predicates). Shared by the unmarshal generator, the phase-B coverage
+/// check, and DerivedInfo's perception surface so the three can never
+/// disagree about what "validated at decode" means.
+pub(crate) fn decode_validated_invariants(class_decl: &ClassDecl) -> Vec<String> {
+    class_decl
+        .invariants
+        .iter()
+        .filter(|i| {
+            i.node.kind == crate::parser::ast::ContractKind::Invariant
+                && !crate::parser::ast::expr_contains_old(&i.node.expr.node)
+        })
+        .map(|i| crate::codegen::format_invariant_expr(&i.node.expr.node))
+        .collect()
+}
+
 /// Rewrite an invariant expression's `self` root to another variable name
 /// (`self.balance >= 0` → `__out.balance >= 0`).
-fn rewrite_invariant_self(expr: &Expr, root: &str) -> Expr {
-    match expr {
+fn rewrite_invariant_self(expr: &Expr, root: &str) -> Result<Expr, CompileError> {
+    Ok(match expr {
         Expr::Ident(s) if s == "self" => Expr::Ident(root.to_string()),
+        Expr::Ident(s) => Expr::Ident(s.clone()),
+        Expr::IntLit(v) => Expr::IntLit(*v),
+        Expr::BoolLit(v) => Expr::BoolLit(*v),
         Expr::FieldAccess { object, field } => Expr::FieldAccess {
             object: Box::new(Spanned {
-                node: rewrite_invariant_self(&object.node, root),
+                node: rewrite_invariant_self(&object.node, root)?,
                 span: object.span,
             }),
             field: field.clone(),
         },
         Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
             op: *op,
-            lhs: Box::new(Spanned { node: rewrite_invariant_self(&lhs.node, root), span: lhs.span }),
-            rhs: Box::new(Spanned { node: rewrite_invariant_self(&rhs.node, root), span: rhs.span }),
+            lhs: Box::new(Spanned { node: rewrite_invariant_self(&lhs.node, root)?, span: lhs.span }),
+            rhs: Box::new(Spanned { node: rewrite_invariant_self(&rhs.node, root)?, span: rhs.span }),
         },
         Expr::UnaryOp { op, operand } => Expr::UnaryOp {
             op: *op,
             operand: Box::new(Spanned {
-                node: rewrite_invariant_self(&operand.node, root),
+                node: rewrite_invariant_self(&operand.node, root)?,
                 span: operand.span,
             }),
         },
-        other => other.clone(),
-    }
+        // No catch-all (AST walker policy): the arms above are exactly the
+        // declarable invariant fragment (contracts.rs rejects everything
+        // else at the declaration). If the fragment ever grows, this errs
+        // loudly instead of cloning an un-rewritten `self` into a free
+        // function — the silent-guard-breakage failure mode.
+        other => {
+            return Err(CompileError::codegen(format!(
+                "internal: decode-guard rewriter does not handle invariant expression \
+                 shape {other:?} — the declarable fragment grew without extending the \
+                 boundary-guard generator"
+            )));
+        }
+    })
 }
 
 /// `if !(<invariant over __out>) { raise wire.WireError { message: ... } }`
 /// — the decode-time trust-boundary check for an invariant-carrying class.
-fn mk_invariant_guard(class_name: &str, inv: &Expr) -> Spanned<Stmt> {
+fn mk_invariant_guard(class_name: &str, inv: &Expr) -> Result<Spanned<Stmt>, CompileError> {
     let desc = crate::codegen::format_invariant_expr(inv);
     let condition = Expr::UnaryOp {
         op: UnaryOp::Not,
         operand: Box::new(Spanned {
-            node: rewrite_invariant_self(inv, "__out"),
+            node: rewrite_invariant_self(inv, "__out")?,
             span: mk_span(),
         }),
     };
@@ -1710,7 +1806,7 @@ fn mk_invariant_guard(class_name: &str, inv: &Expr) -> Spanned<Stmt> {
         )],
         error_id: None,
     };
-    Spanned {
+    Ok(Spanned {
         node: Stmt::If {
             condition: Spanned { node: condition, span: mk_span() },
             then_block: Spanned {
@@ -1720,7 +1816,7 @@ fn mk_invariant_guard(class_name: &str, inv: &Expr) -> Spanned<Stmt> {
             else_block: None,
         },
         span: mk_span(),
-    }
+    })
 }
 
 fn mk_propagate(expr: Expr) -> Expr {

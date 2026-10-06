@@ -895,3 +895,58 @@ stage Api {
 "#);
     assert!(out.contains("pair=77"), "shared subtrees marshal fine; out: {out}");
 }
+
+/// The decode funnel is closed over containers (rfc-module-semantics.md
+/// section 4): a violating element NESTED in an array inside another class
+/// still hits the invariant guard — every class decode, top-level or
+/// nested, routes through __unmarshal_T.
+#[test]
+fn nested_container_decode_validates_invariants() {
+    let out = run_marshal_test(r#"
+import std.wire
+
+class Account {
+    balance: int
+    invariant self.balance >= 0
+}
+
+class Statement {
+    accounts: [Account]
+}
+
+stage Api {
+    pub fn get_statement(self) Statement {
+        return Statement { accounts: [] }
+    }
+
+    fn main(self) {
+        // Valid nested round trip.
+        let st = Statement { accounts: [Account { balance: 7 }] }
+        let enc = wire.wire_value_encoder()
+        __marshal_Statement(st, enc)
+        let mut dec = wire.wire_value_decoder(enc.result())
+        let decoded = __unmarshal_Statement(dec) catch err {
+            print("unexpected decode failure")
+            return
+        }
+        print(decoded.accounts[0].balance)
+
+        // A violating element nested in the array is rejected by the
+        // element's own funnel.
+        let bad_elem = wire.wire_record(["balance"], [wire.wire_int(0 - 1)])
+        let bad = wire.wire_record(["accounts"], [wire.wire_array([bad_elem])])
+        let mut dec2 = wire.wire_value_decoder(bad)
+        let decoded2 = __unmarshal_Statement(dec2) catch err {
+            print("nested rejected at boundary")
+            return
+        }
+        print(decoded2.accounts.len())
+    }
+}
+"#);
+    assert!(out.contains("7"), "valid nested decode should succeed, got: {out}");
+    assert!(
+        out.contains("nested rejected at boundary"),
+        "violating nested decode should raise, got: {out}"
+    );
+}

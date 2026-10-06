@@ -655,6 +655,21 @@ fn main() {
                         "shift range checks: {} elided, {} checked",
                         derived.shift_sites_elided, derived.shift_sites_checked
                     );
+                    // The perception surface (rfc-module-semantics.md
+                    // section 4): what decode re-checks. Decoded data is
+                    // testimony; these are the predicates that upgrade it.
+                    if derived.perception_surface.is_empty() {
+                        println!("perception surface: empty (no boundary types carry invariants)");
+                    } else {
+                        println!(
+                            "perception surface: {} boundary type{} validated at decode (violations raise wire.WireError)",
+                            derived.perception_surface.len(),
+                            if derived.perception_surface.len() == 1 { "" } else { "s" }
+                        );
+                        for entry in &derived.perception_surface {
+                            println!("  {entry}");
+                        }
+                    }
                 }
                 Err(e) => {
                     eprintln!("error: {e}");
