@@ -1829,3 +1829,178 @@ fn transitively_imported_siblings_excluded_from_auto_merge() {
     ]);
     assert_eq!(out, "3\n");
 }
+
+// ============================================================
+// Canonical module identity (issue #391): diamond imports share
+// ONE copy of a module — same nominal types through every route
+// ============================================================
+
+/// The issue's exact repro: `codec.Reader` in record's public signature
+/// is the SAME nominal type as the entry's own `codec.Reader`.
+#[test]
+fn diamond_import_shares_nominal_types() {
+    let out = run_project(&[
+        ("codec.pluto", "pub class Reader {\n    pos: int\n}\n\npub fn reader() Reader {\n    return Reader { pos: 7 }\n}"),
+        ("record.pluto", "import codec\n\npub fn decode_batch(r: codec.Reader) int {\n    return r.pos\n}"),
+        ("main.pluto", "import codec\nimport record\n\nfn main() {\n    print(record.decode_batch(codec.reader()))\n}"),
+    ]);
+    assert_eq!(out, "7\n");
+}
+
+/// Three-level diamond: main -> a -> b -> codec with a ALSO importing
+/// codec directly; a Reader built two levels deep flows back out through
+/// a's signatures.
+#[test]
+fn three_level_diamond_shares_nominal_types() {
+    let out = run_project(&[
+        ("codec.pluto", "pub class Reader {\n    pos: int\n}\n\npub fn reader() Reader {\n    return Reader { pos: 3 }\n}"),
+        ("b.pluto", "import codec\n\npub fn make() codec.Reader {\n    return codec.reader()\n}"),
+        ("a.pluto", "import b\nimport codec\n\npub fn produce() codec.Reader {\n    return b.make()\n}\n\npub fn consume(r: codec.Reader) int {\n    return r.pos\n}"),
+        ("main.pluto", "import a\n\nfn main() {\n    print(a.consume(a.produce()))\n}"),
+    ]);
+    assert_eq!(out, "3\n");
+}
+
+/// Double-middle diamond: main -> {x, y}, both -> codec; a Reader
+/// produced via x is consumed via y.
+#[test]
+fn double_middle_diamond_value_crosses_routes() {
+    let out = run_project(&[
+        ("codec.pluto", "pub class Reader {\n    pos: int\n}\n\npub fn reader() Reader {\n    return Reader { pos: 11 }\n}"),
+        ("x.pluto", "import codec\n\npub fn produce() codec.Reader {\n    return codec.reader()\n}"),
+        ("y.pluto", "import codec\n\npub fn consume(r: codec.Reader) int {\n    return r.pos\n}"),
+        ("main.pluto", "import x\nimport y\n\nfn main() {\n    print(y.consume(x.produce()))\n}"),
+    ]);
+    assert_eq!(out, "11\n");
+}
+
+/// A generic class from the shared module monomorphizes from ONE
+/// flattened copy: a Box<int> built via one route is the same concrete
+/// type as the entry's own instantiation (and no duplicate copies exist
+/// to collide in codegen symbols).
+#[test]
+fn diamond_generic_instances_compatible_across_routes() {
+    let out = run_project(&[
+        ("boxes.pluto", "pub class Box<T> {\n    v: T\n}"),
+        ("x.pluto", "import boxes\n\npub fn produce(n: int) boxes.Box<int> {\n    return boxes.Box<int> { v: n }\n}"),
+        ("y.pluto", "import boxes\n\npub fn consume(b: boxes.Box<int>) int {\n    return b.v\n}"),
+        ("main.pluto", "import boxes\nimport x\nimport y\n\nfn main() {\n    print(y.consume(x.produce(21)))\n    let own = boxes.Box<int> { v: 20 }\n    print(y.consume(own))\n}"),
+    ]);
+    assert_eq!(out, "21\n20\n");
+}
+
+/// An enum from the shared module stays ONE enum: a value produced via a
+/// middle module is matched exhaustively by the entry naming the enum
+/// through its own import.
+#[test]
+fn diamond_enum_matches_across_routes() {
+    let out = run_project(&[
+        ("status.pluto", "pub enum State {\n    Active\n    Idle\n}"),
+        ("x.pluto", "import status\n\npub fn current() status.State {\n    return status.State.Active\n}"),
+        ("main.pluto", "import status\nimport x\n\nfn main() {\n    let s = x.current()\n    match s {\n        status.State.Active {\n            print(\"active\")\n        }\n        status.State.Idle {\n            print(\"idle\")\n        }\n    }\n}"),
+    ]);
+    assert_eq!(out, "active\n");
+}
+
+/// A trait from the shared module: a trait-typed value produced via one
+/// route is accepted by a trait-typed parameter on the other route.
+#[test]
+fn diamond_trait_values_flow_across_routes() {
+    let out = run_project(&[
+        ("shapes.pluto", "pub trait Measure {\n    fn size(self) int\n}\n\npub class Dot impl Measure {\n    n: int\n\n    fn size(self) int {\n        return self.n\n    }\n}\n\npub fn dot(n: int) Measure {\n    return Dot { n: n }\n}"),
+        ("x.pluto", "import shapes\n\npub fn produce() shapes.Measure {\n    return shapes.dot(13)\n}"),
+        ("y.pluto", "import shapes\n\npub fn consume(m: shapes.Measure) int {\n    return m.size()\n}"),
+        ("main.pluto", "import x\nimport y\n\nfn main() {\n    print(y.consume(x.produce()))\n}"),
+    ]);
+    assert_eq!(out, "13\n");
+}
+
+/// Typed catch across routes: an error declared in the shared module,
+/// raised through one route, is caught by a typed catch naming it via
+/// the entry's own import binding.
+#[test]
+fn diamond_error_caught_across_routes() {
+    let out = run_project(&[
+        ("errs.pluto", "pub error Boom {\n    why: string\n}\n\npub fn trigger(fail: bool) string {\n    if fail {\n        raise Boom { why: \"as asked\" }\n    }\n    return \"ok\"\n}"),
+        ("x.pluto", "import errs\n\npub fn risky(fail: bool) string {\n    return errs.trigger(fail)!\n}"),
+        ("main.pluto", "import errs\nimport x\n\nfn attempt() string {\n    let v = x.risky(true) catch e: errs.Boom {\n        return \"caught \" + e.why\n    }\n    return v\n}\n\nfn main() {\n    print(attempt())\n}"),
+    ]);
+    assert_eq!(out, "caught as asked\n");
+}
+
+/// An aliased import is an aliasing entry onto the same canonical module
+/// (rfc-module-semantics.md): `import codec as c` in a module and a
+/// direct `import codec` at the entry share nominal types.
+#[test]
+fn diamond_with_alias_shares_nominal_types() {
+    let out = run_project(&[
+        ("codec.pluto", "pub class Reader {\n    pos: int\n}\n\npub fn reader() Reader {\n    return Reader { pos: 9 }\n}"),
+        ("record.pluto", "import codec as c\n\npub fn consume(r: c.Reader) int {\n    return r.pos\n}"),
+        ("main.pluto", "import codec\nimport record\n\nfn main() {\n    print(record.consume(codec.reader()))\n}"),
+    ]);
+    assert_eq!(out, "9\n");
+}
+
+/// Identity is by RESOLVED PATH, never by name: two different `util`
+/// modules reached via different parent directories stay distinct —
+/// each middle module sees its own.
+#[test]
+fn same_basename_modules_stay_distinct() {
+    let out = run_project(&[
+        ("a/a.pluto", "import util\n\npub fn go() int {\n    return util.make().n\n}"),
+        ("a/util/util.pluto", "pub class Row {\n    n: int\n}\n\npub fn make() Row {\n    return Row { n: 1 }\n}"),
+        ("b/b.pluto", "import util\n\npub fn go() int {\n    return util.make().n\n}"),
+        ("b/util/util.pluto", "pub class Row {\n    n: int\n}\n\npub fn make() Row {\n    return Row { n: 2 }\n}"),
+        ("main.pluto", "import a\nimport b\n\nfn main() {\n    print(a.go() + b.go())\n}"),
+    ]);
+    assert_eq!(out, "3\n");
+}
+
+/// The negative half of path identity: feeding one util's Row where the
+/// other util's Row is expected is a type error, same names or not.
+#[test]
+fn same_basename_modules_do_not_unify() {
+    compile_project_should_fail(&[
+        ("a/a.pluto", "import util\n\npub fn produce() util.Row {\n    return util.make()\n}"),
+        ("a/util/util.pluto", "pub class Row {\n    n: int\n}\n\npub fn make() Row {\n    return Row { n: 1 }\n}"),
+        ("b/b.pluto", "import util\n\npub fn consume(r: util.Row) int {\n    return r.n\n}"),
+        ("b/util/util.pluto", "pub class Row {\n    n: int\n}"),
+        ("main.pluto", "import a\nimport b\n\nfn main() {\n    print(b.consume(a.produce()))\n}"),
+    ]);
+}
+
+/// Visibility survives canonical sharing: a non-pub item of the shared
+/// module stays inaccessible from the entry, diamond or not.
+#[test]
+fn diamond_private_items_stay_private() {
+    compile_project_should_fail(&[
+        ("codec.pluto", "fn secret() int {\n    return 1\n}\n\npub fn ok() int {\n    return 2\n}"),
+        ("record.pluto", "import codec\n\npub fn go() int {\n    return codec.ok()\n}"),
+        ("main.pluto", "import codec\nimport record\n\nfn main() {\n    print(codec.secret())\n}"),
+    ]);
+}
+
+/// Re-exports meet canonical identity: wal re-exports fs.SyncError and
+/// the entry ALSO imports fs directly — a typed catch under either name
+/// lands on the one declaration.
+#[test]
+fn reexport_and_direct_import_are_one_declaration() {
+    let out = run_project(&[
+        ("fs.pluto", "pub error SyncError {\n    path: string\n}\n\npub fn sync(fail: bool) int {\n    if fail {\n        raise SyncError { path: \"/tmp/x\" }\n    }\n    return 0\n}"),
+        ("wal.pluto", "import fs\npub import fs.SyncError\n\npub fn append(fail: bool) int {\n    return fs.sync(fail)!\n}"),
+        ("main.pluto", "import fs\nimport wal\n\nfn via_fs() string {\n    wal.append(true) catch e: fs.SyncError {\n        return \"caught via fs \" + e.path\n    }\n    return \"ok\"\n}\n\nfn via_wal() string {\n    wal.append(true) catch e: wal.SyncError {\n        return \"caught via wal \" + e.path\n    }\n    return \"ok\"\n}\n\nfn main() {\n    print(via_fs())\n    print(via_wal())\n}"),
+    ]);
+    assert_eq!(out, "caught via fs /tmp/x\ncaught via wal /tmp/x\n");
+}
+
+/// Diamond through the stdlib: the entry and a module both import
+/// std.wire (itself multi-file, importing json and strings) — resolution
+/// shares one canonical copy and the program still compiles and runs.
+#[test]
+fn stdlib_diamond_module_shared_with_entry() {
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", "import std.wire\nimport lib\n\nfn main() {\n    print(lib.encode())\n}"),
+        ("lib.pluto", "import std.wire\n\npub fn encode() int {\n    return 42\n}"),
+    ]);
+    assert_eq!(out, "42\n");
+}
