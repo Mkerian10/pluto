@@ -121,6 +121,36 @@ pub fn compile_test_and_run_with_stdlib(source: &str) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
+/// Compile once in test mode WITH stdlib resolution, then run the binary
+/// once per env set, returning one (stdout, stderr, exit_code) per run.
+/// For determinism tests: byte-compare repeated runs of one binary.
+pub fn compile_test_with_stdlib_run_each(
+    source: &str,
+    runs: &[&[(&str, &str)]],
+) -> Vec<(String, String, i32)> {
+    let dir = tempfile::tempdir().unwrap();
+    let src_path = dir.path().join("main.pt");
+    std::fs::write(&src_path, source).unwrap();
+    let bin_path = dir.path().join("test_bin");
+    let stdlib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("stdlib");
+    pluto::compile_file_for_tests_with_coverage(&src_path, &bin_path, Some(&stdlib), false, false)
+        .unwrap_or_else(|e| panic!("Test compilation failed: {e}"));
+    runs.iter()
+        .map(|envs| {
+            let mut cmd = Command::new(&bin_path);
+            for (key, val) in *envs {
+                cmd.env(key, val);
+            }
+            let output = cmd.output().unwrap();
+            (
+                String::from_utf8_lossy(&output.stdout).to_string(),
+                String::from_utf8_lossy(&output.stderr).to_string(),
+                output.status.code().unwrap_or(-1),
+            )
+        })
+        .collect()
+}
+
 /// Like compile_test_and_run but passes env vars to the test binary.
 pub fn compile_test_and_run_with_env(source: &str, envs: &[(&str, &str)]) -> (String, String, i32) {
     let bin = CompiledBinary::compile_test(source);
