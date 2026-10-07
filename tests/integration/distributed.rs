@@ -2900,7 +2900,7 @@ app App[e: remote blobecho.BlobEcho] {
         let mut buf = bytes_new()
         let mut i = 0
         while i < 256 {
-            buf.push(i as byte)
+            buf.push(i.low_byte())
             i = i + 1
         }
 
@@ -2911,7 +2911,7 @@ app App[e: remote blobecho.BlobEcho] {
         let mut ok = direct.len() == 256
         let mut j = 0
         while j < direct.len() {
-            if (direct[j] as int) != j {
+            if (direct[j].to_int()) != j {
                 ok = false
             }
             j = j + 1
@@ -2923,7 +2923,7 @@ app App[e: remote blobecho.BlobEcho] {
         let mut ok2 = wrapped.data.len() == 256
         let mut k = 0
         while k < wrapped.data.len() {
-            if (wrapped.data[k] as int) != k {
+            if (wrapped.data[k].to_int()) != k {
                 ok2 = false
             }
             k = k + 1
@@ -3317,7 +3317,7 @@ app App[e: remote blobecho.BlobEcho] {
         let mut buf = bytes_new()
         let mut i = 0
         while i < 51200 {
-            buf.push((i - (i / 251) * 251) as byte)
+            buf.push((i - (i / 251) * 251).low_byte())
             i = i + 1
         }
         let fallback = blobecho.Frame { data: bytes_new(), tag: -1 }
@@ -3325,7 +3325,7 @@ app App[e: remote blobecho.BlobEcho] {
         let mut ok = wrapped.data.len() == 51200
         let mut k = 0
         while k < wrapped.data.len() {
-            if (wrapped.data[k] as int) != k - (k / 251) * 251 {
+            if (wrapped.data[k].to_int()) != k - (k / 251) * 251 {
                 ok = false
             }
             k = k + 1

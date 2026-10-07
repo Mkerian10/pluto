@@ -209,8 +209,8 @@ fn test_bool_false() {
 fn test_byte_zero() {
     let src = r#"
         fn main() {
-            let b = 0 as byte
-            print(b as int)
+            let b = (0).to_byte()
+            print(b.to_int())
         }
     "#;
     assert_eq!(compile_and_run_stdout(src).trim(), "0");
@@ -220,8 +220,8 @@ fn test_byte_zero() {
 fn test_byte_max() {
     let src = r#"
         fn main() {
-            let b = 255 as byte
-            print(b as int)
+            let b = (255).to_byte()
+            print(b.to_int())
         }
     "#;
     assert_eq!(compile_and_run_stdout(src).trim(), "255");
@@ -232,14 +232,14 @@ fn test_byte_sample_values() {
     // Test a few representative byte values
     let src = r#"
         fn main() {
-            let b1 = 0 as byte
-            let b2 = 42 as byte
-            let b3 = 127 as byte
-            let b4 = 255 as byte
-            print(b1 as int)
-            print(b2 as int)
-            print(b3 as int)
-            print(b4 as int)
+            let b1 = (0).to_byte()
+            let b2 = (42).to_byte()
+            let b3 = (127).to_byte()
+            let b4 = (255).to_byte()
+            print(b1.to_int())
+            print(b2.to_int())
+            print(b3.to_int())
+            print(b4.to_int())
         }
     "#;
     let output = compile_and_run_stdout(src);

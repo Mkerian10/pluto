@@ -529,7 +529,7 @@ fn fail_bytes_push_on_immutable_local() {
         r#"
 fn main() {
     let buf = bytes_new()
-    buf.push(7 as byte)
+    buf.push((7).to_byte())
 }
 "#,
         "cannot call mutating method 'push' on immutable variable 'buf'",
@@ -543,7 +543,7 @@ fn fail_bytes_extend_on_immutable_local() {
 fn main() {
     let buf = bytes_new()
     let mut other = bytes_new()
-    other.push(1 as byte)
+    other.push((1).to_byte())
     buf.extend(other)
 }
 "#,
@@ -557,7 +557,7 @@ fn fail_bytes_fill_on_immutable_local() {
         r#"
 fn main() {
     let buf = bytes_new()
-    buf.fill(0 as byte)
+    buf.fill((0).to_byte())
 }
 "#,
         "cannot call mutating method 'fill' on immutable variable 'buf'",
@@ -574,7 +574,7 @@ fn stamp(buf: bytes) {
 
 fn main() {
     let mut buf = bytes_new()
-    buf.push(0 as byte)
+    buf.push((0).to_byte())
     stamp(buf)
 }
 "#,
@@ -588,7 +588,7 @@ fn fail_bytes_copy_from_on_immutable_local() {
         r#"
 fn main() {
     let mut src = bytes_new()
-    src.push(1 as byte)
+    src.push((1).to_byte())
     let dst = bytes_new()
     dst.copy_from(src, 0, 0, 1)
 }
@@ -602,11 +602,11 @@ fn bytes_read_methods_on_immutable_binding_allowed() {
     let out = compile_and_run_stdout(
         r#"
 fn main() {
-    let mut src = bytes_filled(8, 0 as byte)
+    let mut src = bytes_filled(8, (0).to_byte())
     src.write_i64_le(0, 7)
     let buf = src
     let part = buf.slice(0, 4)
-    print(f"{buf.read_u8(0)} {buf.read_i64_le(0)} {buf.find(7 as byte, 0)} {buf.compare(src)} {part.len()}")
+    print(f"{buf.read_u8(0)} {buf.read_i64_le(0)} {buf.find((7).to_byte(), 0)} {buf.compare(src)} {part.len()}")
 }
 "#,
     );
@@ -635,7 +635,7 @@ fn fail_bytes_push_on_non_mut_param() {
     compile_should_fail_with(
         r#"
 fn stamp(buf: bytes) {
-    buf.push(7 as byte)
+    buf.push((7).to_byte())
 }
 
 fn main() {
@@ -738,7 +738,7 @@ fn main() {
     s.insert(2)
     s.remove(1)
     let mut buf = bytes_new()
-    buf.push(7 as byte)
+    buf.push((7).to_byte())
     print(f"{m.len()} {s.len()} {buf.len()}")
 }
 "#,
@@ -770,7 +770,7 @@ fn bytes_push_on_mut_param_allowed() {
     let out = compile_and_run_stdout(
         r#"
 fn stamp(mut buf: bytes) {
-    buf.push(7 as byte)
+    buf.push((7).to_byte())
 }
 
 fn main() {

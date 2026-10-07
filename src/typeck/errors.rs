@@ -701,9 +701,6 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
         Expr::UnaryOp { operand, .. } => {
             collect_expr_effects(operand, ctx);
         }
-        Expr::Cast { expr: inner, .. } => {
-            collect_expr_effects(inner, ctx);
-        }
         Expr::Call { name, args, .. } => {
             // A plain (unhandled) call adds no edge — enforcement requires
             // fallible calls to be handled — but a call through a closure
@@ -1354,7 +1351,6 @@ fn enforce_expr(
             enforce_expr(&rhs.node, rhs.span, current_fn, env, lenient)
         }
         Expr::UnaryOp { operand, .. } => enforce_expr(&operand.node, operand.span, current_fn, env, lenient),
-        Expr::Cast { expr: inner, .. } => enforce_expr(&inner.node, inner.span, current_fn, env, lenient),
         Expr::StructLit { fields, .. } => {
             for (_, val) in fields {
                 enforce_expr(&val.node, val.span, current_fn, env, lenient)?;
@@ -1773,22 +1769,6 @@ mod tests {
                 })),
             })),
             inclusive: false,
-        });
-        assert!(contains_propagate(&expr));
-    }
-
-    #[test]
-    fn test_contains_propagate_in_cast() {
-        let expr = sp(Expr::Cast {
-            expr: Box::new(sp(Expr::Propagate {
-                expr: Box::new(sp(Expr::Call {
-                    name: sp("get_num".to_string()),
-                    args: vec![],
-                    type_args: vec![],
-                    target_id: None,
-                })),
-            })),
-            target_type: sp(TypeExpr::Named("float".to_string())),
         });
         assert!(contains_propagate(&expr));
     }

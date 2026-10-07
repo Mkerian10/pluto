@@ -98,17 +98,27 @@ fn param_trait_non_impl() { compile_should_fail_with(r#"trait T{} class C{x:int}
 fn use_trait(t:T){}
 fn main(){use_trait(C{x:1})}"#, "expected trait T, found C"); }
 
-// Casting to trait objects
+// Trait object conversions. `as` was removed (rfc-number-types phase 3):
+// class->trait is an implicit upcast (only when the class implements the
+// trait), and trait->concrete downcasting does not exist in any form.
 #[test]
-fn cast_to_trait() { compile_should_fail_with(r#"trait T{}
+fn class_not_implementing_trait_rejected() {
+    // A class that does not implement T cannot be used as a T — the implicit
+    // upcast is the only spelling, and it is rejected here.
+    compile_should_fail_with(r#"trait T{}
 class C{x:int}
 fn main(){let c=C{x:1}
-let t=c as T}"#, "cannot cast from C to trait T"); }
+let t:T=c}"#, "type mismatch");
+}
 #[test]
-fn cast_trait_to_concrete() { compile_should_fail_with(r#"trait T{}
+fn downcast_trait_to_concrete_has_no_syntax() {
+    // There is no downcast: the old `t as C` is now a parse error pointing at
+    // the removal of `as`.
+    compile_should_fail_with(r#"trait T{}
 class C impl T{x:int}
 fn main(){let t:T=C{x:1}
-let c=t as C}"#, "cannot cast from trait T to C"); }
+let c=t as C}"#, "removed");
+}
 
 // Map/Set with trait objects
 #[test]

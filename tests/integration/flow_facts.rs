@@ -1212,7 +1212,7 @@ fn f(b: bytes) int {
 
 fn main() {
     let mut b = bytes_new()
-    b.push(1 as byte)
+    b.push((1).to_byte())
     print(f(b))
 }
 "#,
@@ -1446,14 +1446,14 @@ fn main() {
     );
 }
 
-// ── Byte widening: `let x = b as int` starts bounded 0..255 ─────────────────
+// ── Byte widening: `let x = b.to_int()` starts bounded 0..255 ─────────────────
 
 #[test]
 fn byte_cast_binding_carries_byte_range() {
     assert_single_warning(
         r#"
 fn f(b: byte) int {
-    let x = b as int
+    let x = b.to_int()
     if x < 256 {
         return 1
     }
@@ -1461,7 +1461,7 @@ fn f(b: byte) int {
 }
 
 fn main() {
-    print(f(7 as byte))
+    print(f((7).to_byte()))
 }
 "#,
         "condition is always true",
@@ -1470,13 +1470,13 @@ fn main() {
 
 #[test]
 fn int_cast_binding_of_nonbyte_carries_nothing() {
-    // `bool as int` is NOT a byte widening — no [0, 255] fact may appear
+    // `bool.to_int()` is NOT a byte widening — no [0, 255] fact may appear
     // (it happens to be 0..1, but only the byte rule is implemented, and a
     // wrong-source fact would be a soundness hole for future rules).
     assert_no_warnings(
         r#"
 fn f(flag: bool) int {
-    let x = flag as int
+    let x = flag.to_int()
     if x < 256 {
         return 1
     }

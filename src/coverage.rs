@@ -552,7 +552,6 @@ impl<'a> CoverageScanner<'a> {
                 }
             }
             Expr::Catch { expr: inner, .. } => self.scan_expr(&inner.node),
-            Expr::Cast { expr: inner, .. } => self.scan_expr(&inner.node),
             Expr::Range { start, end, .. } => {
                 self.scan_expr(&start.node);
                 self.scan_expr(&end.node);

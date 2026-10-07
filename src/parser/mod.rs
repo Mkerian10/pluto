@@ -3876,20 +3876,25 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Postfix as — type cast (binds tighter than all infix operators, but
-            // looser than prefix unary ops so that `-1 as byte` = `(-1) as byte`)
+            // Postfix `as` casts were removed (rfc-number-types phase 3). Every
+            // conversion is now a named method; a cast is a parse error with a
+            // per-target fix-it pointing at the replacement.
             if min_bp < 21 && self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::As) {
+                let as_span = self.peek_raw().unwrap().span;
                 self.advance(); // consume 'as'
                 let target_type = self.parse_type()?;
-                let span = Span::new(lhs.span.start, target_type.span.end);
-                lhs = Spanned::new(
-                    Expr::Cast {
-                        expr: Box::new(lhs),
-                        target_type,
-                    },
-                    span,
-                );
-                continue;
+                let fixit = match &target_type.node {
+                    TypeExpr::Named(n) if n == "int" => {
+                        "`as int` was removed; use `.to_int()` (on byte/bool), or `.to_int()` on a float returns `int?` (none for NaN/inf/out-of-range)"
+                    }
+                    TypeExpr::Named(n) if n == "float" => "`as float` was removed; use `.to_float()`",
+                    TypeExpr::Named(n) if n == "bool" => "`as bool` was removed; use `x != 0`",
+                    TypeExpr::Named(n) if n == "byte" => {
+                        "`as byte` was removed; use `.to_byte()` (checked, returns `byte?`) or `.low_byte()` (truncating)"
+                    }
+                    _ => "`as` casts were removed; use a conversion method (`.to_int()`, `.to_float()`, `.to_byte()`, `.low_byte()`)",
+                };
+                return Err(CompileError::syntax(fixit, as_span));
             }
 
             // Check for generic enum expression: EnumName<type_args>.Variant
@@ -6198,36 +6203,27 @@ mod tests {
         assert!(matches!(method.contracts[0].node.kind, ContractKind::Requires));
     }
 
-    // Type casting & operators parser tests
+    // `as` casts were removed (rfc-number-types phase 3): parsing one is an
+    // error with a per-target fix-it pointing at the replacement method.
 
     #[test]
-    fn parse_cast_int_to_float() {
-        let prog = parse("fn main() {\n    let x = 42 as float\n}");
-        let f = &prog.functions[0].node;
-        match &f.body.node.stmts[0].node {
-            Stmt::Let { value, .. } => {
-                assert!(matches!(value.node, Expr::Cast { .. }));
-            }
-            _ => panic!("expected let statement"),
-        }
+    fn parse_cast_to_float_is_rejected() {
+        let err = parse_err("fn main() {\n    let x = 42 as float\n}");
+        assert!(err.to_string().contains("to_float"), "err: {err}");
     }
 
     #[test]
-    fn parse_cast_in_expression() {
-        let prog = parse("fn main() {\n    let x = (1 + 2) as float\n}");
-        let f = &prog.functions[0].node;
-        match &f.body.node.stmts[0].node {
-            Stmt::Let { value, .. } => {
-                match &value.node {
-                    Expr::Cast { expr, .. } => {
-                        // Inner expression should be the addition
-                        assert!(matches!(expr.node, Expr::BinOp { op: BinOp::Add, .. }));
-                    }
-                    _ => panic!("expected cast expression"),
-                }
-            }
-            _ => panic!("expected let statement"),
-        }
+    fn parse_cast_to_int_is_rejected() {
+        let err = parse_err("fn main() {\n    let x = (1 + 2) as int\n}");
+        let msg = err.to_string();
+        assert!(msg.contains("was removed") && msg.contains("to_int"), "err: {msg}");
+    }
+
+    #[test]
+    fn parse_cast_to_byte_suggests_both_methods() {
+        let err = parse_err("fn main() {\n    let x = 300 as byte\n}");
+        let msg = err.to_string();
+        assert!(msg.contains("to_byte") && msg.contains("low_byte"), "err: {msg}");
     }
 
     #[test]

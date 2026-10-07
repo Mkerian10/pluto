@@ -14,17 +14,17 @@ import std.hash
 // enough for a demo record.)
 fn frame_record(payload: bytes) bytes {
     let mut frame = bytes_new()
-    frame.push((payload.len() & 0xFF) as byte)
+    frame.push((payload.len() & 0xFF).to_byte())
     let mut i = 0
     while i < payload.len() {
         frame.push(payload[i])
         i = i + 1
     }
     let crc = hash.crc32c(payload)
-    frame.push(((crc >> 24) & 0xFF) as byte)
-    frame.push(((crc >> 16) & 0xFF) as byte)
-    frame.push(((crc >> 8) & 0xFF) as byte)
-    frame.push((crc & 0xFF) as byte)
+    frame.push(((crc >> 24) & 0xFF).to_byte())
+    frame.push(((crc >> 16) & 0xFF).to_byte())
+    frame.push(((crc >> 8) & 0xFF).to_byte())
+    frame.push((crc & 0xFF).to_byte())
     return frame
 }
 
@@ -34,7 +34,7 @@ fn validate_frame(wal: bytes, offset: int) int {
     if offset + 1 > wal.len() {
         return -1
     }
-    let len = wal[offset] as int
+    let len = wal[offset].to_int()
     let end = offset + 1 + len + 4
     if end > wal.len() {
         return -1   // truncated mid-record (torn write)
@@ -45,10 +45,10 @@ fn validate_frame(wal: bytes, offset: int) int {
         payload.push(wal[i])
         i = i + 1
     }
-    let stored = ((wal[i] as int) << 24)
-        | ((wal[i + 1] as int) << 16)
-        | ((wal[i + 2] as int) << 8)
-        | (wal[i + 3] as int)
+    let stored = ((wal[i].to_int()) << 24)
+        | ((wal[i + 1].to_int()) << 16)
+        | ((wal[i + 2].to_int()) << 8)
+        | (wal[i + 3].to_int())
     if hash.crc32c(payload) != stored {
         return -1   // bit rot / garbage tail
     }
@@ -68,9 +68,9 @@ fn main() {
         }
     }
     // Simulate a crash mid-append: half a record lands.
-    wal.push(7 as byte)
-    wal.push(112 as byte)
-    wal.push(117 as byte)
+    wal.push((7).to_byte())
+    wal.push((112).to_byte())
+    wal.push((117).to_byte())
     let total = wal.len()
     print(f"log: {total} bytes (3 whole records + a torn tail)")
 

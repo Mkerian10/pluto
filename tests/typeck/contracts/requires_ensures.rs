@@ -141,14 +141,14 @@ b.set(2)}"#).is_ok()); }
 
 // Requires with cast
 #[test]
-fn requires_cast() { compile_should_fail_with(r#"fn f(x:int) requires (x as float)>0.0 int{return x} fn main(){}"#, "expected newline after statement"); }
+fn requires_cast() { compile_should_fail_with(r#"fn f(x:int) requires (x as float)>0.0 int{return x} fn main(){}"#, "removed"); }
 
 // Ensures with cast
 #[test]
 fn ensures_cast() { compile_should_fail_with(r#"class C{x:int
 fn get(mut self) int ensures (self.x as float)>0.0 {return self.x}
 }
-fn main(){}"#, "type casts are not allowed in contract expressions"); }
+fn main(){}"#, "removed"); }
 
 // Requires on void function
 #[test]

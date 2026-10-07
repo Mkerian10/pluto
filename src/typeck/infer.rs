@@ -263,22 +263,6 @@ pub(crate) fn infer_expr(
                 }
             }
         }
-        Expr::Cast { expr, target_type } => {
-            let source = infer_expr(&expr.node, expr.span, env, None)?;
-            let target = resolve_type(target_type, env)?;
-            match (&source, &target) {
-                (PlutoType::Int, PlutoType::Float)
-                | (PlutoType::Float, PlutoType::Int)
-                | (PlutoType::Int, PlutoType::Bool)
-                | (PlutoType::Bool, PlutoType::Int)
-                | (PlutoType::Int, PlutoType::Byte)
-                | (PlutoType::Byte, PlutoType::Int) => Ok(target),
-                _ => Err(CompileError::type_err(
-                    format!("cannot cast from {source} to {target}"),
-                    span,
-                )),
-            }
-        }
         Expr::Call { name, args, type_args, .. } => infer_call(name, args, type_args, span, env),
         Expr::StructLit { name, fields: lit_fields, type_args, .. } => {
             infer_struct_lit(name, lit_fields, type_args, span, env)
@@ -2278,9 +2262,10 @@ fn render_receiver(e: &Expr) -> String {
     }
 }
 
-/// A finite float literal whose truncation toward zero fits in i64.
+/// A finite float literal (optionally negated) whose truncation toward zero
+/// fits in i64.
 fn float_lit_fits_i64(recv: &Expr) -> bool {
-    if let Expr::FloatLit(f) = recv
+    if let Some(f) = const_float_lit(recv)
         && f.is_finite()
     {
         let t = f.trunc();
@@ -2289,6 +2274,16 @@ fn float_lit_fits_i64(recv: &Expr) -> bool {
         return t >= i64::MIN as f64 && t < 9_223_372_036_854_775_808.0;
     }
     false
+}
+
+/// The compile-time value of a float-literal expression: a bare `FloatLit`
+/// or a negated one (`-2.7` parses as `UnaryOp { Neg, FloatLit }`).
+fn const_float_lit(e: &Expr) -> Option<f64> {
+    match e {
+        Expr::FloatLit(f) => Some(*f),
+        Expr::UnaryOp { op: UnaryOp::Neg, operand } => const_float_lit(&operand.node).map(|f| -f),
+        _ => None,
+    }
 }
 
 fn infer_method_call(

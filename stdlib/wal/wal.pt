@@ -573,10 +573,10 @@ fn load_log(path: string) bytes {
 
 // Big-endian unsigned 32-bit read. Caller guarantees off+4 <= data.len().
 fn be32(data: bytes, off: int) int {
-    return ((data[off] as int) << 24)
-        | ((data[off + 1] as int) << 16)
-        | ((data[off + 2] as int) << 8)
-        | (data[off + 3] as int)
+    return ((data[off].to_int()) << 24)
+        | ((data[off + 1].to_int()) << 16)
+        | ((data[off + 2].to_int()) << 8)
+        | (data[off + 3].to_int())
 }
 
 // Big-endian unsigned 32-bit append; returns the extended buffer
@@ -584,9 +584,9 @@ fn be32(data: bytes, off: int) int {
 // append() guards the frame limit before encoding, so v fits 32 bits.
 fn push_be32(buf: bytes, v: int) bytes {
     let mut b = buf
-    b.push(((v >> 24) & 0xFF) as byte)
-    b.push(((v >> 16) & 0xFF) as byte)
-    b.push(((v >> 8) & 0xFF) as byte)
-    b.push((v & 0xFF) as byte)
+    b.push(((v >> 24) & 0xFF).to_byte())
+    b.push(((v >> 16) & 0xFF).to_byte())
+    b.push(((v >> 8) & 0xFF).to_byte())
+    b.push((v & 0xFF).to_byte())
     return b
 }

@@ -56,7 +56,7 @@
 //! is the count of checks that remain at runtime, reported by
 //! `pluto analyze` next to the assumption surface (DerivedInfo).
 
-use crate::parser::ast::{BinOp, Expr, Stmt, TypeExpr, UnaryOp};
+use crate::parser::ast::{BinOp, Expr, Stmt, UnaryOp};
 use crate::span::Spanned;
 use crate::visit::Visitor;
 
@@ -192,11 +192,11 @@ impl<'a> FitScan<'a> {
                 lhs,
                 ..
             } => self.is_int_operand(&lhs.node),
-            // An `as int` cast is an int operand whatever its source —
-            // byte/bool widenings participate (and byte sources carry
+            // A `.to_int()` conversion is an int operand whatever its source
+            // — byte/bool widenings participate (and byte sources carry
             // their [0, 255] bounds through `expr_bounds`).
-            Expr::Cast { target_type, .. } => {
-                matches!(&target_type.node, TypeExpr::Named(n) if n == "int")
+            Expr::MethodCall { method, args, .. } if method.node == "to_int" && args.is_empty() => {
+                true
             }
             _ => {
                 matches!(typed_path(e, self.env), Some((_, PlutoType::Int)))

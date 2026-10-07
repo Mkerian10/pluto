@@ -621,13 +621,6 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
             }
         }
         Expr::Spawn { call } => v.visit_expr(call),
-        Expr::Cast {
-            expr: inner,
-            target_type,
-        } => {
-            v.visit_expr(inner);
-            v.visit_type_expr(target_type);
-        }
         Expr::FieldAccess { object, .. } => v.visit_expr(object),
 
         // Binary
@@ -1210,13 +1203,6 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, expr: &mut Spanned<Expr>) {
             }
         }
         Expr::Spawn { call } => v.visit_expr_mut(call),
-        Expr::Cast {
-            expr: inner,
-            target_type,
-        } => {
-            v.visit_expr_mut(inner);
-            v.visit_type_expr_mut(target_type);
-        }
         Expr::FieldAccess { object, .. } => v.visit_expr_mut(object),
 
         Expr::BinOp { lhs, rhs, .. } => {
@@ -1424,7 +1410,6 @@ mod tests {
                 Expr::Closure { .. } => "Closure",
                 Expr::Catch { .. } => "Catch",
                 Expr::Propagate { .. } => "Propagate",
-                Expr::Cast { .. } => "Cast",
                 Expr::StringInterp { .. } => "StringInterp",
                 Expr::Range { .. } => "Range",
                 Expr::ClosureCreate { .. } => "ClosureCreate",
@@ -1680,24 +1665,6 @@ mod tests {
 
         assert!(collector.visited.contains("NullPropagate"));
         assert!(collector.visited.contains("Ident"));
-    }
-
-    // ============================================================================
-    // Test: walk_expr visits Cast expression and target type
-    // ============================================================================
-
-    #[test]
-    fn test_walk_expr_visits_cast() {
-        let cast = dummy(Expr::Cast {
-            expr: Box::new(dummy(Expr::IntLit(42))),
-            target_type: dummy(TypeExpr::Named("float".to_string())),
-        });
-
-        let mut collector = ExprCollector::default();
-        collector.visit_expr(&cast);
-
-        assert!(collector.visited.contains("Cast"));
-        assert!(collector.visited.contains("IntLit"));
     }
 
     // ============================================================================

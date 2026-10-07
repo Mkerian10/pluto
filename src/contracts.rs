@@ -259,10 +259,6 @@ fn validate_decidable_fragment(expr: &Expr, span: Span, kind: ContractKind) -> R
             "spawn is not allowed in contract expressions",
             span,
         )),
-        Expr::Cast { .. } => Err(CompileError::syntax(
-            "type casts are not allowed in contract expressions",
-            span,
-        )),
         Expr::Index { .. } => Err(CompileError::syntax(
             "index expressions are not allowed in contract expressions",
             span,
@@ -501,17 +497,6 @@ mod tests {
         let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("spawn is not allowed"));
-    }
-
-    #[test]
-    fn reject_cast() {
-        let expr = Expr::Cast {
-            expr: Box::new(spanned(Expr::IntLit(1))),
-            target_type: spanned(TypeExpr::Named("float".to_string())),
-        };
-        let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("type casts are not allowed"));
     }
 
     #[test]

@@ -642,10 +642,6 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
         Expr::UnaryOp { operand, .. } => {
             substitute_in_expr(&mut operand.node, bindings);
         }
-        Expr::Cast { expr: inner, target_type } => {
-            substitute_in_expr(&mut inner.node, bindings);
-            substitute_in_type_expr(&mut target_type.node, bindings);
-        }
         Expr::Call { args, type_args, .. } => {
             for arg in args.iter_mut() {
                 substitute_in_expr(&mut arg.node, bindings);
@@ -2267,10 +2263,7 @@ mod tests {
     fn test_substitute_in_stmt_return_with_expr() {
         use crate::parser::ast::Stmt;
 
-        let mut stmt = Stmt::Return(Some(spanned(Expr::Cast {
-            expr: Box::new(spanned(Expr::IntLit(42))),
-            target_type: spanned(TypeExpr::Named("T".to_string())),
-        })));
+        let mut stmt = Stmt::Return(Some(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })));
 
         let mut bindings = HashMap::new();
         bindings.insert("T".to_string(), TypeExpr::Named("float".to_string()));
@@ -2278,8 +2271,8 @@ mod tests {
         substitute_in_stmt(&mut stmt, &bindings);
 
         if let Stmt::Return(Some(expr)) = stmt {
-            if let Expr::Cast { target_type, .. } = &expr.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "float"));
+            if let Expr::Call { type_args, .. } = &expr.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "float"));
             }
         } else {
             panic!("Expected Return statement");
@@ -2292,10 +2285,7 @@ mod tests {
 
         let mut stmt = Stmt::Assign {
             target: spanned("x".to_string()),
-            value: spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(10))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            }),
+            value: spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None }),
         };
 
         let mut bindings = HashMap::new();
@@ -2304,8 +2294,8 @@ mod tests {
         substitute_in_stmt(&mut stmt, &bindings);
 
         if let Stmt::Assign { value, .. } = stmt {
-            if let Expr::Cast { target_type, .. } = &value.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            if let Expr::Call { type_args, .. } = &value.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected Assign statement");
@@ -2319,10 +2309,7 @@ mod tests {
         let mut stmt = Stmt::FieldAssign {
             object: spanned(Expr::Ident("obj".to_string())),
             field: spanned("field".to_string()),
-            value: spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(5))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            }),
+            value: spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None }),
         };
 
         let mut bindings = HashMap::new();
@@ -2331,8 +2318,8 @@ mod tests {
         substitute_in_stmt(&mut stmt, &bindings);
 
         if let Stmt::FieldAssign { value, .. } = stmt {
-            if let Expr::Cast { target_type, .. } = &value.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "string"));
+            if let Expr::Call { type_args, .. } = &value.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "string"));
             }
         } else {
             panic!("Expected FieldAssign statement");
@@ -2407,10 +2394,7 @@ mod tests {
         let mut stmt = Stmt::IndexAssign {
             object: spanned(Expr::Ident("arr".to_string())),
             index: spanned(Expr::IntLit(0)),
-            value: spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(42))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            }),
+            value: spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None }),
         };
 
         let mut bindings = HashMap::new();
@@ -2419,8 +2403,8 @@ mod tests {
         substitute_in_stmt(&mut stmt, &bindings);
 
         if let Stmt::IndexAssign { value, .. } = stmt {
-            if let Expr::Cast { target_type, .. } = &value.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "float"));
+            if let Expr::Call { type_args, .. } = &value.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "float"));
             }
         } else {
             panic!("Expected IndexAssign statement");
@@ -2435,10 +2419,7 @@ mod tests {
             error_name: spanned("MyError".to_string()),
             fields: vec![(
                 spanned("value".to_string()),
-                spanned(Expr::Cast {
-                    expr: Box::new(spanned(Expr::IntLit(100))),
-                    target_type: spanned(TypeExpr::Named("T".to_string())),
-                }),
+                spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None }),
             )],
             error_id: None,
         };
@@ -2449,8 +2430,8 @@ mod tests {
         substitute_in_stmt(&mut stmt, &bindings);
 
         if let Stmt::Raise { fields, .. } = stmt {
-            if let Expr::Cast { target_type, .. } = &fields[0].1.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            if let Expr::Call { type_args, .. } = &fields[0].1.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected Raise statement");
@@ -2461,10 +2442,7 @@ mod tests {
     fn test_substitute_in_stmt_expr() {
         use crate::parser::ast::Stmt;
 
-        let mut stmt = Stmt::Expr(spanned(Expr::Cast {
-            expr: Box::new(spanned(Expr::IntLit(42))),
-            target_type: spanned(TypeExpr::Named("T".to_string())),
-        }));
+        let mut stmt = Stmt::Expr(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None }));
 
         let mut bindings = HashMap::new();
         bindings.insert("T".to_string(), TypeExpr::Named("bool".to_string()));
@@ -2472,8 +2450,8 @@ mod tests {
         substitute_in_stmt(&mut stmt, &bindings);
 
         if let Stmt::Expr(expr) = stmt {
-            if let Expr::Cast { target_type, .. } = &expr.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "bool"));
+            if let Expr::Call { type_args, .. } = &expr.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "bool"));
             }
         } else {
             panic!("Expected Expr statement");
@@ -2546,10 +2524,7 @@ mod tests {
         use crate::parser::ast::Stmt;
 
         let mut stmt = Stmt::Yield {
-            value: spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(10))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            }),
+            value: spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None }),
         };
 
         let mut bindings = HashMap::new();
@@ -2558,8 +2533,8 @@ mod tests {
         substitute_in_stmt(&mut stmt, &bindings);
 
         if let Stmt::Yield { value } = stmt {
-            if let Expr::Cast { target_type, .. } = &value.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            if let Expr::Call { type_args, .. } = &value.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected Yield statement");
@@ -2668,23 +2643,20 @@ mod tests {
     }
 
     #[test]
-    fn test_substitute_in_expr_cast_target_type() {
+    fn test_substitute_in_expr_call_type_arg() {
         use crate::parser::ast::Expr;
 
-        let mut expr = Expr::Cast {
-            expr: Box::new(spanned(Expr::IntLit(42))),
-            target_type: spanned(TypeExpr::Named("T".to_string())),
-        };
+        let mut expr = Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None };
 
         let mut bindings = HashMap::new();
         bindings.insert("T".to_string(), TypeExpr::Named("float".to_string()));
 
         substitute_in_expr(&mut expr, &bindings);
 
-        if let Expr::Cast { target_type, .. } = expr {
-            assert!(matches!(target_type.node, TypeExpr::Named(ref n) if n == "float"));
+        if let Expr::Call { type_args, .. } = expr {
+            assert!(matches!(type_args[0].node, TypeExpr::Named(ref n) if n == "float"));
         } else {
-            panic!("Expected Cast expression");
+            panic!("Expected Call expression");
         }
     }
 
@@ -2795,10 +2767,7 @@ mod tests {
         use crate::parser::ast::Expr;
 
         let mut expr = Expr::NullPropagate {
-            expr: Box::new(spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(42))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            })),
+            expr: Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
         };
 
         let mut bindings = HashMap::new();
@@ -2807,8 +2776,8 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::NullPropagate { expr: inner } = expr {
-            if let Expr::Cast { target_type, .. } = &inner.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            if let Expr::Call { type_args, .. } = &inner.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected NullPropagate expression");
@@ -2821,10 +2790,7 @@ mod tests {
 
         let mut expr = Expr::BinOp {
             op: BinOp::Add,
-            lhs: Box::new(spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(1))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            })),
+            lhs: Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
             rhs: Box::new(spanned(Expr::IntLit(2))),
         };
 
@@ -2834,8 +2800,8 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::BinOp { lhs, .. } = expr {
-            if let Expr::Cast { target_type, .. } = &lhs.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            if let Expr::Call { type_args, .. } = &lhs.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected BinOp expression");
@@ -2848,10 +2814,7 @@ mod tests {
 
         let mut expr = Expr::UnaryOp {
             op: UnaryOp::Neg,
-            operand: Box::new(spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(5))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            })),
+            operand: Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
         };
 
         let mut bindings = HashMap::new();
@@ -2860,8 +2823,8 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::UnaryOp { operand, .. } = expr {
-            if let Expr::Cast { target_type, .. } = &operand.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "float"));
+            if let Expr::Call { type_args, .. } = &operand.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "float"));
             }
         } else {
             panic!("Expected UnaryOp expression");
@@ -2873,10 +2836,7 @@ mod tests {
         use crate::parser::ast::Expr;
 
         let mut expr = Expr::FieldAccess {
-            object: Box::new(spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::Ident("obj".to_string()))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            })),
+            object: Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
             field: spanned("field".to_string()),
         };
 
@@ -2886,8 +2846,8 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::FieldAccess { object, .. } = expr {
-            if let Expr::Cast { target_type, .. } = &object.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "MyClass"));
+            if let Expr::Call { type_args, .. } = &object.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "MyClass"));
             }
         } else {
             panic!("Expected FieldAccess expression");
@@ -2899,10 +2859,7 @@ mod tests {
         use crate::parser::ast::Expr;
 
         let mut expr = Expr::MethodCall {
-            object: Box::new(spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::Ident("obj".to_string()))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            })),
+            object: Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
             method: spanned("process".to_string()),
             args: vec![spanned(Expr::IntLit(10))],
             type_args: vec![],
@@ -2914,8 +2871,8 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::MethodCall { object, .. } = expr {
-            if let Expr::Cast { target_type, .. } = &object.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "Handler"));
+            if let Expr::Call { type_args, .. } = &object.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "Handler"));
             }
         } else {
             panic!("Expected MethodCall expression");
@@ -2928,10 +2885,7 @@ mod tests {
 
         let mut expr = Expr::ArrayLit {
             elements: vec![
-                spanned(Expr::Cast {
-                    expr: Box::new(spanned(Expr::IntLit(1))),
-                    target_type: spanned(TypeExpr::Named("T".to_string())),
-                }),
+                spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None }),
                 spanned(Expr::IntLit(2)),
             ],
         };
@@ -2942,8 +2896,8 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::ArrayLit { elements } = expr {
-            if let Expr::Cast { target_type, .. } = &elements[0].node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            if let Expr::Call { type_args, .. } = &elements[0].node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected ArrayLit expression");
@@ -2956,10 +2910,7 @@ mod tests {
 
         let mut expr = Expr::Index {
             object: Box::new(spanned(Expr::Ident("arr".to_string()))),
-            index: Box::new(spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(0))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            })),
+            index: Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
         };
 
         let mut bindings = HashMap::new();
@@ -2968,8 +2919,8 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::Index { index, .. } = expr {
-            if let Expr::Cast { target_type, .. } = &index.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            if let Expr::Call { type_args, .. } = &index.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected Index expression");
@@ -2983,10 +2934,7 @@ mod tests {
         let mut expr = Expr::StringInterp {
             parts: vec![
                 StringInterpPart::Lit("value: ".to_string()),
-                StringInterpPart::Expr(spanned(Expr::Cast {
-                    expr: Box::new(spanned(Expr::IntLit(42))),
-                    target_type: spanned(TypeExpr::Named("T".to_string())),
-                })),
+                StringInterpPart::Expr(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
             ],
         };
 
@@ -2997,8 +2945,8 @@ mod tests {
 
         if let Expr::StringInterp { parts } = expr {
             if let StringInterpPart::Expr(e) = &parts[1] {
-                if let Expr::Cast { target_type, .. } = &e.node {
-                    assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "string"));
+                if let Expr::Call { type_args, .. } = &e.node {
+                    assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "string"));
                 }
             }
         } else {
@@ -3011,10 +2959,7 @@ mod tests {
         use crate::parser::ast::Expr;
 
         let mut expr = Expr::Range {
-            start: Box::new(spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(1))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            })),
+            start: Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
             end: Box::new(spanned(Expr::IntLit(10))),
             inclusive: false,
         };
@@ -3025,8 +2970,8 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::Range { start, .. } = expr {
-            if let Expr::Cast { target_type, .. } = &start.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            if let Expr::Call { type_args, .. } = &start.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected Range expression");
@@ -3038,10 +2983,7 @@ mod tests {
         use crate::parser::ast::Expr;
 
         let mut expr = Expr::Propagate {
-            expr: Box::new(spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(42))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            })),
+            expr: Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
         };
 
         let mut bindings = HashMap::new();
@@ -3050,8 +2992,8 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::Propagate { expr: inner } = expr {
-            if let Expr::Cast { target_type, .. } = &inner.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            if let Expr::Call { type_args, .. } = &inner.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected Propagate expression");
@@ -3064,10 +3006,7 @@ mod tests {
 
         let mut expr = Expr::Catch {
             expr: Box::new(spanned(Expr::IntLit(42))),
-            handlers: vec![CatchHandler::Shorthand(Box::new(spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(0))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            })))],
+            handlers: vec![CatchHandler::Shorthand(Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })))],
         };
 
         let mut bindings = HashMap::new();
@@ -3077,8 +3016,8 @@ mod tests {
 
         if let Expr::Catch { handlers, .. } = expr {
             if let CatchHandler::Shorthand(body) = &handlers[0] {
-                if let Expr::Cast { target_type, .. } = &body.node {
-                    assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+                if let Expr::Call { type_args, .. } = &body.node {
+                    assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
                 }
             }
         } else {
@@ -3091,10 +3030,7 @@ mod tests {
         use crate::parser::ast::Expr;
 
         let mut expr = Expr::Spawn {
-            call: Box::new(spanned(Expr::Cast {
-                expr: Box::new(spanned(Expr::IntLit(42))),
-                target_type: spanned(TypeExpr::Named("T".to_string())),
-            })),
+            call: Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
         };
 
         let mut bindings = HashMap::new();
@@ -3103,8 +3039,8 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::Spawn { call } = expr {
-            if let Expr::Cast { target_type, .. } = &call.node {
-                assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+            if let Expr::Call { type_args, .. } = &call.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected Spawn expression");
@@ -3253,12 +3189,12 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_generic_te_in_function_body_with_cast() {
+    fn test_resolve_generic_te_in_function_body_with_type_arg() {
         use crate::parser::ast::{Stmt, Expr};
 
         let mut func = Function {
             id: Uuid::new_v4(),
-            name: spanned("cast_example".to_string()),
+            name: spanned("type_arg_example".to_string()),
             type_params: vec![],
             type_param_bounds: HashMap::new(),
             params: vec![],
@@ -3268,12 +3204,14 @@ mod tests {
                     spanned(Stmt::Let {
                         name: spanned("x".to_string()),
                         ty: None,
-                        value: spanned(Expr::Cast {
-                            expr: Box::new(spanned(Expr::IntLit(42))),
-                            target_type: spanned(TypeExpr::Generic {
+                        value: spanned(Expr::Call {
+                            name: spanned("f".to_string()),
+                            args: vec![],
+                            type_args: vec![spanned(TypeExpr::Generic {
                                 name: "Task".to_string(),
                                 type_args: vec![spanned(TypeExpr::Named("int".to_string()))],
-                            }),
+                            })],
+                            target_id: None,
                         }),
                         is_mut: false,
                     }),
@@ -3291,8 +3229,8 @@ mod tests {
 
         // Check that the cast target type was visited
         if let Stmt::Let { value, .. } = &func.body.node.stmts[0].node {
-            if let Expr::Cast { target_type, .. } = &value.node {
-                assert!(matches!(&target_type.node, TypeExpr::Generic { name, .. } if name == "Task"));
+            if let Expr::Call { type_args, .. } = &value.node {
+                assert!(matches!(&type_args[0].node, TypeExpr::Generic { name, .. } if name == "Task"));
             }
         }
     }

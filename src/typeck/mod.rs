@@ -1096,26 +1096,28 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Type casting & operators typeck tests
+    // Conversion-method typeck tests (rfc-number-types: `as` removed)
 
     #[test]
-    fn cast_int_to_float() {
-        check("fn main() {\n    let x: float = 42 as float\n}").unwrap();
+    fn convert_int_to_float() {
+        check("fn main() {\n    let x: float = 42.to_float()\n}").unwrap();
     }
 
     #[test]
-    fn cast_float_to_int() {
-        check("fn main() {\n    let x: int = 3.14 as int\n}").unwrap();
+    fn convert_float_to_int_literal_narrows() {
+        // A finite in-range float literal narrows `int?` to `int`.
+        check("fn main() {\n    let x: int = 3.14.to_int()\n}").unwrap();
     }
 
     #[test]
-    fn cast_int_to_bool() {
-        check("fn main() {\n    let x: bool = 1 as bool\n}").unwrap();
+    fn convert_bool_to_int() {
+        check("fn main() {\n    let x: int = true.to_int()\n}").unwrap();
     }
 
     #[test]
-    fn cast_invalid_rejected() {
-        let result = check("fn main() {\n    let x: int = \"hi\" as int\n}");
+    fn convert_string_has_no_to_bool() {
+        let result = check("fn main() {\n    let x: int = \"hi\".to_int()\n}");
+        // string.to_int() is `int?`, not assignable to a plain `int`.
         assert!(result.is_err());
     }
 

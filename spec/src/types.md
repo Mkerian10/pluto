@@ -257,22 +257,27 @@ Pluto performs the following implicit type conversions (widening):
 | `T` | `T?` | Any value implicitly wraps to nullable |
 | `none` | `T?` | The `none` literal is assignable to any nullable type |
 
-No other implicit conversions exist. In particular, `float` to `int` requires an explicit cast.
+No other implicit conversions exist. In particular, `float` to `int` requires an explicit conversion.
 
 ### Explicit Conversions
 
-The `as` operator performs explicit type conversion between compatible types:
+There is no `as` cast. Every explicit conversion is a named method, and a conversion that can lose information returns a nullable so the loss is handled at the call site:
 
-| Cast | Behavior |
-|------|----------|
-| `int as float` | Convert integer to floating-point |
-| `float as int` | Truncate toward zero |
-| `int as bool` | `0` → `false`, non-zero → `true` |
-| `bool as int` | `false` → `0`, `true` → `1` |
-| `int as byte` | Truncate to low 8 bits |
-| `byte as int` | Zero-extend to 64 bits |
+| Conversion | Method | Result | Failure mode |
+|------------|--------|--------|--------------|
+| `byte` → `int` | `b.to_int()` | `int` | total (zero-extend) |
+| `bool` → `int` | `b.to_int()` | `int` | total (`false` → `0`, `true` → `1`) |
+| `int` → `float` | `x.to_float()` | `float` | total; rounds to nearest for magnitudes ≥ 2^53 |
+| `int` → `bool` | `x != 0` | `bool` | — (a comparison, not a conversion) |
+| `float` → `int` | `f.to_int()` | `int?` | `none` for `NaN`, `±inf`, or out of i64 range; otherwise truncates toward zero |
+| `int` → `byte` | `x.to_byte()` | `byte?` | `none` outside `0..255` |
+| `int` → `byte` (truncating) | `x.low_byte()` | `byte` | total; keeps the low 8 bits |
 
-All other casts are compile errors.
+Rounding composes explicitly: `f.round().to_int()`, `f.floor().to_int()`.
+
+A conversion that returns `T?` **narrows to `T`** wherever the flow-fact engine proves the value is in range — a guard (`if x >= 0 && x <= 255 { ... }`), an `assert`, a mask (`(x & 0xFF).to_byte()`), or an in-range literal. Used where `T` is required without such a proof, the still-nullable result is a compile error that points at the conversion and suggests the missing fact (see rfc-number-types §2).
+
+There are no conversions involving `string`, classes, arrays, or other composite types; recovering a concrete type from a trait or nullable is done with `match`, nullable narrowing, or typed `catch`.
 
 ## Type Compatibility
 

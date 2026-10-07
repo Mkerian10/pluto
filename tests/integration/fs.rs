@@ -1014,7 +1014,7 @@ fn main() {
     let mut payload = bytes_new()
     let mut i = 0
     while i < 256 {
-        payload.push(i as byte)
+        payload.push(i.low_byte())
         i = i + 1
     }
 
@@ -1040,7 +1040,7 @@ fn main() {
     let mut ok = got.len() == 256
     let mut j = 0
     while j < got.len() {
-        if (got[j] as int) != j {
+        if (got[j].to_int()) != j {
             ok = false
         }
         j = j + 1
@@ -1066,7 +1066,7 @@ fn main() {
     let mut payload = bytes_new()
     let mut i = 0
     while i < 256 {
-        payload.push(i as byte)
+        payload.push(i.low_byte())
         i = i + 1
     }
 
@@ -1075,7 +1075,7 @@ fn main() {
     let mut ok = back.len() == 256
     let mut j = 0
     while j < back.len() {
-        if (back[j] as int) != j {
+        if (back[j].to_int()) != j {
             ok = false
         }
         j = j + 1
@@ -1089,7 +1089,7 @@ fn main() {
     let mut ok2 = both.len() == 512
     let mut k = 0
     while k < both.len() {
-        if (both[k] as int) != k % 256 {
+        if (both[k].to_int()) != k % 256 {
             ok2 = false
         }
         k = k + 1
@@ -1098,13 +1098,13 @@ fn main() {
 
     // write_all_bytes truncates like write_all.
     let mut two = bytes_new()
-    two.push(0 as byte)
-    two.push(255 as byte)
+    two.push((0).to_byte())
+    two.push((255).to_byte())
     fs.write_all_bytes(path, two)!
     let small = fs.read_all_bytes(path)!
     print(small.len())
-    print(small[0] as int)
-    print(small[1] as int)
+    print(small[0].to_int())
+    print(small[1].to_int())
 
     fs.remove_dir_all(tmp)!
 }
@@ -1360,7 +1360,7 @@ fn drain_check(fd: int) int {
         }
         let mut c = 0
         while c < chunk.len() {
-            if (chunk[c] as int) != idx % 256 {
+            if (chunk[c].to_int()) != idx % 256 {
                 ok = false
             }
             idx = idx + 1
@@ -1380,7 +1380,7 @@ fn main() {
     let mut payload = bytes_new()
     let mut i = 0
     while i < 1048613 {
-        payload.push((i % 256) as byte)
+        payload.push((i % 256).low_byte())
         i = i + 1
     }
     fs.write_all_bytes(path, payload)!
@@ -1411,8 +1411,8 @@ fn main() {
 
     // Cursor untouched by the whole relay: a sequential read starts at 0.
     let head = f.read_bytes(2)!
-    print(head[0] as int)
-    print(head[1] as int)
+    print(head[0].to_int())
+    print(head[1].to_int())
     f.close()!
     socket.close(sfd)
     socket.close(lfd)
@@ -1530,7 +1530,7 @@ fn main() {
     let mut payload = bytes_new()
     let mut i = 0
     while i < 1048613 {
-        payload.push((i % 256) as byte)
+        payload.push((i % 256).low_byte())
         i = i + 1
     }
     fs.write_all_bytes(path, payload)!
@@ -1564,7 +1564,7 @@ fn main() {
     let mut ok = back.len() == 1048613
     let mut j = 0
     while j < back.len() {
-        if (back[j] as int) != j % 256 {
+        if (back[j].to_int()) != j % 256 {
             ok = false
         }
         j = j + 1
@@ -1834,10 +1834,10 @@ fn main() {
     w.close()!
     let b = fs.read_all_bytes(path)!
     print(b.len())
-    print(b[0] as int)
-    print(b[1] as int)
-    print(b[2] as int)
-    print(b[4] as int)
+    print(b[0].to_int())
+    print(b[1].to_int())
+    print(b[2].to_int())
+    print(b[4].to_int())
     fs.remove_dir_all(tmp)!
 }
 "#,
