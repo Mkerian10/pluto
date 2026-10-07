@@ -155,3 +155,99 @@ fn test_delegation_bypass() {
         "Toolchain commands should not delegate"
     );
 }
+
+// ============================================================
+// Stdlib ABI compatibility handshake (issue #396)
+// ============================================================
+
+/// Writes a trivial program into `dir`, compiles it with `stdlib_root` as the
+/// stdlib. Returns the compile result so callers can assert success/failure.
+fn compile_with_stdlib(
+    dir: &std::path::Path,
+    stdlib_root: &std::path::Path,
+) -> Result<(), pluto::diagnostics::CompileError> {
+    let entry = dir.join("main.pt");
+    std::fs::write(&entry, "fn main() {\n}\n").unwrap();
+    let out = dir.join("out_bin");
+    pluto::compile_file_with_stdlib(&entry, &out, Some(stdlib_root))
+}
+
+/// A stdlib whose ABI requirement exceeds the compiler's is rejected with one
+/// clear sentence pointing at the skew, not a misleading type error.
+#[test]
+fn test_stdlib_abi_mismatch_clear_message() {
+    let proj = tempfile::tempdir().unwrap();
+    let stdlib = tempfile::tempdir().unwrap();
+    std::fs::write(stdlib.path().join("ABI"), "requires-compiler-abi = 999\n").unwrap();
+
+    let err = compile_with_stdlib(proj.path(), stdlib.path())
+        .expect_err("stdlib requiring a newer compiler ABI must be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains(
+            "this stdlib requires compiler ABI >= 999; this pluto binary supports 1 \
+             — update the compiler (or point --stdlib at a matching stdlib)"
+        ),
+        "unexpected message: {msg}"
+    );
+}
+
+/// A stdlib whose ABI requirement matches the compiler loads normally.
+#[test]
+fn test_stdlib_abi_match_passes() {
+    let proj = tempfile::tempdir().unwrap();
+    let stdlib = tempfile::tempdir().unwrap();
+    std::fs::write(
+        stdlib.path().join("ABI"),
+        format!("requires-compiler-abi = {}\n", pluto::toolchain::STDLIB_ABI_VERSION),
+    )
+    .unwrap();
+
+    compile_with_stdlib(proj.path(), stdlib.path())
+        .expect("matching ABI must compile");
+}
+
+/// A stdlib with no ABI manifest is treated as a pre-handshake stdlib and
+/// accepted silently.
+#[test]
+fn test_stdlib_abi_missing_file_accepted() {
+    let proj = tempfile::tempdir().unwrap();
+    let stdlib = tempfile::tempdir().unwrap();
+    // No ABI file written.
+
+    compile_with_stdlib(proj.path(), stdlib.path())
+        .expect("missing ABI manifest must be accepted silently");
+}
+
+/// A malformed ABI requirement is reported, not silently ignored.
+#[test]
+fn test_stdlib_abi_malformed_rejected() {
+    let proj = tempfile::tempdir().unwrap();
+    let stdlib = tempfile::tempdir().unwrap();
+    std::fs::write(stdlib.path().join("ABI"), "requires-compiler-abi = banana\n").unwrap();
+
+    let err = compile_with_stdlib(proj.path(), stdlib.path())
+        .expect_err("malformed ABI requirement must be rejected");
+    assert!(
+        err.to_string().contains("must be a non-negative integer"),
+        "unexpected message: {err}"
+    );
+}
+
+/// The handshake must NOT fire for user project directories: a project that
+/// happens to contain a stray `ABI` file, compiled WITHOUT an explicit stdlib
+/// and without a ./stdlib subdir, is unaffected.
+#[test]
+fn test_user_project_stray_abi_file_unaffected() {
+    let proj = tempfile::tempdir().unwrap();
+    // Stray ABI file in the user's project root with an impossible requirement.
+    std::fs::write(proj.path().join("ABI"), "requires-compiler-abi = 999\n").unwrap();
+
+    let entry = proj.path().join("main.pt");
+    std::fs::write(&entry, "fn main() {\n}\n").unwrap();
+    let out = proj.path().join("out_bin");
+
+    // No --stdlib, no ./stdlib subdir → effective stdlib is None → no check.
+    pluto::compile_file(&entry, &out)
+        .expect("stray ABI file in a user project must not trigger the handshake");
+}

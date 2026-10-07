@@ -1117,6 +1117,14 @@ fn resolve_modules_inner(
         None
     };
 
+    // Compatibility handshake (issue #396): before flattening any stdlib module
+    // into the program, refuse a stdlib that requires a newer compiler ABI than
+    // this binary supports. Fires for both explicit --stdlib/PLUTO_STDLIB paths
+    // and ./stdlib discovery; never for user modules.
+    if let Some(stdlib_dir) = &effective_stdlib {
+        crate::toolchain::check_stdlib_abi(stdlib_dir)?;
+    }
+
     let current_deps = pkg_graph.root_deps();
 
     let mut resolver = Resolver {

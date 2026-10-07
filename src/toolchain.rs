@@ -8,7 +8,30 @@
 
 use crate::diagnostics::CompileError;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// ABI version of the stdlib↔compiler contract that THIS compiler binary was
+/// built to validate: the extern-type whitelist, the prelude shape, and the
+/// marshaling/wire contracts the stdlib relies on. A stdlib stamps the minimum
+/// compiler ABI it needs in a `stdlib/ABI` manifest; `check_stdlib_abi` below
+/// refuses to load a stdlib whose requirement exceeds this number, turning a
+/// version-skew crash into one clear sentence (issue #396).
+///
+/// BUMP RULE — increment this by hand (and update the matching note in the
+/// stdlib's `stdlib/ABI` file) whenever a change makes a newer stdlib
+/// unloadable by older compilers, i.e. whenever you:
+///   - widen or change the extern-type whitelist (src/typeck/register.rs),
+///   - change the prelude's shape in a way the stdlib depends on
+///     (stdlib/prelude.pt), or
+///   - change the marshaling / wire encoding contracts.
+/// A pure-additive stdlib change (a new function the old compiler can still
+/// compile) does NOT need a bump. When in doubt, bump: a false bump only costs
+/// users an upgrade prompt, a missed one brings back the misleading type error.
+///
+/// 2026-10-06: initialized to 1. First ABI established alongside the handshake
+/// itself; the `bytes` extern whitelist entry (the skew that motivated #396)
+/// is part of ABI 1.
+pub const STDLIB_ABI_VERSION: u32 = 1;
 
 /// Returns the ~/.pluto/versions/ directory, creating it if it doesn't exist.
 pub fn versions_dir() -> Result<PathBuf, CompileError> {
@@ -58,6 +81,72 @@ pub fn active_version() -> Result<String, CompileError> {
 /// Returns the version of the currently running compiler binary.
 pub fn running_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// Parse the `requires-compiler-abi = N` line out of a `stdlib/ABI` manifest.
+/// Blank lines and `#` comments are ignored. Returns `Ok(None)` if the key is
+/// absent; `Err` if it is present but malformed.
+fn parse_required_abi(content: &str, abi_path: &Path) -> Result<Option<u32>, CompileError> {
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "requires-compiler-abi" {
+            continue;
+        }
+        let value = value.trim();
+        return match value.parse::<u32>() {
+            Ok(n) => Ok(Some(n)),
+            Err(_) => Err(CompileError::module(format!(
+                "{}: 'requires-compiler-abi' must be a non-negative integer, got '{}'",
+                abi_path.display(),
+                value
+            ))),
+        };
+    }
+    Ok(None)
+}
+
+/// Compatibility handshake run BEFORE the stdlib is flattened into the program
+/// (issue #396). `stdlib_root` is the resolved stdlib directory — from
+/// `--stdlib`, `PLUTO_STDLIB`, or `./stdlib` discovery; never a user module
+/// dir, so this never fires for user code that happens to contain an `ABI`
+/// file.
+///
+/// A stdlib declares the minimum compiler ABI it needs in `<stdlib_root>/ABI`
+/// (`requires-compiler-abi = N`). If that requirement exceeds the compiler's
+/// [`STDLIB_ABI_VERSION`], loading would produce a misleading type error that
+/// points at the stdlib rather than at the skew — so we refuse up front with
+/// one clear sentence.
+///
+/// A MISSING `ABI` file is accepted silently: it marks a stdlib that predates
+/// this handshake, which (requiring an implicit ABI of 0) any current compiler
+/// can load. Only a stdlib that explicitly asks for a newer compiler is
+/// rejected.
+pub fn check_stdlib_abi(stdlib_root: &Path) -> Result<(), CompileError> {
+    let abi_path = stdlib_root.join("ABI");
+    let content = match fs::read_to_string(&abi_path) {
+        Ok(c) => c,
+        // No manifest (or unreadable) → old stdlib, accept silently.
+        Err(_) => return Ok(()),
+    };
+
+    let Some(required) = parse_required_abi(&content, &abi_path)? else {
+        return Ok(());
+    };
+
+    if required > STDLIB_ABI_VERSION {
+        return Err(CompileError::module(format!(
+            "this stdlib requires compiler ABI >= {}; this pluto binary supports {} — update the compiler (or point --stdlib at a matching stdlib)",
+            required, STDLIB_ABI_VERSION
+        )));
+    }
+
+    Ok(())
 }
 
 /// Lists all installed versions (directory names in ~/.pluto/versions/).
@@ -290,6 +379,63 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, CompileError::Toolchain(_)));
+    }
+
+    #[test]
+    fn test_parse_required_abi_valid() {
+        let p = Path::new("ABI");
+        assert_eq!(
+            parse_required_abi("requires-compiler-abi = 3\n", p).unwrap(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn test_parse_required_abi_ignores_comments_and_blanks() {
+        let content = "# a comment\n\n   # indented comment\nrequires-compiler-abi = 7\n";
+        assert_eq!(
+            parse_required_abi(content, Path::new("ABI")).unwrap(),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn test_parse_required_abi_absent_key() {
+        assert_eq!(
+            parse_required_abi("other-key = 1\n", Path::new("ABI")).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_required_abi_malformed() {
+        assert!(parse_required_abi("requires-compiler-abi = x\n", Path::new("ABI")).is_err());
+    }
+
+    #[test]
+    fn test_check_stdlib_abi_missing_file_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        // No ABI file present → accepted.
+        assert!(check_stdlib_abi(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn test_check_stdlib_abi_mismatch_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("ABI"), "requires-compiler-abi = 999\n").unwrap();
+        let err = check_stdlib_abi(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("this stdlib requires compiler ABI >= 999"));
+    }
+
+    #[test]
+    fn test_check_stdlib_abi_match_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("ABI"),
+            format!("requires-compiler-abi = {STDLIB_ABI_VERSION}\n"),
+        )
+        .unwrap();
+        assert!(check_stdlib_abi(dir.path()).is_ok());
     }
 
     #[test]

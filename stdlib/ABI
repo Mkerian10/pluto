@@ -1,0 +1,13 @@
+# Stdlib → compiler compatibility manifest (issue #396).
+#
+# The compiler reads this BEFORE flattening the stdlib and refuses to load it
+# if `requires-compiler-abi` exceeds the ABI the compiler binary was built to
+# validate (src/toolchain.rs::STDLIB_ABI_VERSION). This turns a version-skew
+# crash — a type error that points at the stdlib, not the skew — into one
+# clear sentence.
+#
+# Bump this to match the compiler's STDLIB_ABI_VERSION whenever this stdlib
+# starts relying on a compiler contract (extern-type whitelist, prelude shape,
+# marshaling/wire encoding) that older compilers lack. See the bump rule next
+# to STDLIB_ABI_VERSION in src/toolchain.rs.
+requires-compiler-abi = 1
