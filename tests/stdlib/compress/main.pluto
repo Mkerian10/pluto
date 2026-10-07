@@ -1,0 +1,218 @@
+import std.compress
+
+// Helpers -------------------------------------------------------------------
+
+// Deterministic pseudo-random byte buffer: a simple LCG so the "random bytes"
+// roundtrip is reproducible across runs and platforms.
+fn pseudo_random(n: int, seed: int) bytes {
+    let mut out = bytes_new()
+    let mut state = seed
+    let mut i = 0
+    while i < n {
+        state = (state * 1103515245 + 12345) & 0x7FFFFFFF
+        out.push(((state >> 16) & 0xFF) as byte)
+        i = i + 1
+    }
+    return out
+}
+
+// Highly compressible buffer: the same byte repeated `n` times.
+fn repeated(b: int, n: int) bytes {
+    let mut out = bytes_new()
+    let mut i = 0
+    while i < n {
+        out.push(b as byte)
+        i = i + 1
+    }
+    return out
+}
+
+// A gzip stream produced by the system `gzip -n -9` tool for the exact bytes
+// "hello, pluto\n". Embedded as a known-good interop vector: if our gunzip can
+// read a stream written by stock gzip, we speak the real format.
+fn gzip_vector() bytes {
+    let mut out = bytes_new()
+    out.push(0x1f as byte)
+    out.push(0x8b as byte)
+    out.push(0x08 as byte)
+    out.push(0x00 as byte)
+    out.push(0x00 as byte)
+    out.push(0x00 as byte)
+    out.push(0x00 as byte)
+    out.push(0x00 as byte)
+    out.push(0x02 as byte)
+    out.push(0x03 as byte)
+    out.push(0xcb as byte)
+    out.push(0x48 as byte)
+    out.push(0xcd as byte)
+    out.push(0xc9 as byte)
+    out.push(0xc9 as byte)
+    out.push(0xd7 as byte)
+    out.push(0x51 as byte)
+    out.push(0x28 as byte)
+    out.push(0xc8 as byte)
+    out.push(0x29 as byte)
+    out.push(0x2d as byte)
+    out.push(0xc9 as byte)
+    out.push(0xe7 as byte)
+    out.push(0x02 as byte)
+    out.push(0x00 as byte)
+    out.push(0x81 as byte)
+    out.push(0x2d as byte)
+    out.push(0x97 as byte)
+    out.push(0xc2 as byte)
+    out.push(0x0d as byte)
+    out.push(0x00 as byte)
+    out.push(0x00 as byte)
+    out.push(0x00 as byte)
+    return out
+}
+
+// gzip roundtrips -----------------------------------------------------------
+
+test "gzip roundtrip of text" {
+    let original = "The quick brown fox jumps over the lazy dog.".to_bytes()
+    let gz = compress.gzip(original, 6)!
+    let back = compress.gunzip(gz)!
+    expect(back.compare(original)).to_equal(0)
+}
+
+test "gzip roundtrip of pseudo-random bytes" {
+    let original = pseudo_random(4096, 42)
+    let gz = compress.gzip(original, 6)!
+    let back = compress.gunzip(gz)!
+    expect(back.len()).to_equal(4096)
+    expect(back.compare(original)).to_equal(0)
+}
+
+test "gzip roundtrip of empty input" {
+    let original = bytes_new()
+    let gz = compress.gzip(original, 6)!
+    let back = compress.gunzip(gz)!
+    expect(back.len()).to_equal(0)
+    expect(back.compare(original)).to_equal(0)
+}
+
+test "gzip roundtrip of 1MB" {
+    let original = pseudo_random(1048576, 7)
+    let gz = compress.gzip(original, 6)!
+    let back = compress.gunzip(gz)!
+    expect(back.len()).to_equal(1048576)
+    expect(back.compare(original)).to_equal(0)
+}
+
+test "gzip roundtrip at every level" {
+    let original = "level sweep payload, moderately compressible aaaa bbbb cccc".to_bytes()
+    let mut level = 0
+    while level <= 9 {
+        let gz = compress.gzip(original, level)!
+        let back = compress.gunzip(gz)!
+        expect(back.compare(original)).to_equal(0)
+        level = level + 1
+    }
+}
+
+// deflate roundtrips --------------------------------------------------------
+
+test "deflate roundtrip of text" {
+    let original = "raw deflate has no framing or checksum".to_bytes()
+    let df = compress.deflate(original, 9)!
+    let back = compress.inflate(df)!
+    expect(back.compare(original)).to_equal(0)
+}
+
+test "deflate roundtrip of pseudo-random bytes" {
+    let original = pseudo_random(8192, 99)
+    let df = compress.deflate(original, 6)!
+    let back = compress.inflate(df)!
+    expect(back.compare(original)).to_equal(0)
+}
+
+test "deflate roundtrip of empty input" {
+    let original = bytes_new()
+    let df = compress.deflate(original, 6)!
+    let back = compress.inflate(df)!
+    expect(back.len()).to_equal(0)
+}
+
+// compression actually shrinks compressible data ----------------------------
+
+test "gzip shrinks highly compressible data" {
+    let original = repeated(0x41, 10000)
+    let gz = compress.gzip(original, 9)!
+    expect(gz.len() < original.len()).to_be_true()
+    let back = compress.gunzip(gz)!
+    expect(back.compare(original)).to_equal(0)
+}
+
+test "deflate shrinks highly compressible data" {
+    let original = repeated(0x5a, 10000)
+    let df = compress.deflate(original, 9)!
+    expect(df.len() < original.len()).to_be_true()
+}
+
+// interop with a stream written by the system gzip tool ---------------------
+
+test "gunzip reads a stream from system gzip" {
+    let expected = "hello, pluto\n".to_bytes()
+    let decoded = compress.gunzip(gzip_vector())!
+    expect(decoded.len()).to_equal(13)
+    expect(decoded.compare(expected)).to_equal(0)
+    expect(decoded.to_string()).to_equal("hello, pluto\n")
+}
+
+// corrupt / truncated input is a condition, not a crash ---------------------
+
+test "gunzip rejects a corrupted stream" {
+    let mut good = gzip_vector()
+    // Flip a byte in the DEFLATE body (past the 10-byte header).
+    good[15] = (((good[15] as int) ^ 0xFF) & 0xFF) as byte
+    expect_raises(compress.CompressError) {
+        compress.gunzip(good)!
+    }
+}
+
+test "gunzip rejects a truncated stream" {
+    let good = gzip_vector()
+    let truncated = good.slice(0, good.len() - 4)
+    expect_raises(compress.CompressError) {
+        compress.gunzip(truncated)!
+    }
+}
+
+test "gunzip rejects non-gzip bytes" {
+    let garbage = "this is definitely not a gzip member".to_bytes()
+    expect_raises(compress.CompressError) {
+        compress.gunzip(garbage)!
+    }
+}
+
+test "inflate rejects corrupt deflate data" {
+    let garbage = pseudo_random(64, 5)
+    expect_raises(compress.CompressError) {
+        compress.inflate(garbage)!
+    }
+}
+
+// level validation ----------------------------------------------------------
+
+test "gzip rejects level above 9" {
+    let data = "x".to_bytes()
+    expect_raises(compress.CompressError) {
+        compress.gzip(data, 10)!
+    }
+}
+
+test "gzip rejects negative level" {
+    let data = "x".to_bytes()
+    expect_raises(compress.CompressError) {
+        compress.gzip(data, -1)!
+    }
+}
+
+test "deflate rejects level above 9" {
+    let data = "x".to_bytes()
+    expect_raises(compress.CompressError) {
+        compress.deflate(data, 99)!
+    }
+}

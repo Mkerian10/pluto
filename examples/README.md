@@ -362,6 +362,14 @@ Demonstrates the `std.hash` module — data-integrity hashes implemented in pure
 cargo run -- run examples/hash/main.pt --stdlib stdlib
 ```
 
+## compress
+
+Demonstrates the `std.compress` module — one-shot compression over `bytes`, backed by the vendored miniz DEFLATE core. Shows `gzip`/`gunzip` (a complete gzip member, the `Content-Encoding: gzip` wire format, interoperable with the `gzip` tool and HTTP) and raw `deflate`/`inflate` (RFC 1951, no header or checksum), the compression ratio on repetitive text, and the error model: decompressing corrupt input or passing an out-of-range level raises `CompressError` (a condition, not a crash), handled here with a typed `catch`.
+
+```bash
+cargo run -- run examples/compress/main.pt --stdlib stdlib
+```
+
 ## regex
 
 Demonstrates the `std.regex` module for pattern matching: literal matching (`matches`), finding patterns (`find`, `find_all`), text replacement (`replace`, `replace_all`), splitting text by pattern (`split`), wildcards (`.`), quantifiers (`*`, `+`, `?`), anchors (`^`, `$`), and character shortcuts (`\d`, `\w`, `\s`).

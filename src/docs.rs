@@ -40,9 +40,10 @@ pub fn get_stdlib_docs(module: Option<&str>) -> Result<String, String> {
             "io" => Ok(stdlib_io()),
             "random" => Ok(stdlib_random()),
             "time" => Ok(stdlib_time()),
+            "compress" => Ok(stdlib_compress()),
             _ => Err(format!(
                 "Unknown stdlib module: `{m}`. Available: strings, math, fs, json, http, \
-                 net, socket, collections, io, random, time"
+                 net, socket, collections, io, random, time, compress"
             )),
         },
     }
@@ -754,6 +755,7 @@ Compile with `--stdlib <path-to-stdlib-dir>`.
 | `std.io` | Console I/O: println, print, read_line |
 | `std.random` | Random number generation: seed, next, between, decimal |
 | `std.time` | Time utilities: now, sleep, elapsed, monotonic clock |
+| `std.compress` | Compression: gzip/gunzip and raw deflate/inflate over bytes (one-shot) |
 
 Use `stdlib_docs` with a module name for detailed function signatures."#
         .to_string()
@@ -1177,6 +1179,41 @@ Pseudo-random number generation.
 | `decimal` | `() float` | Random float in [0.0, 1.0) |
 | `decimal_between` | `(lo: float, hi: float) float` | Random float in [lo, hi) |
 | `coin` | `() bool` | Random boolean (50/50) |"#
+        .to_string()
+}
+
+fn stdlib_compress() -> String {
+    r#"# std.compress
+
+Import: `import std.compress`
+
+One-shot compression over `bytes`, backed by the vendored miniz DEFLATE core.
+Two codecs: `gzip`/`gunzip` (a complete gzip member, RFC 1952 — the
+`Content-Encoding: gzip` wire format, interoperable with the `gzip` tool and
+HTTP) and `deflate`/`inflate` (raw DEFLATE, RFC 1951 — no header or checksum,
+for protocols that frame and check the data themselves). Streaming is a
+planned follow-up; these are whole-buffer-in, whole-buffer-out.
+
+Decompression of corrupt, truncated, or oversized input raises `CompressError`
+rather than trapping; it also refuses to expand past `default_max_size()`
+(64 MiB), rejecting decompression bombs. Compression raises `CompressError`
+only on an out-of-range level.
+
+## Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `gzip` | `(data: bytes, level: int) bytes` | Compress to a gzip member; `level` 0..9 (6 is a good default) |
+| `gunzip` | `(data: bytes) bytes` | Decompress a gzip member; raises `CompressError` on bad input |
+| `deflate` | `(data: bytes, level: int) bytes` | Compress to raw DEFLATE; `level` 0..9 |
+| `inflate` | `(data: bytes) bytes` | Decompress raw DEFLATE; raises `CompressError` on bad input |
+| `default_max_size` | `() int` | The decompression output cap in bytes (64 MiB) |
+
+## Errors
+
+`pub error CompressError { message: string }` — raised by `gunzip`/`inflate`
+on invalid/truncated/oversized input, and by `gzip`/`deflate` on an
+out-of-range level."#
         .to_string()
 }
 

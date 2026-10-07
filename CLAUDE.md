@@ -105,7 +105,7 @@ Each `.c` file is compiled to a `.o` file, then linked with `ld -r` into a singl
 
 **CompilerService** — Protocol-agnostic trait in `src/server/mod.rs` covering module management, declaration inspection, cross-references, compilation/execution, analysis, and documentation. MCP is read-only — all editing operations have been removed. `InProcessServer` in `src/server/in_process.rs` caches `(Program, String, DerivedInfo)` per module and delegates to compiler primitives. Both CLI (`src/main.rs` compile command) and MCP (`mcp/src/server.rs` — docs, stdlib_docs, check, compile, run, test) route through it. See `src/server/types.rs` for all result types.
 
-**Stdlib modules** — 22 modules in `stdlib/`: `std.base64`, `std.blob`, `std.collections`, `std.env`, `std.fs`, `std.hash`, `std.http`, `std.io`, `std.json`, `std.log`, `std.math`, `std.net`, `std.path`, `std.random`, `std.regex`, `std.rpc`, `std.socket`, `std.strings`, `std.time`, `std.uuid`, `std.verify`, `std.wire`. Plus `stdlib/prelude.pt` (auto-imported into every program).
+**Stdlib modules** — 23 modules in `stdlib/`: `std.base64`, `std.blob`, `std.collections`, `std.compress`, `std.env`, `std.fs`, `std.hash`, `std.http`, `std.io`, `std.json`, `std.log`, `std.math`, `std.net`, `std.path`, `std.random`, `std.regex`, `std.rpc`, `std.socket`, `std.strings`, `std.time`, `std.uuid`, `std.verify`, `std.wire`. Plus `stdlib/prelude.pt` (auto-imported into every program).
 
 **No semicolons** — Pluto uses newline-based statement termination. Newlines are lexed as `Token::Newline` and the parser consumes them at statement boundaries while skipping them inside expressions.
 
