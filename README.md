@@ -35,7 +35,7 @@ app OrderSystem[orders: OrderService, payments: PaymentProcessor] {
 
     fn main(self) {
         let order = self.orders.create(item) catch err {
-            logger.warn("order failed: {err}")
+            logger.warn(f"order failed: {err}")
             return
         }
         self.payments.charge(order)!
@@ -53,8 +53,8 @@ app OrderSystem[orders: OrderService, payments: PaymentProcessor] {
 | **Error handling** | `if err != nil` (unchecked) | Checked exceptions (viral annotations) | Compiler-inferred, enforced, zero annotation |
 | **Error propagation** | Manual return | `throws` chains | `!` (one character) |
 | **Service structure** | `func main()` | `@SpringBootApplication` | `app` declaration with typed dep graph |
-| **Contracts** | Comments / hope | Bean validation annotations | `requires` / `ensures` / `invariant` — compiler-checked |
-| **Concurrency** | Goroutines (shared state) | Thread pools + `synchronized` | `spawn` with task handles, channels, select |
+| **Contracts** | Comments / hope | Bean validation annotations | `requires` / `ensures` / `invariant` — statically proven |
+| **Concurrency** | Goroutines (shared state) | Thread pools + `synchronized` | `spawn` + channels + select; values copy, entities serialize |
 
 ## Quick Start
 
@@ -74,7 +74,7 @@ import std.json
 
 class UserService[db: Database] {
     fn get(self, id: int) User {
-        return self.db.query("SELECT * FROM users WHERE id = {id}")!
+        return self.db.query(f"SELECT * FROM users WHERE id = {id}")!
     }
 }
 
@@ -162,7 +162,7 @@ class Account {
 }
 ```
 
-Invariants are checked after construction and every method call. Preconditions and postconditions are enforced at runtime. `old()` captures values at function entry. Violations abort — they are not catchable errors.
+Invariants are **compile-time proof obligations**: the compiler statically proves that every construction and every write preserves them, or the program does not compile — there are no runtime invariant checks (the one exception is validating decoded wire data). `requires` is checked at entry, `ensures` relates pre- and post-state through `old()` and is discharged statically, and `invariant self.segs.len() > 0` over a collection is provable too. The prover works over a decidable fragment (linear integer arithmetic over a type's own fields, flow facts); a property outside it is rejected at declaration rather than silently deferred to runtime.
 
 ### 5. Concurrency composes with everything
 
@@ -183,6 +183,8 @@ for order in rx {
 
 `spawn` returns `Task<T>`. Errors flow through `.get()` and are handled with the same `!` / `catch` as everything else. Channels provide typed, bounded communication between tasks.
 
+Sharing is decided by kind, not by annotation. **Values** (classes, enums, arrays, maps, sets) are copied when they cross a `spawn` or a channel — a sent value can never become shared mutable state. **Objects** (entities — `object Name { ... }`) are shared by identity instead: they carry reference identity (`==` is identity, not structure), their methods serialize through a per-instance lock so distinct instances still run concurrently, and only their methods — never raw field pokes — mutate them. The split is what makes the concurrency safe without a borrow checker.
+
 ## The Language
 
 | Feature | Syntax |
@@ -193,33 +195,42 @@ for order in rx {
 | Arrays | `[1, 2, 3]` with `.len()`, `.push()`, indexing |
 | Maps | `Map<string, int> { "a": 1 }` |
 | Sets | `Set<int> { 1, 2, 3 }` |
-| Classes | `class Point { x: int, y: int }` |
+| Classes | `class Point { x: int, y: int }` (value: copied, structural `==`) |
+| Objects | `object Counter { n: int }` (entity: shared by identity, serialized methods) |
 | Traits | `class Square impl HasArea { ... }` |
 | Enums | `enum Color { Red, Blue }` + `match` |
 | Closures | `(x: int) => x * 2` |
 | Generics | `fn id<T>(x: T) T` (monomorphized) |
-| Nullable | `T?` / `none` / `?` propagation |
+| Nullable | `T?` / `none` / `?` propagation / flow narrowing |
 | For loops | `for x in items { ... }` / `for i in 0..10 { ... }` |
-| Casting | `x as float` |
-| Tests | `test "name" { expect(x).to_equal(y) }` |
+| Comparisons | `a < b`, chained `0 <= i < xs.len()` |
+| Conversions | `x.to_float()` / `s.to_int()` (checked, returns `T?`) / `n.to_byte()` |
+| Tests | `test "name" { expect(x).to_equal(y) }` / `expect_raises(E) { ... }` |
 | Modules | `import math` / `pub fn` |
 | Packages | `pluto.toml` with path and git deps |
 | FFI | `extern rust "mycrate" { fn compute(x: int) int }` |
 
 ## Standard Library
 
+25 modules. Highlights:
+
 | Module | Highlights |
 |---|---|
-| `std.collections` | `map`, `filter`, `fold`, `reduce`, `zip`, `enumerate`, `flat_map` |
+| `std.collections` | `map`, `filter`, `fold`, `reduce`, `zip`, `enumerate`, `flat_map`, stable `sort_by` |
+| `std.strings` | `split`, `trim`, `replace`, `contains`, `starts_with`, `to_upper`, `parse_int`/`parse_float` |
 | `std.json` | Parse, build, access nested values, stringify |
 | `std.http` | HTTP server, request/response, routing |
-| `std.fs` | Read, write, seek, directory listing, file metadata |
-| `std.net` | TCP listener, connections, read/write |
-| `std.strings` | `split`, `trim`, `replace`, `contains`, `starts_with`, `to_upper` |
+| `std.fs` | Read, write, seek, `truncate`, bulk `bytes` ops + fixed-width codecs, kernel file→socket relay |
+| `std.net` / `std.socket` | TCP listener, connections, read/write |
+| `std.compress` | gzip / deflate one-shot compression (vendored miniz) |
+| `std.wal` | Write-ahead log — crash-recovery as a typestate (`Wal<Unrecovered → Ready>`) |
+| `std.blob` | Lockless single-writer blob store, fenced atomic writes (proven) |
 | `std.math` | `abs`, `pow`, `sqrt`, `sin`, `cos`, `log`, `clamp` |
 | `std.time` | Wall clock, monotonic, sleep, elapsed |
 | `std.random` | Integers, floats, ranges, coin flips, seeded RNG |
 | `std.io` | `read_line()` for interactive input |
+
+Plus `std.base64`, `std.hash`, `std.env`, `std.path`, `std.log`, `std.regex`, `std.uuid`, `std.verify`, `std.wire`, `std.rpc`.
 
 ## Compiler
 
@@ -238,9 +249,9 @@ pluto run app.pluto --stdlib stdlib   # With standard library
 
 Pluto exposes its compiler as a structured API. AI agents interact with declarations, types, and cross-references — not raw text.
 
-- **MCP server** with 20+ tools: `load_module`, `inspect`, `xrefs`, `add_declaration`, `replace_declaration`, `check`, `compile`, `run`, `test`
+- **MCP server** (read-only) for inspection: `load_module`, `list_declarations`, `get_declaration`, `usages_of`, `callers_of`, `error_set`, `check`, `compile`, `run`, `test`, `docs`
 - **Binary AST** (`.pluto` PLTO format) with stable UUIDs per declaration
-- **SDK** for programmatic read/write at the semantic level
+- **SDK** (`pluto-sdk`) for programmatic read/write at the semantic level — editing lives here, not in the MCP server
 
 ```bash
 pluto emit-ast main.pluto -o main.pluto    # Source → binary AST
@@ -249,9 +260,9 @@ pluto generate-pt main.pluto               # Binary AST → readable source
 
 ## Project Status
 
-**Working today:** Functions, classes, traits, enums, generics, closures, DI (`app` + bracket deps + ambient deps + scoped deps), typed error handling, contracts (invariants + requires/ensures + interface guarantees), concurrency (spawn + channels + select), nullable types, modules, packages (local + git), maps, sets, bytes, test framework, Rust FFI, standard library, binary AST, MCP server, SDK.
+**Working today:** Functions, classes, objects (entities), traits, enums, generics, closures, DI (`app` + bracket deps + ambient deps + scoped deps), typed error handling, statically-proven contracts (invariants + requires/ensures + two-state + collection-length), typestates with linear transitions and `must_release`, concurrency (spawn + channels + select, with value-copy / entity-serialize semantics), nullable types with flow narrowing, modules, packages (local + git), maps, sets, bytes with bulk ops + codecs, test framework (incl. `expect_raises`), deterministic concurrency testing (DPOR scheduler), Rust FFI, 25-module standard library, binary AST, read-only MCP server, SDK.
 
-**Ahead:** Distribution (cross-pod RPC), orchestration layer, LLVM backend, package registry, stages (programmable entry points), inferred synchronization.
+**Ahead:** Distribution (cross-pod RPC) and the boundary doctrine, a green-task concurrency model (spawn-per-pthread is the current ceiling), orchestration layer, LLVM backend, package registry, stages (programmable entry points).
 
 ## Book
 
