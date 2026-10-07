@@ -1,0 +1,42 @@
+// Numeric conversions (rfc-number-types §2).
+//
+// Every conversion is a named method. Widening conversions are total;
+// conversions that can lose information return a nullable, and the compiler
+// narrows that nullable to a plain value wherever flow facts prove the input
+// is in range.
+
+fn main() {
+    // Total (widening) conversions.
+    let flag = true
+    print(flag.to_int())            // 1
+    let b: byte = (200).to_byte()   // literal proven in 0..255 -> plain byte
+    print(b.to_int())               // 200
+
+    // Deliberate truncation to the low 8 bits, by name.
+    print((300).low_byte().to_int())  // 44
+
+    // Checked int -> byte. A guard supplies the proof that narrows byte? to
+    // byte; out of range, the value simply never reaches the conversion.
+    let n = compute()
+    if n >= 0 && n <= 255 {
+        let only: byte = n.to_byte()
+        print(only.to_int())        // 42
+    }
+
+    // A mask proves the range too, so the conversion narrows with no guard.
+    let packed = 0xDEAD
+    let lo: byte = (packed & 0xFF).to_byte()
+    print(lo.to_int())              // 173
+
+    // Checked float -> int: NaN, infinity and out-of-range values become
+    // none; an in-range value truncates toward zero.
+    print((9.9).to_int())           // 9  (literal proven to fit -> plain int)
+    let bad = 1.0e30
+    print(bad.to_int() ?? (0 - 1))  // -1 (out of range -> none)
+    let nan = 0.0 / 0.0
+    print(nan.to_int() ?? (0 - 2))  // -2 (NaN -> none)
+}
+
+fn compute() int {
+    return 42
+}

@@ -39,6 +39,7 @@ pub(crate) enum Receiver {
     Int,
     Float,
     Bool,
+    Byte,
 }
 
 impl Receiver {
@@ -53,6 +54,7 @@ impl Receiver {
             PlutoType::Int => Some(Receiver::Int),
             PlutoType::Float => Some(Receiver::Float),
             PlutoType::Bool => Some(Receiver::Bool),
+            PlutoType::Byte => Some(Receiver::Byte),
             _ => None,
         }
     }
@@ -68,6 +70,7 @@ impl Receiver {
             Receiver::Int => "int",
             Receiver::Float => "float",
             Receiver::Bool => "bool",
+            Receiver::Byte => "byte",
         }
     }
 }
@@ -97,6 +100,7 @@ pub(crate) enum SymTy {
     ArrayOfString,
     NullableInt,
     NullableFloat,
+    NullableByte,
 }
 
 impl SymTy {
@@ -129,6 +133,7 @@ impl SymTy {
             SymTy::ArrayOfString => PlutoType::Array(Box::new(PlutoType::String)),
             SymTy::NullableInt => PlutoType::Nullable(Box::new(PlutoType::Int)),
             SymTy::NullableFloat => PlutoType::Nullable(Box::new(PlutoType::Float)),
+            SymTy::NullableByte => PlutoType::Nullable(Box::new(PlutoType::Byte)),
         }
     }
 }
@@ -207,6 +212,23 @@ pub(crate) enum Lowering {
     Inline,
 }
 
+/// A fallible conversion whose nullable result (`ret`) narrows to a plain,
+/// non-nullable value when the flow-fact engine proves the receiver is in
+/// range at the call site (rfc-number-types §2). The narrowing range is
+/// carried as metadata here rather than recovered by name-matching, so the
+/// proof logic in `infer.rs` and the lowering in codegen stay one lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Narrow {
+    /// Int receiver: narrows `ret` to its non-nullable inner type when the
+    /// receiver value is provably within `[lo, hi]` (`int.to_byte()` →
+    /// `byte` when `0 <= x <= 255`). Integer literals fold at compile time.
+    IntRange { lo: i64, hi: i64 },
+    /// Float receiver: floats carry no interval facts, so this narrows only
+    /// for a finite float literal whose truncation toward zero fits in i64
+    /// (`9.0.to_int()` → `int`). Everything else stays nullable.
+    FloatToInt,
+}
+
 /// One builtin method: the single source of truth for its existence, typing,
 /// mutability classification, and lowering.
 #[derive(Debug)]
@@ -220,6 +242,9 @@ pub(crate) struct BuiltinMethod {
     pub mutating: bool,
     pub arity: ArityStyle,
     pub lowering: Lowering,
+    /// Present on fallible conversions whose `T?` result proof-narrows to
+    /// `T` (rfc-number-types §2). `None` for every other method.
+    pub narrow: Option<Narrow>,
 }
 
 const fn rt(symbol: &'static str) -> Lowering {
@@ -240,6 +265,20 @@ macro_rules! entry {
             mutating: $mut,
             arity: $arity,
             lowering: $lowering,
+            narrow: None,
+        }
+    };
+    // Variant for proof-narrowing conversions: carries the narrowing range.
+    ($recv:ident, $name:literal, [$($param:expr),*], $ret:ident, mutating: $mut:literal, $arity:expr, $lowering:expr, narrow: $narrow:expr) => {
+        BuiltinMethod {
+            receiver: Receiver::$recv,
+            name: $name,
+            params: &[$($param),*],
+            ret: SymTy::$ret,
+            mutating: $mut,
+            arity: $arity,
+            lowering: $lowering,
+            narrow: Some($narrow),
         }
     };
 }
@@ -303,16 +342,24 @@ pub(crate) static BUILTIN_METHODS: &[BuiltinMethod] = &[
     entry!(Int, "to_string", [], Str, mutating: false, WithGot, rt("__pluto_int_to_string")),
     entry!(Int, "to_float", [], Float, mutating: false, WithGot, Lowering::Inline), // bare fcvt_from_sint
     entry!(Int, "abs", [], Int, mutating: false, WithGot, rt("__pluto_abs_int")),
+    // Checked narrowing: `byte?`, narrows to `byte` when proven in 0..255.
+    entry!(Int, "to_byte", [], NullableByte, mutating: false, WithGot, Lowering::Inline, narrow: Narrow::IntRange { lo: 0, hi: 255 }),
+    // Deliberate truncation to the low 8 bits (total, by name).
+    entry!(Int, "low_byte", [], Byte, mutating: false, WithGot, Lowering::Inline), // bare ireduce I64 -> I8
     // ---- float ----
     entry!(Float, "to_string", [], Str, mutating: false, WithGot, rt("__pluto_float_to_string")),
-    entry!(Float, "to_int", [], Int, mutating: false, WithGot, Lowering::Inline), // bare fcvt_to_sint_sat
+    // Checked: NaN / ±inf / out-of-range -> none, else truncates toward zero.
+    entry!(Float, "to_int", [], NullableInt, mutating: false, WithGot, Lowering::Inline, narrow: Narrow::FloatToInt),
     entry!(Float, "abs", [], Float, mutating: false, WithGot, rt("__pluto_abs_float")),
     entry!(Float, "sqrt", [], Float, mutating: false, WithGot, rt("__pluto_sqrt")),
     entry!(Float, "floor", [], Float, mutating: false, WithGot, rt("__pluto_floor")),
     entry!(Float, "ceil", [], Float, mutating: false, WithGot, rt("__pluto_ceil")),
     entry!(Float, "round", [], Float, mutating: false, WithGot, rt("__pluto_round")),
+    // ---- byte ----
+    entry!(Byte, "to_int", [], Int, mutating: false, WithGot, Lowering::Inline), // bare uextend I8 -> I64
     // ---- bool ----
     entry!(Bool, "to_string", [], Str, mutating: false, WithGot, Lowering::Inline), // receiver widens I8 -> I32 for the C ABI
+    entry!(Bool, "to_int", [], Int, mutating: false, WithGot, Lowering::Inline), // bare uextend I8 -> I64
     // ---- string ----
     entry!(Str, "len", [], Int, mutating: false, Bare, rt("__pluto_string_len")),
     entry!(Str, "trim", [], Str, mutating: false, Bare, rt("__pluto_string_trim")),
@@ -463,6 +510,27 @@ mod tests {
                 assert!(
                     matches!(m.ret, SymTy::Void | SymTy::Elem),
                     "mutating builtin {:?}.{} returns {:?}",
+                    m.receiver,
+                    m.name,
+                    m.ret
+                );
+            }
+        }
+    }
+
+    /// A proof-narrowing conversion must declare a nullable return: narrowing
+    /// only ever strips a `T?` down to `T`, so a non-nullable `ret` with
+    /// `narrow` set would be a registry bug (rfc-number-types §2).
+    #[test]
+    fn narrow_entries_return_nullable() {
+        for m in BUILTIN_METHODS {
+            if m.narrow.is_some() {
+                assert!(
+                    matches!(
+                        m.ret,
+                        SymTy::NullableInt | SymTy::NullableFloat | SymTy::NullableByte
+                    ),
+                    "narrowing builtin {:?}.{} must return a nullable, got {:?}",
                     m.receiver,
                     m.name,
                     m.ret

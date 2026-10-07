@@ -706,7 +706,8 @@ fn json_to_wire(j: json.Json) WireValue {
         return wire_bool(j.get_bool())
     }
     if j.is_int() {
-        return wire_int(j.get_int())
+        // Guarded by is_int(): the tag is 2, so get_int() never raises here.
+        return wire_int(j.get_int() catch e { 0 })
     }
     if j.is_float() {
         return wire_float(j.get_float())

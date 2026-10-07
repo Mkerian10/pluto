@@ -366,11 +366,17 @@ fabricated-value defect #416 set out to eliminate.
 1. **Read-out of invariant-bearing collection fields** from outside the class:
    copy, or compile error?
 2. **`low_byte()` naming** — or `wrapping_to_byte()`, to match the future
-   wrapping family?
+   wrapping family? **Resolved (phase 2):** keep `low_byte()`.
 3. **`std.json` `get_int()`** on a non-integral or out-of-range number: raise a
-   JSON error, or return `int?`?
+   JSON error, or return `int?`? **Resolved (phase 2):** it raises a
+   `JsonError` — "out of integer range" for a non-representable magnitude,
+   "not an integer" for a fractional value.
 4. **Specifying the provable fragment** for narrowing: one shared definition
-   with invariant discharge, or a separate (smaller) one?
+   with invariant discharge, or a separate (smaller) one? **Resolved (phase
+   2):** one shared definition. Proof narrowing consults the same flow-fact
+   interval engine (`facts::expr_bounds`, with the `&`/`%`/byte interval
+   rules and `assert` as a fact source) that invariant discharge and the
+   overflow/shift elision passes use; there is no separate narrowing prover.
 5. **Zero-copy views.** #393's operations are offset-based
    (`read_u32_le(buf, off)`, `copy(dst, doff, src, soff, n)`), which covers
    zero-copy *reads* with no new type — under strict #395 a non-`mut` `bytes`

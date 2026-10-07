@@ -262,6 +262,13 @@ pub struct TypeEnv {
     /// The subset of `shift_check_candidates` whose amount the flow facts
     /// prove lies in 0..63 — codegen elides the range check, on a proof only.
     pub proven_shift_spans: HashSet<(u32, usize, usize)>,
+    /// Call sites of a fallible conversion (`int.to_byte()`, `float.to_int()`)
+    /// whose result the flow facts prove is in range, so its `T?` type
+    /// narrowed to `T` (rfc-number-types §2). Keyed by the method name's
+    /// span `(file_id, start, end)` — the key codegen rebuilds from the
+    /// method span to decide whether to emit the unboxed value or the
+    /// checked nullable box.
+    pub narrowed_conversions: HashSet<(u32, usize, usize)>,
     /// Per-node union of edge-carried (propagated) errors, computed after the
     /// inference fixed point. A variant that can arrive via propagation
     /// never shrinks (slice 1: only direct raises shrink).
@@ -564,6 +571,7 @@ impl TypeEnv {
             proven_fit_spans: HashSet::new(),
             shift_check_candidates: HashSet::new(),
             proven_shift_spans: HashSet::new(),
+            narrowed_conversions: HashSet::new(),
             fn_propagated_errors: HashMap::new(),
             fn_value_boundaries: Vec::new(),
             fn_value_provenance: ScopeTracker::new(),

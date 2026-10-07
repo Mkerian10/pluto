@@ -56,7 +56,16 @@ pub class Json {
         if self.tag == 2 {
             return self.int_val
         }
-        return self.float_val as int
+        // A float-valued node: convert, raising if it is not an integer
+        // (NaN, infinity, fractional, or out of i64 range).
+        let v = self.float_val.to_int()
+        if v == none {
+            raise JsonError { message: "JSON number is out of integer range" }
+        }
+        if v.to_float() != self.float_val {
+            raise JsonError { message: "JSON number is not an integer" }
+        }
+        return v
     }
 
     fn get_float(self) float {

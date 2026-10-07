@@ -136,6 +136,14 @@ Demonstrates integer overflow semantics: signed 64-bit overflow on `+`/`-`/`*` i
 cargo run -- run examples/wrapping/main.pt
 ```
 
+## conversions
+
+Demonstrates numeric conversion methods (rfc-number-types §2): total widenings (`bool.to_int()`, `byte.to_int()`), the checked `int.to_byte()` and `float.to_int()` that return a nullable, deliberate truncation with `low_byte()`, and proof narrowing — a guard, a mask, or an in-range literal turns the nullable result back into a plain value.
+
+```bash
+cargo run -- run examples/conversions/main.pt
+```
+
 ## json
 
 Demonstrates the `std.json` module: parsing JSON strings, accessing nested values, building JSON programmatically, and round-tripping through stringify/parse.
