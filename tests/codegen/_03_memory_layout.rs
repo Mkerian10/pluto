@@ -214,10 +214,10 @@ fn test_byte_int_byte_padding() {
         }
 
         fn main() {
-            let x = ByteIntByte { first: 1 as byte, middle: 100, last: 2 as byte }
-            print(x.first as int)
+            let x = ByteIntByte { first: (1).to_byte(), middle: 100, last: (2).to_byte() }
+            print(x.first.to_int())
             print(x.middle)
-            print(x.last as int)
+            print(x.last.to_int())
         }
     "#;
     let output = compile_and_run_stdout(src);
@@ -236,10 +236,10 @@ fn test_byte_float_byte_padding() {
         }
 
         fn main() {
-            let x = ByteFloatByte { a: 5 as byte, b: 3.14, c: 7 as byte }
-            print(x.a as int)
+            let x = ByteFloatByte { a: (5).to_byte(), b: 3.14, c: (7).to_byte() }
+            print(x.a.to_int())
             print(x.b)
-            print(x.c as int)
+            print(x.c.to_int())
         }
     "#;
     let output = compile_and_run_stdout(src);
@@ -395,7 +395,7 @@ fn test_large_struct_mixed_types_30_fields() {
                 f25: 25, f26: 26.0, f27: true, f28: "g",
                 f29: 29, f30: 30.0
             }
-            print(x.f1 + x.f15 as int + x.f29)  // 1 + 0 + 29 = 30
+            print(x.f1 + x.f15.to_int() + x.f29)  // 1 + 0 + 29 = 30
         }
     "#;
     assert_eq!(compile_and_run_stdout(src).trim(), "30");
@@ -617,10 +617,10 @@ fn test_byte_alignment() {
         }
 
         fn main() {
-            let x = ByteStruct { a: 1 as byte, b: 2 as byte, c: 3 as byte }
-            print(x.a as int)
-            print(x.b as int)
-            print(x.c as int)
+            let x = ByteStruct { a: (1).to_byte(), b: (2).to_byte(), c: (3).to_byte() }
+            print(x.a.to_int())
+            print(x.b.to_int())
+            print(x.c.to_int())
         }
     "#;
     let output = compile_and_run_stdout(src);
@@ -715,8 +715,8 @@ fn test_struct_alignment_max_field() {
         }
 
         fn main() {
-            let x = MixedAlign { byte_field: 1 as byte, int_field: 42, float_field: 3.14 }
-            print(x.byte_field as int)
+            let x = MixedAlign { byte_field: (1).to_byte(), int_field: 42, float_field: 3.14 }
+            print(x.byte_field.to_int())
             print(x.int_field)
             print(x.float_field)
         }

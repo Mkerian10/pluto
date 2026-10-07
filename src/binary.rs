@@ -46,7 +46,8 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// in-source test pins (rfc-test-harness phase 3).
 /// v24: DerivedInfo.perception_surface — decode-validated invariants (rfc-module-semantics section 4).
 /// v25: Program.reexports — `pub import module.Item` named re-exports (rfc-module-semantics section 7).
-const SCHEMA_VERSION: u32 = 25;
+/// v26: removed Expr::Cast — `as` casts replaced by conversion methods (rfc-number-types phase 3).
+const SCHEMA_VERSION: u32 = 26;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;
@@ -368,7 +369,7 @@ fn main() {
     let s = Set<int> { 1, 2, 3 }
     let r = 0..10
     let msg = "hello {1 + 2}"
-    let x = 42 as float
+    let x = 42.to_float()
     let y = ~5
 }
 "#;

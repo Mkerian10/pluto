@@ -185,7 +185,7 @@ fn test_stdlib_abi_mismatch_clear_message() {
     let msg = err.to_string();
     assert!(
         msg.contains(
-            "this stdlib requires compiler ABI >= 999; this pluto binary supports 1 \
+            "this stdlib requires compiler ABI >= 999; this pluto binary supports 2 \
              — update the compiler (or point --stdlib at a matching stdlib)"
         ),
         "unexpected message: {msg}"

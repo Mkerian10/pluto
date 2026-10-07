@@ -10,4 +10,4 @@
 # starts relying on a compiler contract (extern-type whitelist, prelude shape,
 # marshaling/wire encoding) that older compilers lack. See the bump rule next
 # to STDLIB_ABI_VERSION in src/toolchain.rs.
-requires-compiler-abi = 1
+requires-compiler-abi = 2

@@ -17,20 +17,23 @@ fn main() {
     let right = 32 >> 2
     print(right)
 
-    // Type casting with 'as'
-    let f = 42 as float
+    // Numeric conversions are named methods (no `as` cast)
+    let f = (42).to_float()
     print(f)
 
-    let i = 3.14 as int
+    // float -> int is `int?` (none for NaN/inf/out-of-range); an in-range
+    // literal narrows to plain int, truncating toward zero
+    let i = (3.14).to_int()
     print(i)
 
-    let b = 1 as bool
+    // int -> bool is a comparison
+    let b = 1 != 0
     print(b)
 
-    let zero_bool = 0 as bool
+    let zero_bool = 0 != 0
     print(zero_bool)
 
-    let back = true as int
+    let back = true.to_int()
     print(back)
 
     // Math builtins

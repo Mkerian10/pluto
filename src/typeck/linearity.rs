@@ -2066,17 +2066,6 @@ impl Visitor for Linearity<'_> {
             Expr::Propagate { expr: inner } => {
                 self.visit_expr(inner);
             }
-            Expr::Cast { expr: inner, target_type: _ } => {
-                if let Some(ob) = self.value_obligation(inner) {
-                    self.deny_move(
-                        &ob,
-                        "a cast — casting erases the typestate and its release obligation",
-                        inner.span,
-                    );
-                    return;
-                }
-                self.visit_expr(inner);
-            }
             Expr::Range { start, end, inclusive: _ } => {
                 self.visit_expr(start);
                 self.check_discarded_temp(start);

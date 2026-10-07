@@ -3412,25 +3412,6 @@ impl<'a> LowerContext<'a> {
                     UnaryOp::BitNot => Ok(self.builder.ins().bnot(val)),
                 }
             }
-            Expr::Cast { expr: inner, target_type } => {
-                let val = self.lower_expr(&inner.node)?;
-                let source_type = infer_type_for_expr(&inner.node, self.env, &self.var_types);
-                let target_type = resolve_type_expr_to_pluto(&target_type.node, self.env);
-                match (source_type.clone(), target_type.clone()) {
-                    (PlutoType::Int, PlutoType::Float) => Ok(self.builder.ins().fcvt_from_sint(types::F64, val)),
-                    (PlutoType::Float, PlutoType::Int) => Ok(self.builder.ins().fcvt_to_sint_sat(types::I64, val)),
-                    (PlutoType::Int, PlutoType::Bool) => {
-                        let zero = self.builder.ins().iconst(types::I64, 0);
-                        Ok(self.builder.ins().icmp(IntCC::NotEqual, val, zero))
-                    }
-                    (PlutoType::Bool, PlutoType::Int) => Ok(self.builder.ins().uextend(types::I64, val)),
-                    (PlutoType::Int, PlutoType::Byte) => Ok(self.builder.ins().ireduce(types::I8, val)),
-                    (PlutoType::Byte, PlutoType::Int) => Ok(self.builder.ins().uextend(types::I64, val)),
-                    (src, tgt) => Err(CompileError::codegen(
-                        format!("invalid cast from {} to {} in lowered AST", src, tgt)
-                    )),
-                }
-            }
             Expr::Call { name, args, .. } => self.lower_call(name, args),
             Expr::StructLit { name, fields, .. } => self.lower_struct_lit(name, fields),
             Expr::ArrayLit { elements } => {
@@ -6844,7 +6825,6 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 UnaryOp::Neg => infer_type_for_expr(&operand.node, env, var_types),
             }
         }
-        Expr::Cast { target_type, .. } => resolve_type_expr_to_pluto(&target_type.node, env),
         Expr::Call { name, args, .. } => {
             // Check if calling a closure variable first
             if let Some(PlutoType::Fn(_, ret, _, _)) = var_types.get(&name.node) {

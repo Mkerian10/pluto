@@ -751,7 +751,7 @@ fn test_analyze_bytes_read_loop_elides() {
     let pt_file = temp.path().join("bytesloop.pt");
     std::fs::write(
         &pt_file,
-        "fn decode(data: bytes) int {\n    let mut acc = 0\n    let mut i = 0\n    while i < data.len() {\n        acc = (data[i] as int) * 256 + (acc & 255)\n        i = i + 1\n    }\n    return acc\n}\n\nfn main() {\n    let mut buf = bytes_new()\n    buf.push(7 as byte)\n    buf.push(9 as byte)\n    print(decode(buf))\n}\n",
+        "fn decode(data: bytes) int {\n    let mut acc = 0\n    let mut i = 0\n    while i < data.len() {\n        acc = (data[i].to_int()) * 256 + (acc & 255)\n        i = i + 1\n    }\n    return acc\n}\n\nfn main() {\n    let mut buf = bytes_new()\n    buf.push((7).to_byte())\n    buf.push((9).to_byte())\n    print(decode(buf))\n}\n",
     )
     .unwrap();
 

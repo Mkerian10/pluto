@@ -23,8 +23,8 @@ fn main() {
 }
 
 #[test]
-fn invalid_cast_shows_types() {
-    // Verify that invalid casts show both source and target types
+fn removed_as_cast_points_at_method() {
+    // The `as` cast was removed; the parse error names the replacement method.
     compile_should_fail_with(
         r#"
 fn main() {
@@ -33,7 +33,7 @@ fn main() {
     print(y)
 }
 "#,
-        "cannot cast from string to int",
+        "to_int",
     );
 }
 

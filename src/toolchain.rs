@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 /// 2026-10-06: initialized to 1. First ABI established alongside the handshake
 /// itself; the `bytes` extern whitelist entry (the skew that motivated #396)
 /// is part of ABI 1.
-pub const STDLIB_ABI_VERSION: u32 = 1;
+pub const STDLIB_ABI_VERSION: u32 = 2;
 
 /// Returns the ~/.pluto/versions/ directory, creating it if it doesn't exist.
 pub fn versions_dir() -> Result<PathBuf, CompileError> {

@@ -23,15 +23,14 @@ Operators are listed from lowest to highest precedence. Operators at the same pr
 | 9 | `..` `..=` | Range |
 | 10 | `+` `-` | Addition, subtraction |
 | 11 | `*` `/` `%` | Multiplication, division, remainder |
-| 12 | `as` | Type cast |
-| 13 | `-` `!` `~` | Prefix: negation, logical NOT, bitwise NOT |
-| 14 (highest) | `.` `[]` `?` `!` `catch` | Postfix: access, index, propagation |
+| 12 | `-` `!` `~` | Prefix: negation, logical NOT, bitwise NOT |
+| 13 (highest) | `.` `[]` `?` `!` `catch` | Postfix: access, index, propagation |
 
 ### Precedence Notes
 
 Prefix operators bind tighter than all binary operators but looser than postfix operators. This means `-x.field` parses as `-(x.field)`, not `(-x).field`.
 
-The `as` operator binds tighter than arithmetic, so `x + y as float` parses as `x + (y as float)`.
+Conversions are postfix method calls (`.to_float()`, `.to_int()`, `.to_byte()`, `.low_byte()`), which bind tighter than arithmetic, so `x + y.to_float()` parses as `x + (y.to_float())`.
 
 Range operators (`..` and `..=`) bind looser than arithmetic, so `1 + 2..10` parses as `(1 + 2)..10`.
 
@@ -123,17 +122,18 @@ The shift amount (right operand of `<<` and `>>`) must lie in `0..63`. An amount
 
 Equality comparison (`==`, `!=`) is defined for all types. For classes, it compares by reference identity. For primitives and strings, it compares by value.
 
-## Type Cast
+## Type Conversions
 
-The `as` operator performs an explicit type conversion:
+There is no `as` cast. Explicit conversions are named methods; one that can lose information returns a nullable:
 
 ```
-let x = 42 as float     // 42.0
-let y = 3.7 as int      // 3
-let z = 1 as bool       // true
+let x = (42).to_float()   // 42.0 (total)
+let y = (3.7).to_int()    // 3    (int?; an in-range literal narrows to int)
+let z = 1 != 0            // true (int -> bool is a comparison)
+let b = (200).to_byte()   // byte (literal proven in 0..255)
 ```
 
-See the [Types](types.md) chapter for the complete list of allowed casts.
+See the [Types](types.md) chapter for the complete conversion table and the proof-narrowing rules.
 
 ## Assignment Operators
 

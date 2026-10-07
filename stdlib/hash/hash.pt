@@ -61,7 +61,7 @@ pub fn to_hex(data: bytes) string {
     let n = data.len()
     let mut i = 0
     while i < n {
-        let b = data[i] as int
+        let b = data[i].to_int()
         out = out + __pluto_string_char_at(alpha, (b >> 4) & 0xF)
         out = out + __pluto_string_char_at(alpha, b & 0xF)
         i = i + 1
@@ -118,7 +118,7 @@ pub class Crc32c {
         let n = data.len()
         let mut i = 0
         while i < n {
-            let idx = (c ^ (data[i] as int)) & 0xFF
+            let idx = (c ^ (data[i].to_int())) & 0xFF
             c = (self.table[idx] ^ ((c >> 8) & 0xFFFFFF)) & 0xFFFFFFFF
             i = i + 1
         }
@@ -193,10 +193,10 @@ fn sha256_compress(h: [int], k: [int], block: bytes, offset: int) [int] {
     let mut t = 0
     while t < 16 {
         let base = offset + t * 4
-        let word = ((block[base] as int) << 24)
-            | ((block[base + 1] as int) << 16)
-            | ((block[base + 2] as int) << 8)
-            | (block[base + 3] as int)
+        let word = ((block[base].to_int()) << 24)
+            | ((block[base + 1].to_int()) << 16)
+            | ((block[base + 2].to_int()) << 8)
+            | (block[base + 3].to_int())
         w.push(word)
         t = t + 1
     }
@@ -320,14 +320,14 @@ pub class Sha256 {
             tail.push(self.buf[i])
             i = i + 1
         }
-        tail.push(0x80 as byte)
+        tail.push((0x80).to_byte())
         while (tail.len() % 64) != 56 {
-            tail.push(0 as byte)
+            tail.push((0).to_byte())
         }
         let bits = self.total * 8
         let mut shift = 56
         while shift >= 0 {
-            tail.push(((bits >> shift) & 0xFF) as byte)
+            tail.push(((bits >> shift) & 0xFF).to_byte())
             shift = shift - 8
         }
 
@@ -343,10 +343,10 @@ pub class Sha256 {
         let mut j = 0
         while j < 8 {
             let word = h[j]
-            digest.push(((word >> 24) & 0xFF) as byte)
-            digest.push(((word >> 16) & 0xFF) as byte)
-            digest.push(((word >> 8) & 0xFF) as byte)
-            digest.push((word & 0xFF) as byte)
+            digest.push(((word >> 24) & 0xFF).to_byte())
+            digest.push(((word >> 16) & 0xFF).to_byte())
+            digest.push(((word >> 8) & 0xFF).to_byte())
+            digest.push((word & 0xFF).to_byte())
             j = j + 1
         }
         return digest
@@ -388,7 +388,7 @@ pub fn fnv1a64(data: bytes) int {
     let n = data.len()
     let mut i = 0
     while i < n {
-        h = h ^ (data[i] as int)
+        h = h ^ (data[i].to_int())
         h = wrapping_mul(h, 0x100000001b3)
         i = i + 1
     }

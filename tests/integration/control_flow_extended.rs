@@ -642,7 +642,7 @@ fn if_expr_in_return() {
 fn if_expr_as_cast_target() {
     let stdout = compile_and_run_stdout(r#"
         fn main() {
-            let x = (if true { 10 } else { 20 }) as float
+            let x = (if true { 10 } else { 20 }).to_float()
             print(x)
         }
     "#);

@@ -157,19 +157,19 @@ pub fn encode_bytes(b: bytes) string {
     let mut i = 0
 
     while i < input_len {
-        let b1 = b[i] as int
+        let b1 = b[i].to_int()
         let mut b2 = 0
         let mut b3 = 0
         let mut has_b2 = 0
         let mut has_b3 = 0
 
         if i + 1 < input_len {
-            b2 = b[i + 1] as int
+            b2 = b[i + 1].to_int()
             has_b2 = 1
         }
 
         if i + 2 < input_len {
-            b3 = b[i + 2] as int
+            b3 = b[i + 2].to_int()
             has_b3 = 1
         }
 
@@ -178,19 +178,19 @@ pub fn encode_bytes(b: bytes) string {
         let c3 = ((b2 & 0x0F) << 2) | ((b3 >> 6) & 0x03)
         let c4 = b3 & 0x3F
 
-        out.push(char_code_at(alpha, c1) as byte)
-        out.push(char_code_at(alpha, c2) as byte)
+        out.push(char_code_at(alpha, c1).low_byte())
+        out.push(char_code_at(alpha, c2).low_byte())
 
         if has_b2 != 0 {
-            out.push(char_code_at(alpha, c3) as byte)
+            out.push(char_code_at(alpha, c3).low_byte())
         } else {
-            out.push(61 as byte)
+            out.push((61).to_byte())
         }
 
         if has_b3 != 0 {
-            out.push(char_code_at(alpha, c4) as byte)
+            out.push(char_code_at(alpha, c4).low_byte())
         } else {
-            out.push(61 as byte)
+            out.push((61).to_byte())
         }
 
         i = i + 3
@@ -236,16 +236,16 @@ pub fn decode_bytes(s: string) bytes {
         }
 
         let b1 = ((c1 << 2) | (c2 >> 4)) & 0xFF
-        result.push(b1 as byte)
+        result.push(b1.low_byte())
 
         if c3_char != 61 {
             let b2 = (((c2 & 0x0F) << 4) | (c3 >> 2)) & 0xFF
-            result.push(b2 as byte)
+            result.push(b2.low_byte())
         }
 
         if c4_char != 61 {
             let b3 = (((c3 & 0x03) << 6) | c4) & 0xFF
-            result.push(b3 as byte)
+            result.push(b3.low_byte())
         }
 
         i = i + 4

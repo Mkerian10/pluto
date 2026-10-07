@@ -41,7 +41,10 @@ fn invariant_closure() { compile_should_fail_with(r#"class C{x:int invariant (()
 
 // Invariant with cast
 #[test]
-fn invariant_cast() { compile_should_fail_with(r#"class C{x:int invariant (self.x as float)>0.0} fn main(){}"#, "expected newline after statement"); }
+fn invariant_cast() { compile_should_fail_with(r#"class C{
+x:int
+invariant (self.x as float)>0.0
+} fn main(){}"#, "removed"); }
 
 // Invariant with null propagation
 #[test]

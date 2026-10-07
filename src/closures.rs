@@ -447,7 +447,6 @@ fn infer_type_from_expr(expr: &Expr) -> PlutoType {
                 _ => infer_type_from_expr(&lhs.node),
             }
         }
-        Expr::Cast { target_type, .. } => resolve_type_for_lift(&target_type.node),
         Expr::UnaryOp { op, operand } => match op {
             UnaryOp::Not => PlutoType::Bool,
             UnaryOp::BitNot => PlutoType::Int,
@@ -753,15 +752,6 @@ mod tests {
     }
 
     #[test]
-    fn infer_cast() {
-        let expr = Expr::Cast {
-            expr: Box::new(spanned(Expr::IntLit(42))),
-            target_type: spanned(TypeExpr::Named("float".to_string())),
-        };
-        assert_eq!(infer_type_from_expr(&expr), PlutoType::Float);
-    }
-
-    #[test]
     fn infer_unary_not_returns_bool() {
         let expr = Expr::UnaryOp {
             op: UnaryOp::Not,
@@ -891,34 +881,6 @@ mod tests {
                 _ => panic!("Closure should be lifted"),
             },
             _ => panic!("Expected UnaryOp"),
-        }
-    }
-
-    #[test]
-    fn lift_recurses_into_cast() {
-        let mut env = empty_type_env();
-        let mut counter = 0;
-        let mut new_fns = Vec::new();
-
-        let mut expr = Expr::Cast {
-            expr: Box::new(spanned(Expr::Closure {
-                params: vec![],
-                return_type: None,
-                body: spanned(Block { stmts: vec![] }),
-            })),
-            target_type: spanned(TypeExpr::Named("int".to_string())),
-        };
-
-        lift_in_expr(&mut expr, dummy_span(), &mut env, &mut counter, &mut new_fns).unwrap();
-
-        match expr {
-            Expr::Cast { expr: inner, .. } => match inner.node {
-                Expr::ClosureCreate { .. } => {
-                    assert_eq!(new_fns.len(), 1);
-                }
-                _ => panic!("Closure should be lifted"),
-            },
-            _ => panic!("Expected Cast"),
         }
     }
 

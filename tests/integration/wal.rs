@@ -181,15 +181,15 @@ fn main() {
     // Crash mid-append: a frame header claiming more payload than the
     // file holds (the torn-write signature).
     let mut garbage = bytes_new()
-    garbage.push(0xFF as byte)
-    garbage.push(0xFF as byte)
-    garbage.push(0x00 as byte)
-    garbage.push(0x10 as byte)
-    garbage.push(0xDE as byte)
-    garbage.push(0xAD as byte)
-    garbage.push(0xBE as byte)
-    garbage.push(0xEF as byte)
-    garbage.push(0x01 as byte)
+    garbage.push((0xFF).to_byte())
+    garbage.push((0xFF).to_byte())
+    garbage.push((0x00).to_byte())
+    garbage.push((0x10).to_byte())
+    garbage.push((0xDE).to_byte())
+    garbage.push((0xAD).to_byte())
+    garbage.push((0xBE).to_byte())
+    garbage.push((0xEF).to_byte())
+    garbage.push((0x01).to_byte())
     fs.append_all_bytes(path, garbage)!
 
     // Recovery cuts the tail, keeps the intact prefix, and says so.
@@ -244,7 +244,7 @@ fn main() {
         patched.push(data[i])
         i = i + 1
     }
-    patched.push(((data[n - 1] as int) ^ 0xFF) as byte)
+    patched.push(((data[n - 1].to_int()) ^ 0xFF).low_byte())
     fs.write_all_bytes(path, patched)!
 
     let intent2 = wal.open(path)

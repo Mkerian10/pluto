@@ -95,7 +95,7 @@ fn test_call_one_param_float() {
     let source = r#"
 fn double_float(x: float) int {
     let result = x * 2.0
-    return result as int
+    return result.to_int() ?? 0
 }
 
 fn main() int {
@@ -209,7 +209,7 @@ fn main() int {
 fn test_call_mixed_param_types() {
     let source = r#"
 fn combine(i: int, f: float, b: bool) int {
-    let base = i + (f as int)
+    let base = i + (f.to_int() ?? 0)
     if b {
         return base + 10
     }
@@ -516,7 +516,7 @@ class Processor {
     base: int
 
     fn process(self, i: int, f: float, s: string) int {
-        return self.base + i + (f as int)
+        return self.base + i + (f.to_int() ?? 0)
     }
 }
 
@@ -830,7 +830,7 @@ fn modify(mut x: float) float {
 fn main() int {
     let a = 42.0
     let b = modify(a)
-    return a as int
+    return a.to_int() ?? 0
 }
 "#;
     assert_eq!(compile_and_run_exit_code(source).unwrap(), 42);

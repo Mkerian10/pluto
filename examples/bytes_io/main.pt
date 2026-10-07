@@ -14,20 +14,20 @@ import std.wire
 fn frame_tag(frame: bytes) int
     requires frame.len() >= 4
 {
-    return frame[0] as int
+    return frame[0].to_int()
 }
 
 fn main() {
     // Build a frame holding every byte value 0..256 — bytes is the honest
     // type for binary data: no encoding, no interpolation, just octets.
     let mut frame = bytes_new()
-    frame.push(7 as byte)   // tag
-    frame.push(0 as byte)   // reserved
-    frame.push(1 as byte)   // length hi
-    frame.push(0 as byte)   // length lo
+    frame.push((7).to_byte())   // tag
+    frame.push((0).to_byte())   // reserved
+    frame.push((1).to_byte())   // length hi
+    frame.push((0).to_byte())   // length lo
     let mut i = 0
     while i < 256 {
-        frame.push(i as byte)
+        frame.push(i.low_byte())
         i = i + 1
     }
     print(f"frame tag: {frame_tag(frame)}, total {frame.len()} bytes")
@@ -54,7 +54,7 @@ fn main() {
     let mut intact = got.len() == 260
     let mut j = 4
     while j < got.len() {
-        if (got[j] as int) != j - 4 {
+        if (got[j].to_int()) != j - 4 {
             intact = false
         }
         j = j + 1

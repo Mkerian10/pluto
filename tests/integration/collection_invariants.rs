@@ -203,8 +203,8 @@ class Buf {
     }
 }
 fn main() {
-    let mut b = Buf { data: bytes_filled(1, 0 as byte) }
-    b.put(7 as byte)
+    let mut b = Buf { data: bytes_filled(1, (0).to_byte()) }
+    b.put((7).to_byte())
     print(b.size())
 }
 "#,

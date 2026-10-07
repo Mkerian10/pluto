@@ -69,7 +69,7 @@ fn main() {
     let mut payload = bytes_new()
     let mut i = 0
     while i < 256 {
-        payload.push(i as byte)
+        payload.push(i.low_byte())
         i = i + 1
     }
     fs.write_all_bytes(bin, payload)!
@@ -77,7 +77,7 @@ fn main() {
     let mut intact = back.len() == 256
     let mut j = 0
     while j < back.len() {
-        if (back[j] as int) != j {
+        if (back[j].to_int()) != j {
             intact = false
         }
         j = j + 1
@@ -88,7 +88,7 @@ fn main() {
     let head = b.read_bytes(2)!            // sequential: cursor now at 2
     let at16 = b.read_at(16, 2)!           // positional: cursor untouched
     let next = b.read_bytes(2)!            // continues from 2, proving it
-    print(f"head {head[0] as int},{head[1] as int}  at16 {at16[0] as int},{at16[1] as int}  next {next[0] as int},{next[1] as int}")
+    print(f"head {head[0].to_int()},{head[1].to_int()}  at16 {at16[0].to_int()},{at16[1].to_int()}  next {next[0].to_int()},{next[1].to_int()}")
     b.close()!
     fs.remove(bin)!
 

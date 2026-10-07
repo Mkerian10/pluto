@@ -1638,9 +1638,6 @@ impl VisitMut for ModuleRewriter<'_> {
             Expr::SetLit { elem_type, .. } => {
                 prefix_type_expr(&mut elem_type.node, self.module_name, self.module_prog);
             }
-            Expr::Cast { target_type, .. } => {
-                prefix_type_expr(&mut target_type.node, self.module_name, self.module_prog);
-            }
             Expr::Closure { params, .. } => {
                 for p in params {
                     prefix_type_expr(&mut p.ty.node, self.module_name, self.module_prog);
@@ -1998,9 +1995,6 @@ impl VisitMut for QualifiedAccessRewriter<'_> {
             }
             Expr::SetLit { elem_type, .. } => {
                 rewrite_type_expr(elem_type, self.aliases);
-            }
-            Expr::Cast { target_type, .. } => {
-                rewrite_type_expr(target_type, self.aliases);
             }
             Expr::Closure { params, .. } => {
                 for p in params {
@@ -2432,9 +2426,6 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
             for elem in elements {
                 resolve_qualified_access_in_expr(&mut elem.node, elem.span, module_names, enum_name_map);
             }
-        }
-        Expr::Cast { expr: inner, .. } => {
-            resolve_qualified_access_in_expr(&mut inner.node, inner.span, module_names, enum_name_map);
         }
         Expr::Range { start, end, .. } => {
             resolve_qualified_access_in_expr(&mut start.node, start.span, module_names, enum_name_map);

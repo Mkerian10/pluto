@@ -623,7 +623,7 @@ stage Api {
         let mut buf = bytes_new()
         let mut i = 0
         while i < 256 {
-            buf.push(i as byte)
+            buf.push(i.low_byte())
             i = i + 1
         }
         let f = Frame { payload: buf, count: 256 }
@@ -631,7 +631,7 @@ stage Api {
         let mut ok = out.payload.len() == 256
         let mut j = 0
         while j < out.payload.len() {
-            if (out.payload[j] as int) != j {
+            if (out.payload[j].to_int()) != j {
                 ok = false
             }
             j = j + 1
@@ -661,13 +661,13 @@ stage Api {
 
     fn main(self) {
         let mut buf = bytes_new()
-        buf.push(255 as byte)
-        buf.push(0 as byte)
+        buf.push((255).to_byte())
+        buf.push((0).to_byte())
         let some = self.echo(Chunk { data: buf })
         let d = some.data
         if d != none {
             print(d.len())
-            print(d[0] as int)
+            print(d[0].to_int())
         } else {
             print("missing")
         }
@@ -702,15 +702,15 @@ stage Api {
 
     fn main(self) {
         let mut a = bytes_new()
-        a.push(1 as byte)
+        a.push((1).to_byte())
         let mut b = bytes_new()
-        b.push(2 as byte)
-        b.push(3 as byte)
+        b.push((2).to_byte())
+        b.push((3).to_byte())
         let chunks = [a, b]
         let out = self.echo(Batch { chunks: chunks })
         print(out.chunks.len())
         print(out.chunks[0].len())
-        print(out.chunks[1][1] as int)
+        print(out.chunks[1][1].to_int())
     }
 }
 "#);

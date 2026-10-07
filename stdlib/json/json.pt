@@ -72,7 +72,7 @@ pub class Json {
         if self.tag == 3 {
             return self.float_val
         }
-        return self.int_val as float
+        return self.int_val.to_float()
     }
 
     fn get_string(self) string {
