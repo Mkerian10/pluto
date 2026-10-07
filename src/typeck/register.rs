@@ -1173,6 +1173,8 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
         if matches!(&return_type, PlutoType::Stream(_)) {
             env.generators.insert(f.name.node.clone());
         }
+        env.fn_param_mut
+            .insert(f.name.node.clone(), f.params.iter().map(|p| p.is_mut).collect());
         env.functions.insert(
             f.name.node.clone(),
             FuncSig { params: param_types, return_type },
@@ -1208,6 +1210,8 @@ pub(crate) fn register_method_sigs(program: &Program, env: &mut TypeEnv) -> Resu
             if !m.params.is_empty() && m.params[0].name.node == "self" && m.params[0].is_mut {
                 env.mut_self_methods.insert(mangled.clone());
             }
+            env.fn_param_mut
+                .insert(mangled.clone(), m.params.iter().map(|p| p.is_mut).collect());
             env.functions.insert(
                 mangled,
                 FuncSig { params: param_types, return_type },

@@ -414,6 +414,18 @@ pub struct TypeEnv {
     /// every obligation site (constructions of `Topic<int>`, foreign writes,
     /// template method boundaries under skolems) sees them.
     pub generic_class_invariants: HashMap<String, Vec<super::discharge::InvariantSpec>>,
+    /// Collection fields (array/map/set/bytes) a class invariant constrains
+    /// via a ghost `len()` term (rfc-number-types.md §4). Keyed by class name
+    /// (mangled, for instantiations). These fields carry the aliasing doors:
+    /// their construction initializer must be syntactically fresh, they may
+    /// not be read from outside the class's own methods, and they may not be
+    /// passed to a `mut` parameter. Populated by `register_invariants`.
+    pub invariant_collection_fields: HashMap<String, std::collections::HashSet<String>>,
+    /// Per-parameter `mut` flags of every registered function/method, keyed by
+    /// the same mangled name as `functions`. Used to enforce the door that a
+    /// ghost-tracked collection field may not be handed to a `mut` parameter
+    /// (a mutation there would desync the length ghost from the real length).
+    pub fn_param_mut: HashMap<String, Vec<bool>>,
     /// Active proof scope while checking a `mut self` method body of an
     /// invariant-carrying class (symbolic field state + ghost facts).
     pub invariant_scope: Option<super::discharge::InvariantScope>,
@@ -619,6 +631,8 @@ impl TypeEnv {
             degenerate_conditions: Vec::new(),
             class_invariants: HashMap::new(),
             generic_class_invariants: HashMap::new(),
+            invariant_collection_fields: HashMap::new(),
+            fn_param_mut: HashMap::new(),
             invariant_scope: None,
             guarded_fields: HashMap::new(),
             fn_ensures: HashMap::new(),
@@ -629,6 +643,15 @@ impl TypeEnv {
             class_properties: HashMap::new(),
             fn_properties: HashMap::new(),
         }
+    }
+
+    /// Is `field` a collection field of `class` that a class invariant
+    /// constrains through a ghost `len()` term? Such fields carry the
+    /// aliasing doors (rfc-number-types.md §4).
+    pub fn invariant_covered_collection(&self, class: &str, field: &str) -> bool {
+        self.invariant_collection_fields
+            .get(class)
+            .is_some_and(|s| s.contains(field))
     }
 
     pub fn push_scope(&mut self) {
