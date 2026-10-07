@@ -87,24 +87,29 @@ fn main() {
 }
 
 #[test]
-fn invariant_with_len_rejected() {
-    // Collection facts are outside the provable fragment — rejected at
-    // declaration under static discharge.
-    compile_should_fail_with(
+fn invariant_with_len_accepted() {
+    // Collection length invariants became provable via ghost `len()`
+    // (rfc-number-types.md §4). The field is read through a method (door (b)
+    // rejects a raw external read of a length-covered collection field).
+    let out = compile_and_run_stdout(
         r#"
 class NonEmptyList {
     items: [int]
 
     invariant self.items.len() > 0
+
+    fn count(self) int {
+        return self.items.len()
+    }
 }
 
 fn main() {
     let list = NonEmptyList { items: [1, 2, 3] }
-    print(list.items.len())
+    print(list.count())
 }
 "#,
-        "outside the provable fragment",
     );
+    assert_eq!(out, "3\n");
 }
 
 #[test]

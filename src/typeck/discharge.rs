@@ -230,6 +230,13 @@ pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Resul
                     provenance: inv.node.provenance.clone(),
                 });
             }
+            let mut coll = HashSet::new();
+            for s in &specs {
+                collect_len_fields(&s.expr, &fields, &mut coll);
+            }
+            if !coll.is_empty() {
+                env.invariant_collection_fields.insert(c.name.node.clone(), coll);
+            }
             env.generic_class_invariants.insert(c.name.node.clone(), specs);
             continue;
         }
@@ -276,6 +283,13 @@ pub(crate) fn register_invariants(program: &Program, env: &mut TypeEnv) -> Resul
                 provenance: inv.node.provenance.clone(),
             });
         }
+        let mut coll = HashSet::new();
+        for s in &specs {
+            collect_len_fields(&s.expr, &fields, &mut coll);
+        }
+        if !coll.is_empty() {
+            env.invariant_collection_fields.insert(c.name.node.clone(), coll);
+        }
         env.class_invariants.insert(c.name.node.clone(), specs);
     }
     // Instantiations minted before this pass (eager field/signature
@@ -307,6 +321,14 @@ pub(crate) fn instantiate_generic_contracts(
     if let Some(specs) = env.generic_class_invariants.get(base) {
         let specs = specs.clone();
         env.class_invariants.entry(mangled.to_string()).or_insert(specs);
+    }
+    // Ghost-tracked collection fields keep their names under monomorphization,
+    // so the door set copies verbatim onto the instantiation.
+    if let Some(coll) = env.invariant_collection_fields.get(base) {
+        let coll = coll.clone();
+        env.invariant_collection_fields
+            .entry(mangled.to_string())
+            .or_insert(coll);
     }
     if let Some(by_method) = env.generic_class_ensures.get(base) {
         let by_method = by_method.clone();
@@ -488,6 +510,26 @@ fn validate_affine_side(
                 )),
             }
         }
+        // `self.<coll>.len()` on the class's own array/map/set/bytes field is
+        // a ghost int (rfc-number-types.md §4): modeled symbolically with the
+        // builtin mutators as transfer functions. Independent of any type
+        // parameter (the length of `[T]` is an int), so it is accepted on
+        // generic templates too.
+        Expr::MethodCall { object, method, args, .. }
+            if method.node == "len" && args.is_empty() =>
+        {
+            match collection_len_field(&object.node, fields) {
+                Some(_) => Ok(()),
+                None => Err(fragment_err(
+                    "'.len()' is provable only on the class's own array/map/set/bytes \
+                     fields (e.g. 'self.items.len() > 0'); nested or foreign collections \
+                     are not tracked"
+                        .to_string(),
+                    desc,
+                    expr.span,
+                )),
+            }
+        }
         Expr::MethodCall { method, .. } => Err(fragment_err(
             format!(
                 "'.{}()' — collection and method facts are not provable",
@@ -538,6 +580,48 @@ fn is_const_int_expr(expr: &Expr) -> bool {
             is_const_int_expr(&lhs.node) && is_const_int_expr(&rhs.node)
         }
         _ => false,
+    }
+}
+
+/// Is this field type one the length-ghost model tracks (array/map/set/bytes)?
+fn is_tracked_collection(ty: &PlutoType) -> bool {
+    matches!(
+        ty,
+        PlutoType::Array(_) | PlutoType::Map(_, _) | PlutoType::Set(_) | PlutoType::Bytes
+    )
+}
+
+/// If `object` is exactly `self.<field>` where `<field>` is one of the
+/// class's own tracked collection fields, return the field name. Used to
+/// recognize `self.<coll>.len()` in the invariant fragment.
+fn collection_len_field(object: &Expr, fields: &[(String, PlutoType, bool)]) -> Option<String> {
+    let Expr::FieldAccess { object: inner, field } = object else {
+        return None;
+    };
+    if !matches!(&inner.node, Expr::Ident(s) if s == "self") {
+        return None;
+    }
+    let ty = fields.iter().find(|(n, _, _)| *n == field.node).map(|(_, t, _)| t)?;
+    is_tracked_collection(ty).then(|| field.node.clone())
+}
+
+/// Collect every collection field a provable invariant constrains through a
+/// `self.<coll>.len()` term (the aliasing-door set, rfc-number-types.md §4).
+fn collect_len_fields(expr: &Expr, fields: &[(String, PlutoType, bool)], out: &mut HashSet<String>) {
+    match expr {
+        Expr::MethodCall { object, method, args, .. }
+            if method.node == "len" && args.is_empty() =>
+        {
+            if let Some(f) = collection_len_field(&object.node, fields) {
+                out.insert(f);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_len_fields(&lhs.node, fields, out);
+            collect_len_fields(&rhs.node, fields, out);
+        }
+        Expr::UnaryOp { operand, .. } => collect_len_fields(&operand.node, fields, out),
+        _ => {}
     }
 }
 
@@ -916,10 +1000,18 @@ pub struct InvariantScope {
     ensures: Vec<EnsuresSpec>,
     /// Facts over the ghost vocabulary.
     pub ghost_facts: FactEnv,
-    /// Current symbolic value of each int field of the class.
+    /// Current symbolic value of each tracked field of the class: int fields
+    /// map to their affine value, collection fields (`coll_fields`) map to
+    /// their ghost *length* (a `self.<f>.len()@N` term, so `facts::is_len_term`
+    /// keeps the automatic `>= 0` bound).
     sym: HashMap<String, Affine>,
-    /// All int fields of the class (the sym key set).
+    /// All int fields of the class (a subset of the sym key set).
     fields: Vec<String>,
+    /// Collection fields (array/map/set/bytes) whose length a class invariant
+    /// constrains (rfc-number-types.md §4). Their sym entry holds a length
+    /// ghost; the builtin mutators are transfer functions over it. Disjoint
+    /// from `fields`.
+    coll_fields: Vec<String>,
     /// Fields written since the last boundary (re-anchor). Invariants whose
     /// fields are all untouched hold by assumption and are skipped.
     touched: HashSet<String>,
@@ -952,6 +1044,21 @@ impl InvariantScope {
         format!("{name}@{v}")
     }
 
+    fn is_coll_field(&self, name: &str) -> bool {
+        self.coll_fields.iter().any(|f| f == name)
+    }
+
+    /// The anchor-epoch ghost term for a field's current value: `self.f@n`
+    /// for an int field, `self.f.len()@n` for a collection field (the
+    /// `.len()` marker carries the automatic `>= 0` bound).
+    fn field_ghost(&self, field: &str, n: u32) -> String {
+        if self.is_coll_field(field) {
+            format!("self.{field}.len()@{n}")
+        } else {
+            format!("self.{field}@{n}")
+        }
+    }
+
     /// Resolve a leaf expression into the ghost vocabulary: `self.f` reads
     /// its current symbolic value, an int local reads its current version
     /// ghost, and `xs.len()` on a collection-typed local reads an
@@ -959,8 +1066,23 @@ impl InvariantScope {
     /// unresolvable.
     pub(crate) fn resolve(&self, env: &TypeEnv, e: &Expr) -> Option<Affine> {
         match e {
+            // `self.<coll>.len()` reads the field's current symbolic length.
+            Expr::MethodCall { object, method, args, .. }
+                if method.node == "len"
+                    && args.is_empty()
+                    && matches!(&object.node,
+                        Expr::FieldAccess { object: o, field: f }
+                            if matches!(&o.node, Expr::Ident(s) if s == "self")
+                                && self.is_coll_field(&f.node)) =>
+            {
+                let Expr::FieldAccess { field, .. } = &object.node else { unreachable!() };
+                self.sym.get(&field.node).cloned()
+            }
             Expr::FieldAccess { object, field }
-                if matches!(&object.node, Expr::Ident(s) if s == "self") =>
+                // Only *int* fields read as a bare affine; a bare collection
+                // field is not an integer (its length lives behind `.len()`).
+                if matches!(&object.node, Expr::Ident(s) if s == "self")
+                    && self.fields.iter().any(|f| f == &field.node) =>
             {
                 self.sym.get(&field.node).cloned()
             }
@@ -994,6 +1116,18 @@ impl InvariantScope {
     /// local had when the method was entered.
     fn resolve_entry(&self, env: &TypeEnv, e: &Expr) -> Option<Affine> {
         match e {
+            // `old(self.<coll>.len())` — the field's entry-state length.
+            Expr::MethodCall { object, method, args, .. }
+                if method.node == "len"
+                    && args.is_empty()
+                    && matches!(&object.node,
+                        Expr::FieldAccess { object: o, field: f }
+                            if matches!(&o.node, Expr::Ident(s) if s == "self")
+                                && self.is_coll_field(&f.node)) =>
+            {
+                let Expr::FieldAccess { field, .. } = &object.node else { unreachable!() };
+                Some(Affine::term(format!("self.{}.len()@0", field.node)))
+            }
             Expr::FieldAccess { object, field }
                 if matches!(&object.node, Expr::Ident(s) if s == "self") =>
             {
@@ -1101,6 +1235,18 @@ fn mentioned_fields(expr: &Expr, out: &mut HashSet<String>) {
         return;
     }
     match expr {
+        // `self.<coll>.len()` constrains the collection field `<coll>`.
+        Expr::MethodCall { object, method, args, .. }
+            if method.node == "len"
+                && args.is_empty()
+                && matches!(&object.node,
+                    Expr::FieldAccess { object: o, .. }
+                        if matches!(&o.node, Expr::Ident(s) if s == "self")) =>
+        {
+            if let Expr::FieldAccess { field, .. } = &object.node {
+                out.insert(field.node.clone());
+            }
+        }
         Expr::FieldAccess { object, field }
             if matches!(&object.node, Expr::Ident(s) if s == "self") =>
         {
@@ -1139,6 +1285,14 @@ fn rewrite_self(expr: &Expr, root: &str) -> Expr {
         Expr::UnaryOp { op, operand } => Expr::UnaryOp {
             op: *op,
             operand: Box::new(Spanned::new(rewrite_self(&operand.node, root), operand.span)),
+        },
+        // `self.<coll>.len()` — rewrite the receiver so the parameter's own
+        // length term is produced (`p.coll.len()`), not `self`'s.
+        Expr::MethodCall { object, method, args, type_args } => Expr::MethodCall {
+            object: Box::new(Spanned::new(rewrite_self(&object.node, root), object.span)),
+            method: method.clone(),
+            args: args.clone(),
+            type_args: type_args.clone(),
         },
         other => other.clone(),
     }
@@ -1241,7 +1395,11 @@ fn symbolic_state(scope: &InvariantScope, fields: &HashSet<String>) -> String {
                 .get(f)
                 .map(|a| render_affine(a))
                 .unwrap_or_else(|| "<unknown>".to_string());
-            format!("self.{f} = {rendered}")
+            if scope.is_coll_field(f) {
+                format!("self.{f}.len() = {rendered}")
+            } else {
+                format!("self.{f} = {rendered}")
+            }
         })
         .collect();
     parts.sort();
@@ -1279,10 +1437,15 @@ fn is_entry_field_term(path: &str) -> bool {
 fn re_anchor(scope: &mut InvariantScope, env: &TypeEnv, composed: bool) {
     scope.next_ghost += 1;
     let n = scope.next_ghost;
-    for f in &scope.fields {
-        scope
-            .sym
-            .insert(f.clone(), Affine::term(format!("self.{f}@{n}")));
+    let all_fields: Vec<String> = scope
+        .fields
+        .iter()
+        .chain(scope.coll_fields.iter())
+        .cloned()
+        .collect();
+    for f in &all_fields {
+        let g = scope.field_ghost(f, n);
+        scope.sym.insert(f.clone(), Affine::term(g));
     }
     scope.touched.clear();
     let mut to_assume = Vec::new();
@@ -1554,6 +1717,15 @@ pub(crate) fn function_entry(
                 .collect()
         })
         .unwrap_or_default();
+    let coll_fields: Vec<String> = env
+        .invariant_collection_fields
+        .get(cn)
+        .map(|s| {
+            let mut v: Vec<String> = s.iter().cloned().collect();
+            v.sort();
+            v
+        })
+        .unwrap_or_default();
     let mut scope = InvariantScope {
         class_name: cn.to_string(),
         method_name: func.name.node.clone(),
@@ -1562,6 +1734,7 @@ pub(crate) fn function_entry(
         ghost_facts: FactEnv::new(),
         sym: HashMap::new(),
         fields,
+        coll_fields,
         touched: HashSet::new(),
         local_ver: HashMap::new(),
         next_ghost: 0,
@@ -1570,6 +1743,12 @@ pub(crate) fn function_entry(
         scope
             .sym
             .insert(f.clone(), Affine::term(format!("self.{f}@0")));
+    }
+    // Collection fields: the entry length ghost (`self.<f>.len()@0`, a len
+    // term carrying the automatic `>= 0` bound).
+    for f in scope.coll_fields.clone() {
+        let g = scope.field_ghost(&f, 0);
+        scope.sym.insert(f, Affine::term(g));
     }
     let mut ghost_assume = Vec::new();
     {
@@ -2210,6 +2389,11 @@ pub(crate) fn pre_stmt(stmt: &Stmt, span: Span, env: &mut TypeEnv) -> Result<(),
             }
         }
     }
+
+    // Collection length transfer (rfc-number-types.md §4): `self.<coll>.push()`
+    // / `pop()` / ... update the ghost length. Runs after the generic boundary
+    // above so the delta composes onto the post-boundary length.
+    apply_collection_mutations(stmt, span, env)?;
 
     match stmt {
         Stmt::FieldAssign { object, field, value } => {
@@ -2925,6 +3109,14 @@ fn pre_field_assign(
     if opath.as_deref() == Some("self") {
         if let Some(scope) = env.invariant_scope.as_ref() {
             if scope.class_name == cls {
+                // Door (a), applied to reassignment: a covered collection
+                // field may only be set from a syntactically fresh
+                // expression. Binding an alias in would let later mutations
+                // of that alias desync the length ghost (rfc-number-types.md
+                // §4 closing-the-doors).
+                if scope.is_coll_field(&field.node) && !is_fresh_collection_expr(&value.node) {
+                    return Err(aliasing_init_error(&cls, &field.node, "assignment", span));
+                }
                 let specs = env.class_invariants.get(&cls).cloned().unwrap_or_default();
                 let mut scope = env.invariant_scope.take().expect("checked above");
                 strong_update(&mut scope, env, &field.node, &value.node, &specs);
@@ -3082,6 +3274,102 @@ fn pre_field_assign(
     Ok(())
 }
 
+/// The exact element count of a collection *literal* (`[a, b]`, `{...}`,
+/// `{k: v}`), or `None` for any other (non-literal) fresh producer whose
+/// length the prover does not compute.
+fn collection_expr_len(expr: &Expr) -> Option<i128> {
+    match expr {
+        Expr::ArrayLit { elements } => Some(elements.len() as i128),
+        Expr::SetLit { elements, .. } => Some(elements.len() as i128),
+        Expr::MapLit { entries, .. } => Some(entries.len() as i128),
+        // `bytes_new()` → 0; `bytes_filled(n, _)` → n when n is a literal.
+        Expr::Call { name, args, .. } if name.node == "bytes_new" && args.is_empty() => Some(0),
+        Expr::Call { name, args, .. } if name.node == "bytes_filled" && args.len() == 2 => {
+            match &args[0].node {
+                Expr::IntLit(n) => Some(*n as i128),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Door (a): is this a *syntactically fresh* collection — one that cannot
+/// already be aliased by another binding? Conservative by design: a
+/// collection literal, or a non-mutating builtin method that allocates and
+/// returns a NEW collection (`slice`, `keys`, `values`, `to_array`). Anything
+/// else — a bare variable, a field read, a free-function call (whose result
+/// the callee may also retain) — is rejected, since the length ghost is only
+/// sound while the class holds the sole reference. Widening this set is a
+/// follow-up gated on escape analysis (rfc-number-types.md §4, door 1/3).
+fn is_fresh_collection_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::ArrayLit { .. } | Expr::SetLit { .. } | Expr::MapLit { .. } => true,
+        Expr::MethodCall { method, .. } => {
+            matches!(method.node.as_str(), "slice" | "keys" | "values" | "to_array")
+        }
+        // Bytes have no literal form; these builtins allocate a fresh buffer.
+        Expr::Call { name, .. } => matches!(name.node.as_str(), "bytes_new" | "bytes_filled"),
+        _ => false,
+    }
+}
+
+/// Door (a) diagnostic: a covered collection field was initialized or
+/// assigned from a possibly-aliased expression.
+fn aliasing_init_error(class: &str, field: &str, site: &str, span: Span) -> CompileError {
+    CompileError::type_err(
+        format!(
+            "the collection field '{field}' of '{class}' is constrained by a length \
+             invariant, so its {site} must be a fresh collection the class alone owns — a \
+             literal (e.g. '[]', '[x, y]') or a builtin that returns a new collection \
+             (slice/keys/values/to_array). A bare variable, field read, or function-call \
+             result could stay aliased elsewhere and be mutated behind the invariant's \
+             back; build the value inline, or copy it with a slice (e.g. 'xs.slice(0, \
+             xs.len())')"
+        ),
+        span,
+    )
+}
+
+/// A length-changing collection mutator, classified by its effect on the
+/// ghost length (rfc-number-types.md §4). Length-preserving mutators
+/// (`reverse`, `fill`, `write_*`, `copy_from`) are not listed — they leave
+/// the ghost untouched.
+#[derive(Clone, Copy)]
+enum LenDelta {
+    /// `push` / `insert_at` (array), `push` (bytes): exactly +1.
+    Inc,
+    /// `pop` / `remove_at` (array): exactly −1, requires length ≥ 1.
+    Dec,
+    /// `clear`: exactly 0.
+    Clear,
+    /// map/set `insert`: key-newness is unknowable, so the new length is in
+    /// [L, L+1] — modeled as monotone non-decrease (`new >= L`). The upper
+    /// bound is dropped (conservative: an upper-bound invariant won't prove).
+    MaybeInc,
+    /// map/set `remove` (key may be absent) and bytes `extend` (adds ≥ 0):
+    /// modeled as monotone non-increase (`new <= L`) / non-decrease
+    /// respectively; see `apply_len_delta`.
+    MaybeDec,
+    /// bytes `extend`: adds len(arg) ≥ 0 elements — monotone non-decrease.
+    Extend,
+}
+
+/// Classify a builtin collection mutator by receiver type and method name.
+/// Returns `None` for non-mutating or length-preserving builtins.
+fn len_delta_of(recv: &PlutoType, method: &str) -> Option<LenDelta> {
+    match (recv, method) {
+        (PlutoType::Array(_), "push" | "insert_at") => Some(LenDelta::Inc),
+        (PlutoType::Array(_), "pop" | "remove_at") => Some(LenDelta::Dec),
+        (PlutoType::Array(_), "clear") => Some(LenDelta::Clear),
+        (PlutoType::Bytes, "push") => Some(LenDelta::Inc),
+        (PlutoType::Bytes, "extend") => Some(LenDelta::Extend),
+        (PlutoType::Map(_, _), "insert") | (PlutoType::Set(_), "insert") => Some(LenDelta::MaybeInc),
+        (PlutoType::Map(_, _), "remove") | (PlutoType::Set(_), "remove") => Some(LenDelta::MaybeDec),
+        _ => None,
+    }
+}
+
 fn strong_update(
     scope: &mut InvariantScope,
     env: &TypeEnv,
@@ -3089,6 +3377,22 @@ fn strong_update(
     value: &Expr,
     specs: &[InvariantSpec],
 ) {
+    // Collection field reassignment: the field's new length is the length of
+    // the (guaranteed-fresh, door (a)) RHS. A literal's length is exact; any
+    // other fresh producer is only known `>= 0` (a new len ghost).
+    if scope.is_coll_field(field) {
+        let len = collection_expr_len(value)
+            .map(Affine::constant)
+            .unwrap_or_else(|| {
+                scope.next_ghost += 1;
+                Affine::term(scope.field_ghost(field, scope.next_ghost))
+            });
+        scope.sym.insert(field.to_string(), len);
+        if specs.iter().any(|s| spec_fields(s).contains(field)) {
+            scope.touched.insert(field.to_string());
+        }
+        return;
+    }
     if !scope.fields.iter().any(|f| f == field) {
         // Non-int field: no invariant can mention it.
         return;
@@ -3110,6 +3414,163 @@ fn strong_update(
     if specs.iter().any(|s| spec_fields(s).contains(field)) {
         scope.touched.insert(field.to_string());
     }
+}
+
+/// Collect, in traversal order, every length-changing builtin mutator call in
+/// `stmt` whose receiver is `self.<covered collection field>`.
+fn collection_mutations(
+    stmt: &Stmt,
+    _span: Span,
+    env: &TypeEnv,
+    coll_fields: &[String],
+) -> Vec<(String, LenDelta, Span)> {
+    struct Scan<'a> {
+        env: &'a TypeEnv,
+        coll_fields: &'a [String],
+        out: Vec<(String, LenDelta, Span)>,
+    }
+    impl Visitor for Scan<'_> {
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            if let Expr::MethodCall { object, method, .. } = &expr.node {
+                if let Some((path, ty)) = typed_path(&object.node, self.env) {
+                    if let Some(field) = path.strip_prefix("self.") {
+                        if !field.contains('.')
+                            && self.coll_fields.iter().any(|f| f == field)
+                        {
+                            if let Some(d) = len_delta_of(&ty, &method.node) {
+                                self.out.push((field.to_string(), d, expr.span));
+                            }
+                        }
+                    }
+                }
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut scan = Scan { env, coll_fields, out: Vec::new() };
+    // Only this statement's *own* expressions — never the bodies of nested
+    // control-flow statements, which the checker visits (and whose mutators it
+    // applies) as their own statements.
+    for e in immediate_exprs(stmt) {
+        scan.visit_expr(e);
+    }
+    scan.out
+}
+
+/// Apply the length-ghost transfer function of every collection mutator in
+/// this statement (rfc-number-types.md §4). Runs after the generic call
+/// boundary (which may have re-anchored a collection field to invariant
+/// level) so the delta composes on top of the post-boundary length, which is
+/// sound in every case (see the module header's boundary discussion).
+fn apply_collection_mutations(
+    stmt: &Stmt,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let coll_fields = match env.invariant_scope.as_ref() {
+        Some(s) if !s.coll_fields.is_empty() => s.coll_fields.clone(),
+        _ => return Ok(()),
+    };
+    let muts = collection_mutations(stmt, span, env, &coll_fields);
+    if muts.is_empty() {
+        return Ok(());
+    }
+    let mut scope = env.invariant_scope.take().expect("checked above");
+    let r = (|| {
+        for (field, delta, mspan) in &muts {
+            apply_len_delta(&mut scope, field, *delta, *mspan)?;
+        }
+        Ok(())
+    })();
+    env.invariant_scope = Some(scope);
+    r
+}
+
+/// Transfer function for one length-changing mutator on a covered collection
+/// field. `pop`/`remove_at` additionally carry the obligation that the
+/// collection is provably non-empty (the delta −1 is unsound otherwise).
+fn apply_len_delta(
+    scope: &mut InvariantScope,
+    field: &str,
+    delta: LenDelta,
+    span: Span,
+) -> Result<(), CompileError> {
+    let l = scope
+        .sym
+        .get(field)
+        .cloned()
+        .unwrap_or_else(|| Affine::term(scope.field_ghost(field, 0)));
+    // A fresh non-negative *delta* term bounded to `[lo, hi]`; the new length
+    // is `l + delta`. Because the delta's bound is an exact interval, the
+    // affine-bound engine sums it with `l`'s known bounds — so a lower bound
+    // on `l` (e.g. the invariant `len > 0`) carries through the insert. (A
+    // bare relation `new >= l` would not combine with `l`'s interval.)
+    let mut add_delta = |scope: &mut InvariantScope, lo: i64, hi: Option<i64>| -> Option<Affine> {
+        scope.next_ghost += 1;
+        let d = format!("<delta:{field}>@{}", scope.next_ghost);
+        let iv = match hi {
+            Some(h) => Interval { lo, hi: h },
+            None => Interval::at_least(lo),
+        };
+        scope.ghost_facts.assume(Fact::Bound(d.clone(), iv));
+        // new = l + d (d is fresh, so no coefficient collision).
+        let mut new = l.clone();
+        *new.terms.entry(d).or_insert(0) += 1;
+        Some(new)
+    };
+    let new = match delta {
+        LenDelta::Inc => affine_add_const(&l, 1),
+        LenDelta::Clear => Some(Affine::constant(0)),
+        LenDelta::Dec => {
+            let (lo, _) = affine_bounds(&l, &scope.ghost_facts).unwrap_or((None, None));
+            if !matches!(lo, Some(v) if v >= 1) {
+                return Err(empty_removal_error(scope, field, span));
+            }
+            affine_add_const(&l, -1)
+        }
+        // map/set insert: new = l + d, d in [0, 1] (exact [l, l+1]).
+        LenDelta::MaybeInc => add_delta(scope, 0, Some(1)),
+        // bytes extend: adds len(arg) >= 0 — new = l + d, d >= 0.
+        LenDelta::Extend => add_delta(scope, 0, None),
+        // map/set remove (key may be absent): non-increase. A fresh len term
+        // (auto `>= 0`) bounded above by `l`; the lower bound is intentionally
+        // dropped (a `len > 0` invariant must guard a remove).
+        LenDelta::MaybeDec => {
+            scope.next_ghost += 1;
+            let g = scope.field_ghost(field, scope.next_ghost);
+            let gt = Affine::term(g);
+            if let Some(d) = diff_affine(&gt, &l) {
+                for f in facts_from_diff(BinOp::LtEq, &d) {
+                    scope.ghost_facts.assume(f);
+                }
+            }
+            Some(gt)
+        }
+    };
+    let new = new.unwrap_or_else(|| {
+        // Arithmetic overflow building the delta: havoc to a fresh len ghost.
+        scope.next_ghost += 1;
+        Affine::term(scope.field_ghost(field, scope.next_ghost))
+    });
+    scope.sym.insert(field.to_string(), new);
+    scope.touched.insert(field.to_string());
+    Ok(())
+}
+
+/// Diagnostic for a `pop`/`remove_at` the prover cannot show is safe (the
+/// collection may be empty).
+fn empty_removal_error(scope: &InvariantScope, field: &str, span: Span) -> CompileError {
+    CompileError::type_err(
+        format!(
+            "cannot prove 'self.{field}' is non-empty before this removal in method '{}' of \
+             class '{}': removing from a possibly-empty collection is rejected because the \
+             length ghost '-1' would be unsound. Guard the removal with a length check \
+             (e.g. 'if self.{field}.len() > 0 {{ ... }}') or a 'requires self.{field}.len() \
+             > 0' on the method",
+            scope.method_name, scope.class_name
+        ),
+        span,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3236,7 +3697,12 @@ fn join_syms(
     scope.next_ghost += 1;
     let n = scope.next_ghost;
     let mut rels: Vec<Fact> = Vec::new();
-    let fields = scope.fields.clone();
+    let fields: Vec<String> = scope
+        .fields
+        .iter()
+        .chain(scope.coll_fields.iter())
+        .cloned()
+        .collect();
     for f in &fields {
         let vals: Vec<Option<&Affine>> = surviving.iter().map(|s| s.sym.get(f)).collect();
         // 1) Exact agreement across all survivors.
@@ -3246,7 +3712,7 @@ fn join_syms(
                 continue;
             }
         }
-        let fresh_term = format!("self.{f}@{n}");
+        let fresh_term = scope.field_ghost(f, n);
         let mut joined: Option<Affine> = None;
         if let Some(base_aff) = base.sym.get(f) {
             let ds: Option<Vec<i128>> = vals
@@ -3506,6 +3972,27 @@ pub(crate) fn check_construction(
     for (n, v) in lit_fields {
         inits.insert(n.node.clone(), to_affine(&v.node, env));
     }
+    // Collection fields constrained by a length invariant: door (a) requires a
+    // syntactically fresh initializer, and the invariant proof needs the
+    // field's initial length (exact for a literal, only `>= 0` otherwise).
+    let coll_fields = env
+        .invariant_collection_fields
+        .get(class_name)
+        .cloned()
+        .unwrap_or_default();
+    let mut coll_len_inits: HashMap<String, Affine> = HashMap::new();
+    for (n, v) in lit_fields {
+        if !coll_fields.contains(&n.node) {
+            continue;
+        }
+        if !is_fresh_collection_expr(&v.node) {
+            return Err(aliasing_init_error(class_name, &n.node, "initializer", v.span));
+        }
+        let len = collection_expr_len(&v.node)
+            .map(Affine::constant)
+            .unwrap_or_else(|| Affine::term(format!("<ctor:{}.{}>.len()", class_name, n.node)));
+        coll_len_inits.insert(n.node.clone(), len);
+    }
     for spec in &specs {
         // A two-state invariant relates a state *transition* to its
         // pre-state; construction has no pre-state, so there is nothing to
@@ -3514,6 +4001,18 @@ pub(crate) fn check_construction(
             continue;
         }
         let resolve = |e: &Expr| match e {
+            // `self.<coll>.len()` resolves to the initializer's length.
+            Expr::MethodCall { object, method, args, .. }
+                if method.node == "len"
+                    && args.is_empty()
+                    && matches!(&object.node,
+                        Expr::FieldAccess { object: o, field: f }
+                            if matches!(&o.node, Expr::Ident(s) if s == "self")
+                                && coll_fields.contains(&f.node)) =>
+            {
+                let Expr::FieldAccess { field, .. } = &object.node else { unreachable!() };
+                coll_len_inits.get(&field.node).cloned()
+            }
             Expr::FieldAccess { object, field }
                 if matches!(&object.node, Expr::Ident(s) if s == "self") =>
             {

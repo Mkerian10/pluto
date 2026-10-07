@@ -349,6 +349,27 @@ pub(crate) fn infer_expr(
                             field.span,
                         ));
                     }
+                    // Door (b), rfc-number-types.md §4: a collection field
+                    // constrained by a length invariant must not escape the
+                    // class's own methods — handing out the reference would
+                    // let the caller mutate it and desync the length ghost.
+                    // (Owner's call: a compile error, not a silent copy.)
+                    if resolved.is_some()
+                        && !matches!(&object.node, Expr::Ident(n) if n == "self")
+                        && env.invariant_covered_collection(class_name, &field.node)
+                    {
+                        return Err(CompileError::type_err(
+                            format!(
+                                "cannot read collection field '{}' of '{class_name}' from outside \
+                                 its own methods: it is constrained by a length invariant, so \
+                                 handing out the collection would let it be mutated behind the \
+                                 invariant's back. Add a method on '{class_name}' that returns \
+                                 what you need (e.g. its length, an element, or a fresh copy)",
+                                field.node
+                            ),
+                            field.span,
+                        ));
+                    }
                     resolved
                         .ok_or_else(|| {
                             // A skolem stands in for an opaque type parameter:
@@ -1188,6 +1209,54 @@ fn infer_binop(
     }
 }
 
+/// Door (c), rfc-number-types.md §4: a collection field constrained by a
+/// length invariant may not be handed to a `mut` parameter — the callee could
+/// mutate it through that binding and desync the length ghost. Non-`mut`
+/// parameters are read-only (#464), so they stay legal. `callee_key` is the
+/// mangled name under which the callee's per-parameter `mut` flags are
+/// registered; `args` are the call's value arguments (a method's leading
+/// `self` is accounted for by aligning from the end).
+fn check_mut_param_door(
+    callee_key: &str,
+    args: &[Spanned<Expr>],
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let Some(muts) = env.fn_param_mut.get(callee_key) else {
+        return Ok(());
+    };
+    let offset = muts.len().saturating_sub(args.len());
+    for (i, arg) in args.iter().enumerate() {
+        if !muts.get(offset + i).copied().unwrap_or(false) {
+            continue;
+        }
+        // Only `self.<field>` can reach here as a covered-field read (door (b)
+        // rejects every other binding's read of such a field).
+        let Expr::FieldAccess { object, field } = &arg.node else {
+            continue;
+        };
+        if !matches!(&object.node, Expr::Ident(s) if s == "self") {
+            continue;
+        }
+        if let Some(PlutoType::Class(cls)) = env.lookup("self") {
+            let cls = cls.clone();
+            if env.invariant_covered_collection(&cls, &field.node) {
+                return Err(CompileError::type_err(
+                    format!(
+                        "cannot pass collection field 'self.{}' of '{cls}' to a 'mut' \
+                         parameter: it is constrained by a length invariant, and a mutation \
+                         through that parameter would desync the invariant. Pass a fresh copy \
+                         (e.g. 'self.{}.slice(0, self.{}.len())'), or change the callee to take \
+                         the parameter without 'mut'",
+                        field.node, field.node, field.node
+                    ),
+                    arg.span,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn infer_call(
     name: &Spanned<String>,
     args: &[Spanned<Expr>],
@@ -1195,6 +1264,7 @@ fn infer_call(
     span: crate::span::Span,
     env: &mut TypeEnv,
 ) -> Result<PlutoType, CompileError> {
+    check_mut_param_door(&name.node, args, env)?;
     // Reject explicit type args on builtins
     if !call_type_args.is_empty() && env.builtins.contains(&name.node) {
         return Err(CompileError::type_err(
@@ -2288,6 +2358,9 @@ fn infer_method_call(
     }
 
     let obj_type = infer_expr(&object.node, object.span, env, None)?;
+    if let PlutoType::Class(cls) = &obj_type {
+        check_mut_param_door(&mangle_method(cls, &method.node), args, env)?;
+    }
     if !call_type_args.is_empty() && !matches!(obj_type, PlutoType::Class(_)) {
         return Err(CompileError::type_err(
             format!("method '{}' does not accept type arguments", method.node),
