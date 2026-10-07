@@ -101,10 +101,10 @@ fn json_parse_int() {
 
 fn main() {
     let j = json.parse("42")!
-    print(j.get_int())
+    print(j.get_int()!)
     print(j.is_int())
     let neg = json.parse("-17")!
-    print(neg.get_int())
+    print(neg.get_int()!)
 }
 "#,
     )]);
@@ -190,9 +190,9 @@ fn main() {
     let j = json.parse("[1, 2, 3]")!
     print(j.is_array())
     print(j.len())
-    print(j.at(0).get_int())
-    print(j.at(1).get_int())
-    print(j.at(2).get_int())
+    print(j.at(0).get_int()!)
+    print(j.at(1).get_int()!)
+    print(j.at(2).get_int()!)
 }
 "#,
     )]);
@@ -233,7 +233,7 @@ fn main() {
     let j = json.parse("{\"name\": \"Alice\", \"age\": 30}")!
     print(j.is_object())
     print(j.get("name").get_string())
-    print(j.get("age").get_int())
+    print(j.get("age").get_int()!)
 }
 "#,
     )]);
@@ -276,8 +276,8 @@ fn main() {
     print(user.get("name").get_string())
     let scores = user.get("scores")
     print(scores.len())
-    print(scores.at(0).get_int())
-    print(scores.at(1).get_int())
+    print(scores.at(0).get_int()!)
+    print(scores.at(1).get_int()!)
 }
 "#,
     )]);
@@ -362,7 +362,7 @@ fn main() {
     // Parse it back to verify
     let parsed = json.parse(s)!
     print(parsed.get("name").get_string())
-    print(parsed.get("age").get_int())
+    print(parsed.get("age").get_int()!)
     print(parsed.get("active").get_bool())
 }
 "#,
@@ -408,7 +408,7 @@ fn main() {
     let j = json.parse(original)!
     let s = j.to_string()
     let j2 = json.parse(s)!
-    print(j2.get("a").get_int())
+    print(j2.get("a").get_int()!)
     let mut arr = j2.get("b")
     print(arr.at(0).get_bool())
     print(arr.at(1).is_null())
@@ -456,7 +456,7 @@ fn json_chained_access() {
 
 fn main() {
     let j = json.parse("{\"a\": {\"b\": {\"c\": 99}}}")!
-    print(j.get("a").get("b").get("c").get_int())
+    print(j.get("a").get("b").get("c").get_int()!)
 }
 "#,
     )]);
@@ -497,7 +497,7 @@ fn main() {
     let mut obj = json.object()
     obj.set("x", json.int(1))
     obj.set("x", json.int(2))
-    print(obj.get("x").get_int())
+    print(obj.get("x").get_int()!)
     print(obj.len())
 }
 "#,
@@ -538,7 +538,7 @@ fn json_parse_exponent() {
 fn main() {
     let j = json.parse("1e3")!
     print(j.is_float())
-    print(j.get_int())
+    print(j.get_int()!)
 }
 "#,
     )]);
@@ -565,20 +565,40 @@ fn main() {
 }
 
 // ============================================================
-// Float to int conversion
+// get_int on a non-integral number raises (rfc-number-types §2)
 // ============================================================
 
 #[test]
-fn json_float_to_int() {
+fn json_get_int_non_integral_raises() {
+    // A fractional JSON number is not an integer: get_int() raises a
+    // JsonError rather than silently truncating.
     let out = run_project_with_stdlib(&[(
         "main.pluto",
         r#"import std.json
 
 fn main() {
     let j = json.parse("3.7")!
-    print(j.get_int())
+    let n = j.get_int() catch e { 0 - 1 }
+    print(n)
 }
 "#,
     )]);
-    assert_eq!(out, "3\n");
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn json_get_int_integral_float_ok() {
+    // A float-shaped but integer-valued number converts without raising.
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.json
+
+fn main() {
+    let j = json.parse("3.0")!
+    print(j.is_float())
+    print(j.get_int()!)
+}
+"#,
+    )]);
+    assert_eq!(out, "true\n3\n");
 }

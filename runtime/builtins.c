@@ -977,6 +977,32 @@ void *__pluto_string_format_float(double value) {
     return header;
 }
 
+// Checked float -> int (rfc-number-types §2). NaN, ±inf, and out-of-range
+// values yield none (null pointer); everything else truncates toward zero and
+// is boxed in the nullable-int representation (GC_TAG_OBJECT holding an i64).
+void *__pluto_float_to_int_checked(double v) {
+    // NaN is the only value not equal to itself. 2^63 is the first double
+    // strictly above INT64_MAX; -2^63 == INT64_MIN is exactly representable,
+    // so a value equal to it still fits.
+    if (v != v || v >= 9223372036854775808.0 || v < -9223372036854775808.0) {
+        return (void *)0;
+    }
+    void *obj = gc_alloc(8, GC_TAG_OBJECT, 0);
+    *(long *)obj = (long)v; // C float->int cast truncates toward zero
+    return obj;
+}
+
+// Checked int -> byte (rfc-number-types §2). Values outside 0..255 yield none;
+// otherwise the value is boxed in the nullable-byte representation.
+void *__pluto_int_to_byte_checked(long v) {
+    if (v < 0 || v > 255) {
+        return (void *)0;
+    }
+    void *obj = gc_alloc(8, GC_TAG_OBJECT, 0);
+    *(long *)obj = v;
+    return obj;
+}
+
 void *__pluto_string_to_int(void *s) {
     const char *data;
     long slen;

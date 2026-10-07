@@ -148,6 +148,16 @@ impl<'a> LowerContext<'a> {
             .contains(&(lhs.span.file_id, lhs.span.start, rhs.span.end))
     }
 
+    /// Did typeck prove this fallible-conversion site's receiver is in range,
+    /// narrowing its `T?` result to `T`? Keyed by the method name's span
+    /// exactly as `infer.rs` records it (rfc-number-types §2). A miss means
+    /// the conversion stays checked and returns the nullable box.
+    fn conversion_narrowed(&self, span: crate::span::Span) -> bool {
+        self.env
+            .narrowed_conversions
+            .contains(&(span.file_id, span.start, span.end))
+    }
+
     /// Did typeck prove this shift site's amount lies in 0..63? Same key
     /// discipline as `arith_fit_proven` (issue #441).
     fn shift_range_proven(
@@ -4987,7 +4997,37 @@ impl<'a> LowerContext<'a> {
                         Ok(self.builder.ins().fcvt_from_sint(types::F64, obj_ptr))
                     }
                     (Receiver::Float, "to_int") => {
-                        Ok(self.builder.ins().fcvt_to_sint_sat(types::I64, obj_ptr))
+                        // `float.to_int()` is `int?`: NaN / ±inf / out-of-range
+                        // yield none, otherwise truncate toward zero. When
+                        // typeck proved the (literal) value fits, the result
+                        // narrowed to plain `int` — emit the bare truncation.
+                        if self.conversion_narrowed(method.span) {
+                            Ok(self.builder.ins().fcvt_to_sint(types::I64, obj_ptr))
+                        } else {
+                            Ok(self.call_runtime("__pluto_float_to_int_checked", &[obj_ptr]))
+                        }
+                    }
+                    (Receiver::Int, "to_byte") => {
+                        // `int.to_byte()` is `byte?`: none outside 0..255.
+                        // A proven-in-range site narrowed to plain `byte` —
+                        // emit the bare reduce to I8.
+                        if self.conversion_narrowed(method.span) {
+                            Ok(self.builder.ins().ireduce(types::I8, obj_ptr))
+                        } else {
+                            Ok(self.call_runtime("__pluto_int_to_byte_checked", &[obj_ptr]))
+                        }
+                    }
+                    (Receiver::Int, "low_byte") => {
+                        // Deliberate truncation to the low 8 bits (total).
+                        Ok(self.builder.ins().ireduce(types::I8, obj_ptr))
+                    }
+                    (Receiver::Byte, "to_int") => {
+                        // byte is I8; widen (zero-extend, 0..255) to I64.
+                        Ok(self.builder.ins().uextend(types::I64, obj_ptr))
+                    }
+                    (Receiver::Bool, "to_int") => {
+                        // bool is I8 (0 or 1); zero-extend to I64.
+                        Ok(self.builder.ins().uextend(types::I64, obj_ptr))
                     }
                     (Receiver::Bool, "to_string") => {
                         // bool is I8; the C ABI takes I32.
@@ -6967,22 +7007,39 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 };
             }
             if obj_type == PlutoType::Int {
+                let narrowed = env
+                    .narrowed_conversions
+                    .contains(&(method.span.file_id, method.span.start, method.span.end));
                 return match method.node.as_str() {
                     "to_string" => PlutoType::String,
                     "to_float" => PlutoType::Float,
+                    "low_byte" => PlutoType::Byte,
+                    "to_byte" if narrowed => PlutoType::Byte,
+                    "to_byte" => PlutoType::Nullable(Box::new(PlutoType::Byte)),
                     _ => PlutoType::Int,
                 };
             }
             if obj_type == PlutoType::Float {
+                let narrowed = env
+                    .narrowed_conversions
+                    .contains(&(method.span.file_id, method.span.start, method.span.end));
                 return match method.node.as_str() {
                     "to_string" => PlutoType::String,
-                    "to_int" => PlutoType::Int,
+                    "to_int" if narrowed => PlutoType::Int,
+                    "to_int" => PlutoType::Nullable(Box::new(PlutoType::Int)),
                     _ => PlutoType::Float,
+                };
+            }
+            if obj_type == PlutoType::Byte {
+                return match method.node.as_str() {
+                    "to_int" => PlutoType::Int,
+                    _ => PlutoType::Byte,
                 };
             }
             if obj_type == PlutoType::Bool {
                 return match method.node.as_str() {
                     "to_string" => PlutoType::String,
+                    "to_int" => PlutoType::Int,
                     _ => PlutoType::Bool,
                 };
             }

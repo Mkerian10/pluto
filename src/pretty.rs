@@ -1771,7 +1771,7 @@ fn binop_prec(op: BinOp) -> u8 {
     }
 }
 
-fn binop_str(op: BinOp) -> &'static str {
+pub(crate) fn binop_str(op: BinOp) -> &'static str {
     match op {
         BinOp::Add => "+",
         BinOp::Sub => "-",

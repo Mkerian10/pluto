@@ -767,3 +767,130 @@ test "overflows" {
         "stderr: {stderr}"
     );
 }
+
+// ── rfc-number-types §2: conversion methods + proof narrowing ─────────────────
+
+#[test]
+fn byte_to_int_total() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let b: byte = (200).to_byte()\n    print(b.to_int())\n}",
+    );
+    assert_eq!(out, "200\n");
+}
+
+#[test]
+fn bool_to_int_total() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    print(true.to_int())\n    print(false.to_int())\n}",
+    );
+    assert_eq!(out, "1\n0\n");
+}
+
+#[test]
+fn low_byte_truncates() {
+    // 300 & 0xFF == 44; low_byte is deliberate truncation (total).
+    let out = compile_and_run_stdout("fn main() {\n    print((300).low_byte().to_int())\n}");
+    assert_eq!(out, "44\n");
+}
+
+#[test]
+fn to_byte_literal_folds() {
+    // An in-range integer literal narrows `byte?` to `byte` at compile time.
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let b: byte = (61).to_byte()\n    print(b.to_int())\n}",
+    );
+    assert_eq!(out, "61\n");
+}
+
+#[test]
+fn to_byte_narrows_under_guard() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let x = 500\n    if x >= 0 && x <= 255 {\n        let b: byte = x.to_byte()\n        print(b.to_int())\n    } else {\n        print(0 - 1)\n    }\n}",
+    );
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn to_byte_narrows_after_assert() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let z = 42\n    assert z >= 0 && z <= 255\n    let b: byte = z.to_byte()\n    print(b.to_int())\n}",
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn to_byte_narrows_under_mask() {
+    // `x & 0xFF` lies in 0..255 (facts.rs mask interval rule).
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let w = 1000\n    let b: byte = (w & 0xFF).to_byte()\n    print(b.to_int())\n}",
+    );
+    assert_eq!(out, "232\n");
+}
+
+#[test]
+fn to_byte_narrows_in_masked_loop() {
+    // `i & 0xFF` lies in 0..255 by the structural mask rule, so the
+    // conversion narrows even inside a loop (where flow facts are dropped).
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let mut dst = \"\".to_bytes()\n    let mut i = 65\n    while i < 68 {\n        dst.push((i & 0xFF).to_byte())\n        i = i + 1\n    }\n    print(dst.to_string())\n}",
+    );
+    assert_eq!(out, "ABC\n");
+}
+
+#[test]
+fn float_to_int_literal_folds() {
+    let out = compile_and_run_stdout("fn main() {\n    print((3.7).to_int())\n}");
+    assert_eq!(out, "3\n");
+}
+
+#[test]
+fn float_to_int_none_for_nan_inf_overflow() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let nan = 0.0 / 0.0\n    print(nan.to_int() ?? (0 - 1))\n    let big = 1.0e30\n    print(big.to_int() ?? (0 - 2))\n    let neg = -1.0e30\n    print(neg.to_int() ?? (0 - 3))\n}",
+    );
+    assert_eq!(out, "-1\n-2\n-3\n");
+}
+
+#[test]
+fn float_to_int_runtime_value_truncates_toward_zero() {
+    let out = compile_and_run_stdout(
+        "fn main() {\n    let f = read_f()\n    print(f.to_int() ?? 0)\n}\nfn read_f() float {\n    return 0.0 - 9.9\n}",
+    );
+    assert_eq!(out, "-9\n");
+}
+
+// ── Diagnostics: still-nullable conversion used where T is required ───────────
+
+#[test]
+fn to_byte_unproven_stays_nullable_and_diagnoses() {
+    // No facts about x: the conversion stays `byte?` and the diagnostic
+    // points at the conversion.
+    compile_should_fail_with(
+        "fn main() {\n    let x = read_i()\n    let b: byte = x.to_byte()\n    print(b.to_int())\n}\nfn read_i() int {\n    return 5\n}",
+        "`x.to_byte()` may be none",
+    );
+}
+
+#[test]
+fn to_byte_partial_bound_diagnostic_states_known_fact() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = read_i()\n    if x >= 0 {\n        let b: byte = x.to_byte()\n        print(b.to_int())\n    }\n}\nfn read_i() int {\n    return 5\n}",
+        "known >= 0 but has no upper bound",
+    );
+}
+
+#[test]
+fn to_byte_diagnostic_suggests_guard_or_assert() {
+    compile_should_fail_with(
+        "fn main() {\n    let x = read_i()\n    let b: byte = x.to_byte()\n    print(b.to_int())\n}\nfn read_i() int {\n    return 5\n}",
+        "add a guard",
+    );
+}
+
+#[test]
+fn float_to_int_unproven_stays_nullable() {
+    compile_should_fail_with(
+        "fn main() {\n    let f = read_f()\n    let n: int = f.to_int()\n    print(n)\n}\nfn read_f() float {\n    return 1.5\n}",
+        "may be none",
+    );
+}

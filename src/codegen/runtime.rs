@@ -75,6 +75,10 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_string_concat", &[types::I64, types::I64], &[types::I64])?;
         reg.declare(module, "__pluto_string_eq", &[types::I64, types::I64], &[types::I32])?; // I32 for C ABI
         reg.declare(module, "__pluto_bool_to_string", &[types::I32], &[types::I64])?; // I32 for C ABI
+        // Checked numeric conversions (rfc-number-types §2); return a boxed
+        // nullable (0 = none) in the value-type nullable representation.
+        reg.declare(module, "__pluto_float_to_int_checked", &[types::F64], &[types::I64])?;
+        reg.declare(module, "__pluto_int_to_byte_checked", &[types::I64], &[types::I64])?;
 
         // String slice escape (materializes slices to owned strings at escape boundaries)
         reg.declare(module, "__pluto_string_escape", &[types::I64], &[types::I64])?;

@@ -503,7 +503,7 @@ pub(crate) fn infer_expr(
         }
         Expr::Catch { expr, handlers } => infer_catch(expr, handlers, span, env),
         Expr::MethodCall { object, method, args, type_args } => {
-            infer_method_call(object, method, args, type_args, span, env)
+            infer_method_call(object, method, args, type_args, span, env, expected)
         }
         Expr::Closure { params, return_type, body } => {
             infer_closure(params, return_type, body, span, env, expected)
@@ -2115,6 +2115,112 @@ fn infer_catch_body(
     Ok(result)
 }
 
+/// Does a fallible conversion's receiver provably lie in range, so its `T?`
+/// result narrows to `T`? (rfc-number-types §2). Int conversions consult the
+/// flow-fact interval engine (`facts::expr_bounds`, which folds literals and
+/// the `&`/`%`/byte interval rules); float conversions carry no interval
+/// facts, so only a provably-fitting float literal narrows.
+fn conversion_narrows(narrow: super::builtins::Narrow, recv: &Expr, env: &TypeEnv) -> bool {
+    use super::builtins::Narrow;
+    match narrow {
+        Narrow::IntRange { lo, hi } => match super::facts::expr_bounds(recv, env) {
+            Ok((rlo, rhi)) => rlo >= lo as i128 && rhi <= hi as i128,
+            // Contradictory facts (unreachable code): answer "no proof",
+            // matching the arith-fit elision convention.
+            Err(()) => false,
+        },
+        Narrow::FloatToInt => float_lit_fits_i64(recv),
+    }
+}
+
+/// The targeted diagnostic for a still-nullable conversion used where a
+/// non-nullable `T` is required (rfc-number-types §2): point at the
+/// conversion, state what the flow facts already know, and suggest the fact
+/// that would complete the proof.
+fn conversion_mismatch_error(
+    narrow: super::builtins::Narrow,
+    recv: &Expr,
+    method: &Spanned<String>,
+    env: &TypeEnv,
+) -> CompileError {
+    use super::builtins::Narrow;
+    let r = render_receiver(recv);
+    let msg = match narrow {
+        Narrow::IntRange { lo, hi } => {
+            let known = match super::facts::expr_bounds(recv, env) {
+                Ok((rlo, rhi)) => {
+                    let lo_ok = rlo >= lo as i128;
+                    let hi_ok = rhi <= hi as i128;
+                    match (lo_ok, hi_ok) {
+                        (true, false) if rhi >= i64::MAX as i128 => {
+                            format!("{r} is known >= {lo} but has no upper bound")
+                        }
+                        (true, false) => {
+                            format!("{r} is known >= {lo} but may be as large as {rhi}")
+                        }
+                        (false, true) if rlo <= i64::MIN as i128 => {
+                            format!("{r} is known <= {hi} but has no lower bound")
+                        }
+                        (false, true) => {
+                            format!("{r} is known <= {hi} but may be as small as {rlo}")
+                        }
+                        _ => format!("{r} is not known to be within {lo}..{hi}"),
+                    }
+                }
+                Err(()) => format!("{r} is not known to be within {lo}..{hi}"),
+            };
+            format!(
+                "`{r}.to_byte()` may be none: {known} — add a guard (`if {r} > {hi} {{ ... }}`) or `assert {r} >= {lo} && {r} <= {hi}`"
+            )
+        }
+        Narrow::FloatToInt => format!(
+            "`{r}.{m}()` may be none: a NaN, infinity, or out-of-range float yields none — provide a fallback (`{r}.{m}() ?? 0`), handle it, or `.round()`/`.floor()` first",
+            m = method.node
+        ),
+    };
+    CompileError::type_err(msg, method.span)
+}
+
+/// Render a conversion receiver for a diagnostic. Covers the simple shapes
+/// that appear in practice (identifiers, field/index access, literals,
+/// masks); falls back to a generic noun for anything more elaborate so the
+/// message never prints a half-formed expression.
+fn render_receiver(e: &Expr) -> String {
+    match e {
+        Expr::Ident(n) => n.clone(),
+        Expr::IntLit(n) => n.to_string(),
+        Expr::FloatLit(f) => f.to_string(),
+        Expr::FieldAccess { object, field } => {
+            format!("{}.{}", render_receiver(&object.node), field.node)
+        }
+        Expr::Index { object, index } => {
+            format!("{}[{}]", render_receiver(&object.node), render_receiver(&index.node))
+        }
+        Expr::BinOp { op, lhs, rhs } => {
+            format!(
+                "{} {} {}",
+                render_receiver(&lhs.node),
+                crate::pretty::binop_str(*op),
+                render_receiver(&rhs.node)
+            )
+        }
+        _ => "the value".to_string(),
+    }
+}
+
+/// A finite float literal whose truncation toward zero fits in i64.
+fn float_lit_fits_i64(recv: &Expr) -> bool {
+    if let Expr::FloatLit(f) = recv
+        && f.is_finite()
+    {
+        let t = f.trunc();
+        // i64::MIN is exactly representable; 2^63 is the first f64 above
+        // i64::MAX, so the fit test is a strict upper bound.
+        return t >= i64::MIN as f64 && t < 9_223_372_036_854_775_808.0;
+    }
+    false
+}
+
 fn infer_method_call(
     object: &Spanned<Expr>,
     method: &Spanned<String>,
@@ -2122,6 +2228,7 @@ fn infer_method_call(
     call_type_args: &[Spanned<TypeExpr>],
     span: crate::span::Span,
     env: &mut TypeEnv,
+    expected: Option<&PlutoType>,
 ) -> Result<PlutoType, CompileError> {
     // Check for expect() intrinsic pattern
     if let Expr::Call { name, args: expect_args, .. } = &object.node && name.node == "expect" && expect_args.len() == 1 {
@@ -2260,7 +2367,32 @@ fn infer_method_call(
                 super::env::MethodResolution::Builtin,
             );
         }
-        return Ok(entry.ret.resolve(&obj_type));
+        let ret = entry.ret.resolve(&obj_type);
+        // Proof-narrowed conversions (rfc-number-types §2): a fallible
+        // conversion returning `T?` becomes plain `T` where the flow facts
+        // prove the receiver is in range. The narrowing range lives in the
+        // registry entry; the site is recorded so codegen emits the unboxed
+        // value instead of the checked nullable box.
+        if let Some(narrow) = entry.narrow
+            && let PlutoType::Nullable(inner) = &ret
+        {
+            if conversion_narrows(narrow, &object.node, env) {
+                env.narrowed_conversions
+                    .insert((method.span.file_id, method.span.start, method.span.end));
+                return Ok((**inner).clone());
+            }
+            // Narrowing failed. If a non-nullable `T` is required here, the
+            // plain "expected T, found T?" message buries the real issue —
+            // point at the conversion, state what is known, and suggest the
+            // missing fact (rfc-number-types §2).
+            if let Some(exp) = expected
+                && !matches!(exp, PlutoType::Nullable(_))
+                && types_compatible(inner, exp, env)
+            {
+                return Err(conversion_mismatch_error(narrow, &object.node, method, env));
+            }
+        }
+        return Ok(ret);
     }
     // Task methods
     if let PlutoType::Task(_inner) = &obj_type {
