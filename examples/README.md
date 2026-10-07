@@ -163,7 +163,7 @@ cargo run --manifest-path ../../Cargo.toml -- run main.pt --stdlib ../../stdlib
 
 ## bytes
 
-Demonstrates the `byte` and `bytes` types: hex literals (`0xFF`), explicit casting (`as byte`/`as int`), truncation semantics, packed byte buffers (`bytes_new`, `push`, indexing), string conversion (`to_bytes`/`to_string`), iteration, unsigned ordering, bulk operations (`slice`, `extend`, `fill`, `copy_from`, `find`, `compare`, `bytes_filled`), and fixed-width integer codecs (`read_u8`/`write_u8` through `read_i64_le`/`write_i64_be`, both endiannesses).
+Demonstrates the `byte` and `bytes` types: hex literals (`0xFF`), conversion methods (`.to_byte()`/`.to_int()`, truncating `.low_byte()`), packed byte buffers (`bytes_new`, `push`, indexing), string conversion (`to_bytes`/`to_string`), iteration, unsigned ordering, bulk operations (`slice`, `extend`, `fill`, `copy_from`, `find`, `compare`, `bytes_filled`), and fixed-width integer codecs (`read_u8`/`write_u8` through `read_i64_le`/`write_i64_be`, both endiannesses).
 
 ```bash
 cargo run -- run examples/bytes/main.pt

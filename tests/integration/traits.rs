@@ -12283,7 +12283,7 @@ fn main() {
 
 #[test]
 fn trait_method_result_cast_to_float() {
-    // Trait dispatch result cast with `as float`
+    // Trait dispatch result converted with `.to_float()`
     let out = compile_and_run_stdout(r#"
 trait IntSource {
     fn get(self) int
