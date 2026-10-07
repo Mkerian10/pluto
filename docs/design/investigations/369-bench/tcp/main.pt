@@ -1,0 +1,43 @@
+// Benchmark: a loopback TCP server holding N idle connections.
+// Each accepted connection gets a handler task (a pthread) blocked in read(2) —
+// the exact serve/thread-per-connection shape from issue #369. The same process
+// is also the client (holds the client fds in `conns`) so one binary measures
+// the whole holding cost.
+//
+// Edit N below, then:
+//   pluto compile docs/design/investigations/369-bench/tcp/main.pt -o /tmp/tcp --stdlib stdlib
+//   /tmp/tcp &              # prints connect_ms, then "ready", then sleeps
+//   ps -o rss= -p $!        # RSS in KB; divide by N for per-connection cost
+//   kill %1
+
+import std.net
+import std.time
+
+fn handler(conn: net.TcpConnection) {
+    conn.read(1) catch ""   // peer never sends: parks this handler pthread
+}
+
+fn acceptor(listener: net.TcpListener) {
+    while true {
+        let conn = listener.accept()
+        spawn handler(conn).detach()
+    }
+}
+
+fn main() {
+    let N = 3000
+    let listener = net.listen("127.0.0.1", 0)   // ephemeral port
+    let port = listener.port()
+    spawn acceptor(listener).detach()
+
+    let mut conns: [net.TcpConnection] = []
+    let start = time.monotonic_ns()
+    let mut i = 0
+    while i < N {
+        conns.push(net.connect("127.0.0.1", port))
+        i = i + 1
+    }
+    print(f"connect_ms={(time.monotonic_ns() - start) / 1000000}")
+    print("ready")
+    time.sleep(600000)
+}

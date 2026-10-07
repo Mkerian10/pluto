@@ -1,0 +1,31 @@
+// Benchmark: N spawned tasks, each parked forever on its own channel recv.
+// The idle-task analog of the issue #369 "many idle connections" workload.
+//
+// Edit N below, then:
+//   pluto compile docs/design/investigations/369-bench/spawn/main.pt -o /tmp/spawn --stdlib stdlib
+//   /tmp/spawn &            # prints spawn_ms, then "ready", then sleeps
+//   ps -o rss=,vsz= -p $!   # RSS in KB; divide by N for per-task cost
+//   kill %1
+//
+// A pthread_create failure ("failed to create thread: 35" = EAGAIN) marks the
+// ceiling on this machine.
+
+import std.time
+
+fn waiter(rx: Receiver<int>) {
+    rx.recv() catch 0   // nothing is ever sent: parks this pthread forever
+}
+
+fn main() {
+    let N = 5000
+    let start = time.monotonic_ns()
+    let mut i = 0
+    while i < N {
+        let (tx, rx) = chan<int>(1)
+        spawn waiter(rx).detach()
+        i = i + 1
+    }
+    print(f"spawn_ms={(time.monotonic_ns() - start) / 1000000}")
+    print("ready")
+    time.sleep(600000)
+}
