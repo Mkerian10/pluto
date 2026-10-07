@@ -1,0 +1,51 @@
+import std.compress
+
+// Demonstrates the std.compress module: gzip/gunzip (the standard
+// Content-Encoding: gzip wire format) and raw deflate/inflate, plus the
+// error model for corrupt input and bad levels.
+//
+// Run:
+//   cargo run -- run examples/compress/main.pt --stdlib stdlib
+
+fn main() {
+    // A compressible payload: natural-language text with lots of repetition.
+    let text = "Pluto is a distributed backend language. "
+        + "Pluto is a distributed backend language. "
+        + "Pluto is a distributed backend language. "
+        + "Compression turns that repetition into savings."
+    let original = text.to_bytes()
+    print(f"original: {original.len()} bytes")
+
+    // --- gzip roundtrip -----------------------------------------------------
+    let gz = compress.gzip(original, 6)!
+    print(f"gzip:     {gz.len()} bytes")
+    let back = compress.gunzip(gz)!
+    print(f"gunzip roundtrip matches original: {back.compare(original) == 0}")
+
+    // --- raw deflate roundtrip ---------------------------------------------
+    // Raw DEFLATE drops the gzip header and trailer: smaller, but no checksum
+    // and not a standalone file format — use it inside a protocol that frames
+    // and verifies the data itself.
+    let df = compress.deflate(original, 9)!
+    print(f"deflate:  {df.len()} bytes (no gzip framing)")
+    let inflated = compress.inflate(df)!
+    print(f"inflate roundtrip matches original: {inflated.compare(original) == 0}")
+
+    // --- decompressing the recovered text ----------------------------------
+    print(f"recovered text: {back.to_string()}")
+
+    // --- error handling: corrupt input is a condition, not a crash ---------
+    let garbage = "this is not a gzip stream".to_bytes()
+    let recovered = compress.gunzip(garbage) catch e: compress.CompressError {
+        print(f"caught expected error: {e.message}")
+        bytes_new()
+    }
+    print(f"corrupt input handled gracefully: {recovered.len() == 0}")
+
+    // --- error handling: an out-of-range level raises ----------------------
+    let bad = compress.gzip(original, 15) catch e: compress.CompressError {
+        print(f"caught expected error: {e.message}")
+        bytes_new()
+    }
+    print(f"bad level handled gracefully: {bad.len() == 0}")
+}

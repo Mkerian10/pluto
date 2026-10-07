@@ -711,6 +711,9 @@ fn runtime_cache_key(test_mode: bool, gc: GcBackend) -> String {
     include_str!("../runtime/threading.c").hash(&mut hasher);
     include_str!("../runtime/builtins.c").hash(&mut hasher);
     include_str!("../runtime/builtins.h").hash(&mut hasher);
+    include_str!("../runtime/compress.c").hash(&mut hasher);
+    include_str!("../runtime/miniz.c").hash(&mut hasher);
+    include_str!("../runtime/miniz.h").hash(&mut hasher);
     test_mode.hash(&mut hasher);
     gc.name().hash(&mut hasher);
     std::env::consts::ARCH.hash(&mut hasher);
@@ -781,6 +784,9 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     let threading_src = include_str!("../runtime/threading.c");
     let builtins_src = include_str!("../runtime/builtins.c");
     let coverage_src = include_str!("../runtime/coverage.c");
+    let compress_src = include_str!("../runtime/compress.c");
+    let miniz_src = include_str!("../runtime/miniz.c");
+    let miniz_header_src = include_str!("../runtime/miniz.h");
     let header_src = include_str!("../runtime/builtins.h");
 
     let dir_suffix = if test_mode { "pluto_test_runtime" } else { "pluto_runtime" };
@@ -794,6 +800,9 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     let threading_c = dir.join("threading.c");
     let builtins_c = dir.join("builtins.c");
     let coverage_c = dir.join("coverage.c");
+    let compress_c = dir.join("compress.c");
+    let miniz_c = dir.join("miniz.c");
+    let miniz_h = dir.join("miniz.h");
 
     std::fs::write(&header_h, header_src)
         .map_err(|e| CompileError::link(format!("failed to write header: {e}")))?;
@@ -805,11 +814,19 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
         .map_err(|e| CompileError::link(format!("failed to write builtins.c: {e}")))?;
     std::fs::write(&coverage_c, coverage_src)
         .map_err(|e| CompileError::link(format!("failed to write coverage.c: {e}")))?;
+    std::fs::write(&compress_c, compress_src)
+        .map_err(|e| CompileError::link(format!("failed to write compress.c: {e}")))?;
+    std::fs::write(&miniz_c, miniz_src)
+        .map_err(|e| CompileError::link(format!("failed to write miniz.c: {e}")))?;
+    std::fs::write(&miniz_h, miniz_header_src)
+        .map_err(|e| CompileError::link(format!("failed to write miniz.h: {e}")))?;
 
     let gc_o = dir.join("gc.o");
     let threading_o = dir.join("threading.o");
     let builtins_o = dir.join("builtins.o");
     let coverage_o = dir.join("coverage.o");
+    let compress_o = dir.join("compress.o");
+    let miniz_o = dir.join("miniz.o");
     let runtime_o = dir.join("runtime.o");
 
     // Compile gc.c
@@ -880,10 +897,47 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
         return Err(CompileError::link("failed to compile coverage.c"));
     }
 
+    // Compile miniz.c (vendored DEFLATE/INFLATE core, runtime/miniz.c). The ZIP
+    // archive APIs and stdio dependency are compiled out: std.compress needs
+    // only the raw deflate/inflate core plus the zlib-style CRC-32 helper.
+    let mut cmd = std::process::Command::new("cc");
+    cmd.arg("-c");
+    if test_mode {
+        cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
+    }
+    cmd.arg("-DMINIZ_NO_ARCHIVE_APIS").arg("-DMINIZ_NO_STDIO");
+    cmd.arg("-I").arg(&dir);
+    cmd.arg(&miniz_c).arg("-o").arg(&miniz_o);
+    let status = cmd.status()
+        .map_err(|e| CompileError::link(format!("failed to compile miniz.c: {e}")))?;
+    if !status.success() {
+        return Err(CompileError::link("failed to compile miniz.c"));
+    }
+
+    // Compile compress.c (std.compress runtime wrappers over miniz).
+    let mut cmd = std::process::Command::new("cc");
+    cmd.arg("-c");
+    if test_mode {
+        cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
+    }
+    cmd.arg("-DMINIZ_NO_ARCHIVE_APIS").arg("-DMINIZ_NO_STDIO");
+    cmd.arg("-I").arg(&dir);
+    cmd.arg(&compress_c).arg("-o").arg(&compress_o);
+    #[cfg(target_os = "linux")]
+    if !test_mode {
+        cmd.arg("-pthread");
+    }
+    let status = cmd.status()
+        .map_err(|e| CompileError::link(format!("failed to compile compress.c: {e}")))?;
+    if !status.success() {
+        return Err(CompileError::link("failed to compile compress.c"));
+    }
+
     // Link all object files into one
     let mut cmd = std::process::Command::new("ld");
     cmd.arg("-r");
-    cmd.arg(&gc_o).arg(&threading_o).arg(&builtins_o).arg(&coverage_o).arg("-o").arg(&runtime_o);
+    cmd.arg(&gc_o).arg(&threading_o).arg(&builtins_o).arg(&coverage_o)
+        .arg(&compress_o).arg(&miniz_o).arg("-o").arg(&runtime_o);
     let status = cmd.status()
         .map_err(|e| CompileError::link(format!("failed to link runtime: {e}")))?;
     if !status.success() {
@@ -901,10 +955,15 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     let _ = std::fs::remove_file(&threading_c);
     let _ = std::fs::remove_file(&builtins_c);
     let _ = std::fs::remove_file(&coverage_c);
+    let _ = std::fs::remove_file(&compress_c);
+    let _ = std::fs::remove_file(&miniz_c);
+    let _ = std::fs::remove_file(&miniz_h);
     let _ = std::fs::remove_file(&gc_o);
     let _ = std::fs::remove_file(&threading_o);
     let _ = std::fs::remove_file(&builtins_o);
     let _ = std::fs::remove_file(&coverage_o);
+    let _ = std::fs::remove_file(&compress_o);
+    let _ = std::fs::remove_file(&miniz_o);
 
     // Return the disk-cached path if it was stored successfully, otherwise the
     // freshly built temp path. With the cache disabled, always use the fresh one.

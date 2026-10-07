@@ -1,0 +1,93 @@
+// std.compress — one-shot gzip and raw DEFLATE, backed by the vendored miniz
+// core in the Pluto C runtime (runtime/miniz.c, runtime/compress.c).
+//
+// Two codecs:
+//
+//   gzip / gunzip   — a complete gzip member (RFC 1952): the familiar
+//                     Content-Encoding: gzip wire format, interoperable with
+//                     the `gzip`/`gunzip` command-line tools and every HTTP
+//                     stack. Carries a CRC-32 and the original length, both
+//                     verified on decode.
+//   deflate/inflate — raw DEFLATE (RFC 1951) with no framing: smaller (no
+//                     header or checksum), the primitive you want when the
+//                     surrounding protocol already frames and checks the data
+//                     (e.g. a message-batch format with its own CRC).
+//
+// All four are ONE-SHOT: the whole payload goes in and the whole result comes
+// back as a fresh `bytes`. Streaming (compress-as-you-write / decompress-as-
+// you-read), which bulk pipelines want to bound memory, is a deliberate
+// follow-up (issue #371) and is NOT provided here.
+//
+// ERROR MODEL: compression validates its level and otherwise cannot fail.
+// Decompression of corrupt, truncated, or oversized input is a CONDITION, not
+// a crash: gunzip/inflate raise CompressError. Bad bytes from the wire never
+// trap the process.
+//
+// OUTPUT CAP: decompression refuses to expand past default_max_size() (64
+// MiB) — a decompression bomb is rejected with CompressError rather than
+// absorbed. The cap bounds a single one-shot result; it is not a limit on how
+// much a streaming API (future) would handle.
+
+extern fn __pluto_gzip_compress(data: bytes, level: int) bytes
+extern fn __pluto_gzip_decompress(data: bytes, max_size: int) bytes
+extern fn __pluto_deflate_compress(data: bytes, level: int) bytes
+extern fn __pluto_deflate_decompress(data: bytes, max_size: int) bytes
+extern fn __pluto_compress_last_error() int
+
+// Raised when decompression fails (corrupt/truncated input, a CRC or length
+// that doesn't check out, or output exceeding the size cap) or when a
+// compression level is out of the valid 0..9 range.
+pub error CompressError {
+    message: string
+}
+
+// The default maximum decompressed size a single gunzip/inflate call will
+// produce, in bytes: 64 MiB. Input that would expand beyond this is rejected
+// as CompressError. One-shot codecs hold the whole result in memory, so this
+// is both a sanity bound and a decompression-bomb guard.
+pub fn default_max_size() int {
+    return 67108864
+}
+
+// Compress `data` as a gzip member at `level` (0 = no compression, 1 =
+// fastest, 9 = best; 6 is a good default). An out-of-range level raises
+// CompressError. The result is a complete, standard gzip stream.
+pub fn gzip(data: bytes, level: int) bytes {
+    if level < 0 || level > 9 {
+        raise CompressError { message: f"gzip: compression level {level} out of range (expected 0..9)" }
+    }
+    return __pluto_gzip_compress(data, level)
+}
+
+// Decompress a gzip member produced by gzip() or any conforming gzip encoder.
+// Raises CompressError if the input is not valid gzip, is truncated, fails its
+// CRC-32/length check, or would decompress to more than default_max_size()
+// bytes.
+pub fn gunzip(data: bytes) bytes {
+    let out = __pluto_gzip_decompress(data, default_max_size())
+    if __pluto_compress_last_error() != 0 {
+        raise CompressError { message: "gunzip: invalid, truncated, or oversized gzip data" }
+    }
+    return out
+}
+
+// Compress `data` as a raw DEFLATE stream (no gzip/zlib framing) at `level`
+// (0..9). An out-of-range level raises CompressError. Pair with inflate().
+pub fn deflate(data: bytes, level: int) bytes {
+    if level < 0 || level > 9 {
+        raise CompressError { message: f"deflate: compression level {level} out of range (expected 0..9)" }
+    }
+    return __pluto_deflate_compress(data, level)
+}
+
+// Decompress a raw DEFLATE stream produced by deflate(). Raises CompressError
+// if the input is corrupt, truncated, or would decompress to more than
+// default_max_size() bytes. (Raw DEFLATE carries no checksum; integrity is the
+// surrounding protocol's job — inflate validates structure, not content.)
+pub fn inflate(data: bytes) bytes {
+    let out = __pluto_deflate_decompress(data, default_max_size())
+    if __pluto_compress_last_error() != 0 {
+        raise CompressError { message: "inflate: invalid, truncated, or oversized deflate data" }
+    }
+    return out
+}
