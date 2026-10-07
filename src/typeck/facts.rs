@@ -147,7 +147,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::parser::ast::{BinOp, Expr, TypeExpr, UnaryOp};
+use crate::parser::ast::{BinOp, Expr, UnaryOp};
 use crate::span::Spanned;
 use crate::visit::{walk_expr, Visitor};
 
@@ -759,6 +759,21 @@ pub fn contains_impure_call(expr: &Spanned<Expr>, env: &TypeEnv) -> bool {
                     // cannot itself contain calls.
                     return;
                 }
+                Expr::MethodCall { object, method, args, .. }
+                    if args.is_empty()
+                        && matches!(
+                            method.node.as_str(),
+                            "to_int" | "to_float" | "to_byte" | "low_byte"
+                        ) =>
+                {
+                    // Pure numeric conversion (replaces the former `as` cast,
+                    // which was not a call): side-effect-free and
+                    // deterministic, so it neither invalidates facts nor
+                    // severs a statement. The receiver may still contain a
+                    // call, so recurse into it.
+                    self.visit_expr(object);
+                    return;
+                }
                 Expr::Call { .. }
                 | Expr::MethodCall { .. }
                 | Expr::StaticTraitCall { .. }
@@ -1072,6 +1087,20 @@ pub(crate) fn call_severity(
                 Expr::MethodCall { .. } if len_path(&expr.node, self.env).is_some() => {
                     // Pure length read; its object is a trackable path and
                     // cannot itself contain calls.
+                    return;
+                }
+                Expr::MethodCall { object, method, args, .. }
+                    if args.is_empty()
+                        && matches!(
+                            method.node.as_str(),
+                            "to_int" | "to_float" | "to_byte" | "low_byte"
+                        ) =>
+                {
+                    // Pure numeric conversion (replaces the former `as` cast,
+                    // which was not a call): runs no user code and mutates
+                    // nothing, so it severs no facts. The receiver may still
+                    // contain a call, so recurse into it.
+                    self.visit_expr(object);
                     return;
                 }
                 Expr::MethodCall { object, method, .. } => {
@@ -1493,24 +1522,23 @@ pub(crate) fn expr_bounds(expr: &Expr, env: &TypeEnv) -> Result<(i128, i128), ()
 
 /// `[0, 255]` bounds for byte values and their int widenings: trackable
 /// byte-typed paths (params, locals, fields), element reads from `bytes`
-/// and `[byte]`, casts *to* byte, and `as int` casts of any of those. A
-/// byte's value is 0..255 by construction — a type fact, not a flow fact,
-/// so it holds wherever the value is read (inside loops, after calls).
+/// and `[byte]`, and `.to_int()` widenings of any of those. A byte's value
+/// is 0..255 by construction — a type fact, not a flow fact, so it holds
+/// wherever the value is read (inside loops, after calls).
 pub(crate) fn byte_value_bounds(e: &Expr, env: &TypeEnv) -> Option<(i128, i128)> {
-    if let Expr::Cast { expr, target_type } = e {
-        if matches!(&target_type.node, TypeExpr::Named(n) if n == "int")
-            && is_byte_valued(&expr.node, env)
-        {
+    // `b.to_int()` / `data[i].to_int()` widens a byte's 0..255 value into
+    // int; the bound carries through the (total) conversion.
+    if let Expr::MethodCall { object, method, args, .. } = e {
+        if method.node == "to_int" && args.is_empty() && is_byte_valued(&object.node, env) {
             return Some((0, 255));
         }
-        return None;
     }
     is_byte_valued(e, env).then_some((0, 255))
 }
 
-/// Is this expression byte-typed by construction? Trackable byte paths,
-/// element reads from `bytes` / `[byte]`, and casts to byte. Conservative:
-/// anything unrecognized (method calls, map reads, ...) is not.
+/// Is this expression byte-typed by construction? Trackable byte paths and
+/// element reads from `bytes` / `[byte]`. Conservative: anything
+/// unrecognized (method calls, map reads, ...) is not.
 fn is_byte_valued(e: &Expr, env: &TypeEnv) -> bool {
     match e {
         Expr::Index { object, .. } => match typed_path(&object.node, env) {
@@ -1518,9 +1546,6 @@ fn is_byte_valued(e: &Expr, env: &TypeEnv) -> bool {
             Some((_, PlutoType::Array(el))) => *el == PlutoType::Byte,
             _ => false,
         },
-        Expr::Cast { target_type, .. } => {
-            matches!(&target_type.node, TypeExpr::Named(n) if n == "byte")
-        }
         _ => matches!(typed_path(e, env), Some((_, PlutoType::Byte))),
     }
 }
@@ -2049,7 +2074,7 @@ pub fn apply_stmt_kills(stmt: &crate::parser::ast::Stmt, env: &mut TypeEnv) {
 ///   values (`acc.balance == 100` after `let acc = Account { balance: 100 }`).
 ///   The usual kill rules take over from there. Entities are excluded
 ///   (entity fields never carry flow facts);
-/// - a byte widening (`b as int`, `data[i] as int` — see
+/// - a byte widening (`b.to_int()`, `data[i].to_int()` — see
 ///   [`byte_value_bounds`]): the binding starts bounded to `[0, 255]`.
 ///
 /// General value-to-binding fact transfer is out of scope. Callers assume
@@ -2065,11 +2090,11 @@ pub(crate) fn binding_facts(name: &str, value: &Expr, env: &TypeEnv) -> Vec<Fact
     if let Expr::StructLit { name: cls, fields, .. } = value {
         return construction_facts(name, &cls.node, fields, env);
     }
-    // Byte widening (`let x = b as int`, `let x = data[i] as int`): the
+    // Byte widening (`let x = b.to_int()`, `let x = data[i].to_int()`): the
     // captured value is a byte's, so the binding starts in [0, 255]. Like
     // the `>= 0` length bound above, this is a fact about the captured
     // value itself — it holds until the binding is reassigned.
-    if matches!(value, Expr::Cast { .. }) && byte_value_bounds(value, env).is_some() {
+    if matches!(value, Expr::MethodCall { .. }) && byte_value_bounds(value, env).is_some() {
         return vec![Fact::Bound(name.to_string(), Interval { lo: 0, hi: 255 })];
     }
     Vec::new()

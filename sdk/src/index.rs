@@ -455,9 +455,6 @@ fn collect_expr_xrefs(
                 }
             }
         }
-        Expr::Cast { expr: inner, .. } => {
-            collect_expr_xrefs(&inner.node, inner.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
-        }
         Expr::Range { start, end, .. } => {
             collect_expr_xrefs(&start.node, start.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
             collect_expr_xrefs(&end.node, end.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);

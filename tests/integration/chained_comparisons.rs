@@ -167,9 +167,9 @@ fn byte_chain_compares_unsigned() {
     // Bytes are unsigned: 0xFF is 255, not -1, so it sits at the top.
     let stdout = compile_and_run_stdout(r#"
         fn main() {
-            let lo = 0x01 as byte
-            let mid = 0x7F as byte
-            let hi = 0xFF as byte
+            let lo = (0x01).to_byte()
+            let mid = (0x7F).to_byte()
+            let hi = (0xFF).to_byte()
             print(lo < mid < hi)
             print(hi > mid > lo)
             print(lo < hi < mid)

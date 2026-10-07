@@ -139,16 +139,16 @@ fn set(mut self, k:int) ensures self.n == old(self.n) + k {self.n = self.n + k}
 fn main(){let mut b = Box<int>{v:1, n:0}
 b.set(2)}"#).is_ok()); }
 
-// Requires with cast
+// Requires with cast — `as` was removed (rfc-number-types phase 3)
 #[test]
-fn requires_cast() { compile_should_fail_with(r#"fn f(x:int) requires (x as float)>0.0 int{return x} fn main(){}"#, "expected newline after statement"); }
+fn requires_cast() { compile_should_fail_with(r#"fn f(x:int) requires (x as float)>0.0 int{return x} fn main(){}"#, "was removed"); }
 
-// Ensures with cast
+// Ensures with cast — `as` was removed (rfc-number-types phase 3)
 #[test]
 fn ensures_cast() { compile_should_fail_with(r#"class C{x:int
 fn get(mut self) int ensures (self.x as float)>0.0 {return self.x}
 }
-fn main(){}"#, "type casts are not allowed in contract expressions"); }
+fn main(){}"#, "was removed"); }
 
 // Requires on void function
 #[test]

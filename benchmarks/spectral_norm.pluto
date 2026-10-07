@@ -1,7 +1,7 @@
 fn eval_a(i: int, j: int) float {
     let ij = i + j
     let div = ij * (ij + 1) / 2 + i + 1
-    return 1.0 / (div as float)
+    return 1.0 / (div.to_float())
 }
 
 fn eval_a_times_u(u: [float], mut au: [float], n: int) {

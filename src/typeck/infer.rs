@@ -263,22 +263,6 @@ pub(crate) fn infer_expr(
                 }
             }
         }
-        Expr::Cast { expr, target_type } => {
-            let source = infer_expr(&expr.node, expr.span, env, None)?;
-            let target = resolve_type(target_type, env)?;
-            match (&source, &target) {
-                (PlutoType::Int, PlutoType::Float)
-                | (PlutoType::Float, PlutoType::Int)
-                | (PlutoType::Int, PlutoType::Bool)
-                | (PlutoType::Bool, PlutoType::Int)
-                | (PlutoType::Int, PlutoType::Byte)
-                | (PlutoType::Byte, PlutoType::Int) => Ok(target),
-                _ => Err(CompileError::type_err(
-                    format!("cannot cast from {source} to {target}"),
-                    span,
-                )),
-            }
-        }
         Expr::Call { name, args, type_args, .. } => infer_call(name, args, type_args, span, env),
         Expr::StructLit { name, fields: lit_fields, type_args, .. } => {
             infer_struct_lit(name, lit_fields, type_args, span, env)

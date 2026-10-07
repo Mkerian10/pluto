@@ -31,7 +31,7 @@ Operators are listed from lowest to highest precedence. Operators at the same pr
 
 Prefix operators bind tighter than all binary operators but looser than postfix operators. This means `-x.field` parses as `-(x.field)`, not `(-x).field`.
 
-The `as` operator binds tighter than arithmetic, so `x + y as float` parses as `x + (y as float)`.
+Conversions are postfix method calls (`.to_float()`), which bind tighter than arithmetic: `x + y.to_float()` parses as `x + (y.to_float())`.
 
 Range operators (`..` and `..=`) bind looser than arithmetic, so `1 + 2..10` parses as `(1 + 2)..10`.
 
@@ -123,17 +123,19 @@ The shift amount (right operand of `<<` and `>>`) must lie in `0..63`. An amount
 
 Equality comparison (`==`, `!=`) is defined for all types. For classes, it compares by reference identity. For primitives and strings, it compares by value.
 
-## Type Cast
+## Conversions
 
-The `as` operator performs an explicit type conversion:
+There is no cast operator. Every representation change is a named method, and a
+lossy conversion returns a nullable:
 
 ```
-let x = 42 as float     // 42.0
-let y = 3.7 as int      // 3
-let z = 1 as bool       // true
+let x = (42).to_float()     // 42.0
+let y = (3.7).to_int()      // 3    (float literal proves in range → int)
+let z = 1 != 0              // true (a boolean "conversion" is a comparison)
 ```
 
-See the [Types](types.md) chapter for the complete list of allowed casts.
+See the [Types](types.md) chapter for the full method table, failure modes, and
+how proof narrowing turns a provably-in-range `T?` result into `T`.
 
 ## Assignment Operators
 

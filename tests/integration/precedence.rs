@@ -116,11 +116,11 @@ fn associativity_division_left() {
 
 #[test]
 fn precedence_cast_vs_addition() {
-    // x as float + 1.0 → should parse as (x as float) + 1.0
+    // `x.to_float() + 1.0` → the conversion binds before the addition
     let stdout = compile_and_run_stdout(r#"
         fn main() {
             let x = 5
-            let result = x as float + 1.0
+            let result = x.to_float() + 1.0
             print(result)
         }
     "#);

@@ -24,7 +24,7 @@ fn main() {
 
 #[test]
 fn invalid_cast_shows_types() {
-    // Verify that invalid casts show both source and target types
+    // `as` was removed; the diagnostic points at the replacement method.
     compile_should_fail_with(
         r#"
 fn main() {
@@ -33,7 +33,7 @@ fn main() {
     print(y)
 }
 "#,
-        "cannot cast from string to int",
+        "was removed",
     );
 }
 

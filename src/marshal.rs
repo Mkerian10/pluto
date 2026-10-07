@@ -1976,15 +1976,9 @@ fn mk_encode_value_at(ty: &TypeExpr, value_expr: Expr, depth: usize) -> Result<V
                 "bool" => mk_method_call("enc", "encode_bool", vec![value_expr]),
                 "string" => mk_method_call("enc", "encode_string", vec![value_expr]),
                 "byte" => {
-                    // byte → encode_int(value as int)
+                    // byte → encode_int(value.to_int()) — total widening
                     mk_method_call("enc", "encode_int", vec![
-                        Expr::Cast {
-                            expr: Box::new(Spanned { node: value_expr, span: mk_span() }),
-                            target_type: Spanned {
-                                node: TypeExpr::Named("int".to_string()),
-                                span: mk_span(),
-                            },
-                        }
+                        mk_method_call_on_expr(value_expr, "to_int", vec![])
                     ])
                 }
                 // bytes → encode_bytes(value): one opaque blob on the wire,
@@ -2368,17 +2362,13 @@ fn mk_let_decode_at(var_name: &str, ty: &TypeExpr, depth: usize) -> Result<Vec<S
                 "bool" => mk_propagate(mk_method_call("dec", "decode_bool", vec![])),
                 "string" => mk_propagate(mk_method_call("dec", "decode_string", vec![])),
                 "byte" => {
-                    // byte → decode_int()! as byte
-                    Expr::Cast {
-                        expr: Box::new(Spanned {
-                            node: mk_propagate(mk_method_call("dec", "decode_int", vec![])),
-                            span: mk_span(),
-                        }),
-                        target_type: Spanned {
-                            node: TypeExpr::Named("byte".to_string()),
-                            span: mk_span(),
-                        },
-                    }
+                    // byte → decode_int()!.low_byte() — exact low 8 bits; the
+                    // wire int was decode-validated, so truncation is a no-op
+                    mk_method_call_on_expr(
+                        mk_propagate(mk_method_call("dec", "decode_int", vec![])),
+                        "low_byte",
+                        vec![],
+                    )
                 }
                 // bytes → decode_bytes()!: one opaque blob, never element-wise
                 "bytes" => mk_propagate(mk_method_call("dec", "decode_bytes", vec![])),
@@ -2572,16 +2562,11 @@ fn mk_let_decode_at(var_name: &str, ty: &TypeExpr, depth: usize) -> Result<Vec<S
                         "bool" => mk_propagate(mk_method_call("dec", "decode_bool", vec![])),
                         "string" => mk_propagate(mk_method_call("dec", "decode_string", vec![])),
                         "bytes" => mk_propagate(mk_method_call("dec", "decode_bytes", vec![])),
-                        "byte" => Expr::Cast {
-                            expr: Box::new(Spanned {
-                                node: mk_propagate(mk_method_call("dec", "decode_int", vec![])),
-                                span: mk_span(),
-                            }),
-                            target_type: Spanned {
-                                node: TypeExpr::Named("byte".to_string()),
-                                span: mk_span(),
-                            },
-                        },
+                        "byte" => mk_method_call_on_expr(
+                            mk_propagate(mk_method_call("dec", "decode_int", vec![])),
+                            "low_byte",
+                            vec![],
+                        ),
                         _ => unreachable!(),
                     };
 
@@ -3841,12 +3826,12 @@ mod tests {
             Stmt::Expr(e) => match &e.node {
                 Expr::MethodCall { method, args, .. } => {
                     assert_eq!(method.node, "encode_int");
-                    // Should cast byte to int
+                    // Should widen byte to int via `.to_int()`
                     match &args[0].node {
-                        Expr::Cast { target_type, .. } => {
-                            assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "int"));
+                        Expr::MethodCall { method: inner, .. } => {
+                            assert_eq!(inner.node, "to_int");
                         }
-                        _ => panic!("Expected Cast"),
+                        _ => panic!("Expected to_int() method call"),
                     }
                 }
                 _ => panic!("Expected MethodCall"),
@@ -4162,11 +4147,11 @@ mod tests {
         assert_eq!(stmts.len(), 1);
         match &stmts[0].node {
             Stmt::Let { value, .. } => match &value.node {
-                Expr::Cast { target_type, .. } => {
-                    // Should cast decode_int() to byte
-                    assert!(matches!(&target_type.node, TypeExpr::Named(n) if n == "byte"));
+                Expr::MethodCall { method, .. } => {
+                    // Should truncate decode_int()! to byte via `.low_byte()`
+                    assert_eq!(method.node, "low_byte");
                 }
-                _ => panic!("Expected Cast"),
+                _ => panic!("Expected low_byte() method call"),
             },
             _ => panic!("Expected Let statement"),
         }

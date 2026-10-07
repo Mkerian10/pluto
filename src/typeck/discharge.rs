@@ -2528,11 +2528,10 @@ fn arg_may_alias_class(e: &Expr, env: &TypeEnv, cname: &str) -> bool {
         Expr::EnumData { fields, .. } => fields
             .iter()
             .any(|(_, v)| arg_may_alias_class(&v.node, env, cname)),
-        // Everything else (casts, trait calls, at/spawn, conditionals,
+        // Everything else (trait calls, at/spawn, conditionals,
         // catch, bare idents typed_path could not resolve — entities
         // included): conservatively yes.
-        Expr::Cast { .. }
-        | Expr::StaticTraitCall { .. }
+        Expr::StaticTraitCall { .. }
         | Expr::At { .. }
         | Expr::Spawn { .. }
         | Expr::If { .. }

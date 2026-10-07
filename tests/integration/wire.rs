@@ -1111,7 +1111,7 @@ fn main() {
     let mut buf = bytes_new()
     let mut i = 0
     while i < 256 {
-        buf.push(i as byte)
+        buf.push(i.low_byte())
         i = i + 1
     }
     let mut enc = wire.wire_value_encoder()
@@ -1130,7 +1130,7 @@ fn main() {
     let mut ok = out.len() == 256
     let mut j = 0
     while j < out.len() {
-        if (out[j] as int) != j {
+        if (out[j].to_int()) != j {
             ok = false
         }
         j = j + 1
@@ -1157,7 +1157,7 @@ fn main() {
 
     // decode_int on a Bytes value
     let mut buf = bytes_new()
-    buf.push(1 as byte)
+    buf.push((1).to_byte())
     let mut dec2 = wire.wire_value_decoder(wire.wire_bytes(buf))
     let n = dec2.decode_int() catch err: wire.WireError {
         print(err.message)

@@ -29,7 +29,7 @@ fn fft(mut re: [float], mut im: [float], n: int) {
     let mut mmax = 1
     while mmax < n {
         let step = mmax * 2
-        let theta = -pi / (mmax as float)
+        let theta = -pi / (mmax.to_float())
         let wpr = cos(theta)
         let wpi = sin(theta)
         let mut wr = 1.0

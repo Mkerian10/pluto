@@ -1099,24 +1099,19 @@ mod tests {
     // Type casting & operators typeck tests
 
     #[test]
-    fn cast_int_to_float() {
-        check("fn main() {\n    let x: float = 42 as float\n}").unwrap();
+    fn convert_int_to_float() {
+        check("fn main() {\n    let x: float = (42).to_float()\n}").unwrap();
     }
 
     #[test]
-    fn cast_float_to_int() {
-        check("fn main() {\n    let x: int = 3.14 as int\n}").unwrap();
+    fn convert_float_to_int() {
+        // A float literal proves in range, so `.to_int()` narrows to int.
+        check("fn main() {\n    let x: int = (3.14).to_int()\n}").unwrap();
     }
 
     #[test]
-    fn cast_int_to_bool() {
-        check("fn main() {\n    let x: bool = 1 as bool\n}").unwrap();
-    }
-
-    #[test]
-    fn cast_invalid_rejected() {
-        let result = check("fn main() {\n    let x: int = \"hi\" as int\n}");
-        assert!(result.is_err());
+    fn convert_int_to_bool() {
+        check("fn main() {\n    let x: bool = 1 != 0\n}").unwrap();
     }
 
     #[test]

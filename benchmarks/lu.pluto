@@ -101,13 +101,13 @@ fn main() {
     i = 0
     while i < size {
         seed = (seed * lcg_a) % lcg_m
-        a[i] = (seed as float) / (lcg_m as float) * 2.0 - 1.0
+        a[i] = (seed.to_float()) / (lcg_m.to_float()) * 2.0 - 1.0
         i = i + 1
     }
     // Make diagonally dominant to ensure stability
     i = 0
     while i < n {
-        a[i * n + i] = a[i * n + i] + (n as float)
+        a[i * n + i] = a[i * n + i] + (n.to_float())
         i = i + 1
     }
 

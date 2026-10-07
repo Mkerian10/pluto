@@ -410,9 +410,9 @@ fn pick(b: byte?) byte {
 }
 
 fn main() {
-    let v: byte? = 42 as byte
-    print(pick(v) catch 0 as byte)
-    print(pick(none) catch 7 as byte)
+    let v: byte? = (42).to_byte()
+    print(pick(v) catch (0).to_byte())
+    print(pick(none) catch (7).to_byte())
     if v != none {
         let h = Holder { val: v }
         print(h.val)

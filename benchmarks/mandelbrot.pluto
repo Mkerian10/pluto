@@ -7,10 +7,10 @@ fn main() {
 
     let mut y = 0
     while y < n {
-        let ci = 2.0 * (y as float) / (n as float) - 1.0
+        let ci = 2.0 * (y.to_float()) / (n.to_float()) - 1.0
         let mut x = 0
         while x < n {
-            let cr = 2.0 * (x as float) / (n as float) - 1.5
+            let cr = 2.0 * (x.to_float()) / (n.to_float()) - 1.5
 
             let mut zr = 0.0
             let mut zi = 0.0

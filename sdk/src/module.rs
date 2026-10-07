@@ -771,7 +771,7 @@ fn find_expr_recursive<'a>(expr: &'a Expr, span: Span, target: Span) -> Option<&
             }
             None
         }
-        Expr::Propagate { expr: inner } | Expr::Cast { expr: inner, .. } => {
+        Expr::Propagate { expr: inner } => {
             find_expr_recursive(&inner.node, inner.span, target)
         }
         Expr::Catch { expr: inner, handlers } => {

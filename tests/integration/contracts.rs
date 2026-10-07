@@ -277,7 +277,7 @@ fn main() {
     let b = Bad { x: 1 }
 }
 "#,
-        "type casts are not allowed in contract expressions",
+        "was removed",
     );
 }
 
@@ -2799,15 +2799,15 @@ fn requires_on_bytes_len_satisfied_runs() {
 fn header_tag(frame: bytes) int
     requires frame.len() >= 4
 {
-    return frame[0] as int
+    return frame[0].to_int()
 }
 
 fn main() {
     let mut frame = bytes_new()
-    frame.push(7 as byte)
-    frame.push(0 as byte)
-    frame.push(0 as byte)
-    frame.push(0 as byte)
+    frame.push((7).to_byte())
+    frame.push((0).to_byte())
+    frame.push((0).to_byte())
+    frame.push((0).to_byte())
     print(header_tag(frame))
 }
 "#,
@@ -2822,12 +2822,12 @@ fn requires_on_bytes_len_violated_aborts() {
 fn header_tag(frame: bytes) int
     requires frame.len() >= 4
 {
-    return frame[0] as int
+    return frame[0].to_int()
 }
 
 fn main() {
     let mut frame = bytes_new()
-    frame.push(7 as byte)
+    frame.push((7).to_byte())
     print(header_tag(frame))
 }
 "#,

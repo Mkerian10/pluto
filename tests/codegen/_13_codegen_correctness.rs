@@ -13,7 +13,7 @@ fn test_int_to_float_simple() {
     let source = r#"
 fn main() {
     let i = 42
-    let f = i as float
+    let f = i.to_float()
     print(f)
 }
 "#;
@@ -25,7 +25,7 @@ fn test_int_to_float_zero() {
     let source = r#"
 fn main() {
     let mut i = 0
-    let f = i as float
+    let f = i.to_float()
     print(f)
 }
 "#;
@@ -37,7 +37,7 @@ fn test_int_to_float_negative() {
     let source = r#"
 fn main() {
     let i = -123
-    let f = i as float
+    let f = i.to_float()
     print(f)
 }
 "#;
@@ -49,7 +49,7 @@ fn test_float_to_int_simple() {
     let source = r#"
 fn main() {
     let f = 42.7
-    let i = f as int
+    let i = f.to_int() ?? 0
     print(i)
 }
 "#;
@@ -61,7 +61,7 @@ fn test_float_to_int_truncation() {
     let source = r#"
 fn main() {
     let f = 99.999
-    let i = f as int
+    let i = f.to_int() ?? 0
     print(i)
 }
 "#;
@@ -73,7 +73,7 @@ fn test_float_to_int_negative_truncation() {
     let source = r#"
 fn main() {
     let f = -7.8
-    let i = f as int
+    let i = f.to_int() ?? 0
     print(i)
 }
 "#;
@@ -85,7 +85,7 @@ fn test_int_to_bool_zero_is_false() {
     let source = r#"
 fn main() {
     let mut i = 0
-    let b = i as bool
+    let b = i != 0
     if b {
         print("true")
     } else {
@@ -101,7 +101,7 @@ fn test_int_to_bool_nonzero_is_true() {
     let source = r#"
 fn main() {
     let i = 42
-    let b = i as bool
+    let b = i != 0
     if b {
         print("true")
     } else {
@@ -117,7 +117,7 @@ fn test_bool_to_int_false() {
     let source = r#"
 fn main() {
     let b = false
-    let i = b as int
+    let i = b.to_int()
     print(i)
 }
 "#;
@@ -129,7 +129,7 @@ fn test_bool_to_int_true() {
     let source = r#"
 fn main() {
     let b = true
-    let i = b as int
+    let i = b.to_int()
     print(i)
 }
 "#;
@@ -520,9 +520,9 @@ fn test_type_conversion_chain() {
     let source = r#"
 fn main() {
     let i = 42
-    let f = i as float
-    let b = i as bool
-    let i2 = b as int
+    let f = i.to_float()
+    let b = i != 0
+    let i2 = b.to_int()
     print(f)
     print(i2)
 }
@@ -601,7 +601,7 @@ fn test_type_conversion_in_expression() {
 fn main() {
     let i = 10
     let f = 5.5
-    let result = (i as float) + f
+    let result = (i.to_float()) + f
     print(result)
 }
 "#;

@@ -81,10 +81,10 @@ let mut ys = [1, 2, 3]
 ys.push(4)          // ok
 
 fn stamp(buf: bytes) {
-    buf.push(7 as byte)   // compile error — parameters are read-only without mut
+    buf.push((7).to_byte())   // compile error — parameters are read-only without mut
 }
 fn stamp_mut(mut buf: bytes) {
-    buf.push(7 as byte)   // ok
+    buf.push((7).to_byte())   // ok
 }
 ```
 

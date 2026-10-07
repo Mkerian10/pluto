@@ -3522,7 +3522,7 @@ class X impl Valued {
 
 fn main() {
     let v: Valued = X { n: 5 }
-    let mut f = v.val() as float
+    let mut f = v.val().to_float()
     print(f)
 }
 "#);
@@ -12296,7 +12296,7 @@ class FixedSource impl IntSource {
 
 fn main() {
     let mut s: IntSource = FixedSource { val: 7 }
-    let mut f = s.get() as float
+    let mut f = s.get().to_float()
     print(f)
 }
 "#);
@@ -15012,11 +15012,11 @@ class Impl impl ByteProvider {
 
 fn show(bp: ByteProvider) {
     let b = bp.get_byte()
-    print(b as int)
+    print(b.to_int())
 }
 
 fn main() {
-    let bp: ByteProvider = Impl { val: 65 as byte }
+    let bp: ByteProvider = Impl { val: (65).to_byte() }
     show(bp)
 }
 "#);

@@ -1618,11 +1618,6 @@ impl PrettyPrinter {
                   }
                 }
             }
-            Expr::Cast { expr, target_type } => {
-                self.emit_expr(&expr.node, 25);
-                self.write(" as ");
-                self.emit_type_expr(&target_type.node);
-            }
             Expr::Range {
                 start,
                 end,
@@ -2217,10 +2212,11 @@ fn main() {
     }
 
     #[test]
-    fn test_cast() {
-        let src = "fn main() {\n    let x = 42 as float\n}\n";
+    fn test_conversion_method() {
+        // `as` was removed; conversions are ordinary method calls.
+        let src = "fn main() {\n    let x = (42).to_float()\n}\n";
         let result = pp(src);
-        assert!(result.contains("42 as float"));
+        assert!(result.contains("to_float()"));
         assert_roundtrip_stable(src);
     }
 
@@ -2566,7 +2562,7 @@ fn main() {
     let sh = Shape.Circle { radius: 1.5 }
     let f = (a: int) => a * 2
     if x > 0 {
-        let z = x + y as int
+        let z = x + y.to_int()
     } else {
         let z = -x
     }
@@ -2593,7 +2589,7 @@ fn main() {
     let bit = ~x
     let expr = 1 + 2 * 3
     let parens = (1 + 2) * 3
-    let assoc = x - y as int - 1
+    let assoc = x - y.to_int() - 1
 }
 "#;
         assert_roundtrip_stable(src);

@@ -127,7 +127,7 @@ fn main() {
     let v = j.get_float()
     // Print int part to avoid float formatting issues
     let approx = v * 100.0
-    print(approx as int)
+    print(approx.to_int() ?? 0)
 }
 "#,
     )]);

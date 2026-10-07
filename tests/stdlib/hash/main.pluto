@@ -6,7 +6,7 @@ fn repeat_byte(mut b: int, count: int) bytes {
     let mut out = bytes_new()
     let mut i = 0
     while i < count {
-        out.push(b as byte)
+        out.push(b.low_byte())
         i = i + 1
     }
     return out
@@ -19,7 +19,7 @@ fn pattern200() bytes {
     let mut out = bytes_new()
     let mut i = 0
     while i < 200 {
-        out.push(((i * 7 + 3) & 0xFF) as byte)
+        out.push(((i * 7 + 3) & 0xFF).to_byte())
         i = i + 1
     }
     return out
@@ -86,7 +86,7 @@ test "crc32c RFC 3720 vectors" {
     let mut inc = bytes_new()
     let mut i = 0
     while i < 32 {
-        inc.push(i as byte)
+        inc.push(i.low_byte())
         i = i + 1
     }
     expect(hash.crc32c(inc)).to_equal(1188919630)
@@ -203,10 +203,10 @@ test "fnv1a64 vectors" {
 test "to_hex" {
     expect(hash.to_hex(bytes_new())).to_equal("")
     let mut b = bytes_new()
-    b.push(0 as byte)
-    b.push(15 as byte)
-    b.push(16 as byte)
-    b.push(171 as byte)
-    b.push(255 as byte)
+    b.push((0).to_byte())
+    b.push((15).to_byte())
+    b.push((16).to_byte())
+    b.push((171).to_byte())
+    b.push((255).to_byte())
     expect(hash.to_hex(b)).to_equal("000f10abff")
 }

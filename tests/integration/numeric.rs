@@ -4,80 +4,83 @@ use common::{
     compile_test_and_run,
 };
 
-// ── Type casting (as) ─────────────────────────────────────────────────────────
+// ── Conversion methods (`as` removed, rfc-number-types phase 3) ────────────────
 
 #[test]
-fn cast_int_to_float() {
-    let out = compile_and_run_stdout("fn main() {\n    let x = 42 as float\n    print(x)\n}");
+fn convert_int_to_float() {
+    let out = compile_and_run_stdout("fn main() {\n    let x = (42).to_float()\n    print(x)\n}");
     assert_eq!(out, "42\n");
 }
 
 #[test]
-fn cast_float_to_int() {
-    let out = compile_and_run_stdout("fn main() {\n    let x = 3.14 as int\n    print(x)\n}");
+fn convert_float_to_int() {
+    // A float literal proves in range, so `.to_int()` narrows to int.
+    let out = compile_and_run_stdout("fn main() {\n    let x = (3.14).to_int()\n    print(x)\n}");
     assert_eq!(out, "3\n");
 }
 
 #[test]
-fn cast_float_to_int_truncates() {
-    let out = compile_and_run_stdout("fn main() {\n    print(3.99 as int)\n}");
+fn convert_float_to_int_truncates() {
+    let out = compile_and_run_stdout("fn main() {\n    print((3.99).to_int())\n}");
     assert_eq!(out, "3\n");
 }
 
 #[test]
-fn cast_negative_float_to_int() {
-    let out = compile_and_run_stdout("fn main() {\n    print(-2.7 as int)\n}");
+fn convert_negative_float_to_int() {
+    // Negation of a literal is not itself a literal, so the result stays
+    // `int?`; a fallback supplies the value where a proof is absent.
+    let out = compile_and_run_stdout("fn main() {\n    print((-2.7).to_int() ?? 0)\n}");
     assert_eq!(out, "-2\n");
 }
 
 #[test]
-fn cast_int_to_bool_nonzero() {
-    let out = compile_and_run_stdout("fn main() {\n    print(1 as bool)\n    print(42 as bool)\n    print(-1 as bool)\n}");
+fn convert_int_to_bool_nonzero() {
+    let out = compile_and_run_stdout("fn main() {\n    print(1 != 0)\n    print(42 != 0)\n    print(-1 != 0)\n}");
     assert_eq!(out, "true\ntrue\ntrue\n");
 }
 
 #[test]
-fn cast_int_to_bool_zero() {
-    let out = compile_and_run_stdout("fn main() {\n    print(0 as bool)\n}");
+fn convert_int_to_bool_zero() {
+    let out = compile_and_run_stdout("fn main() {\n    print(0 != 0)\n}");
     assert_eq!(out, "false\n");
 }
 
 #[test]
-fn cast_bool_to_int() {
-    let out = compile_and_run_stdout("fn main() {\n    print(true as int)\n    print(false as int)\n}");
+fn convert_bool_to_int() {
+    let out = compile_and_run_stdout("fn main() {\n    print(true.to_int())\n    print(false.to_int())\n}");
     assert_eq!(out, "1\n0\n");
 }
 
 #[test]
-fn cast_chained() {
-    // int -> float -> int round-trips
-    let out = compile_and_run_stdout("fn main() {\n    let x = 42 as float as int\n    print(x)\n}");
+fn convert_chained() {
+    // int -> float -> int round-trips; the float is not a literal, so the
+    // final `.to_int()` is `int?` and a fallback makes the value total.
+    let out = compile_and_run_stdout("fn main() {\n    let x = (42).to_float().to_int() ?? -1\n    print(x)\n}");
     assert_eq!(out, "42\n");
 }
 
 #[test]
-fn cast_in_expression() {
-    // 1 + 2 as float should parse as 1 + (2 as float) since 'as' is postfix
-    // But int + float is a type error, so this should fail
+fn cast_as_operator_removed() {
+    // `as` no longer parses; the diagnostic points at the replacement method.
     compile_should_fail_with(
         "fn main() {\n    let x = 1 + 2 as float\n}",
-        "type mismatch",
+        "was removed",
     );
 }
 
 #[test]
-fn cast_invalid_string_to_int() {
+fn cast_string_to_int_removed() {
     compile_should_fail_with(
         "fn main() {\n    let x = \"hello\" as int\n}",
-        "cannot cast",
+        "was removed",
     );
 }
 
 #[test]
-fn cast_invalid_bool_to_float() {
+fn cast_bool_to_float_removed() {
     compile_should_fail_with(
         "fn main() {\n    let x = true as float\n}",
-        "cannot cast",
+        "was removed",
     );
 }
 

@@ -257,22 +257,36 @@ Pluto performs the following implicit type conversions (widening):
 | `T` | `T?` | Any value implicitly wraps to nullable |
 | `none` | `T?` | The `none` literal is assignable to any nullable type |
 
-No other implicit conversions exist. In particular, `float` to `int` requires an explicit cast.
+No other implicit conversions exist. In particular, `float` to `int` requires an explicit conversion method.
 
 ### Explicit Conversions
 
-The `as` operator performs explicit type conversion between compatible types:
+There is no cast operator. Every representation change is a named method, and a
+conversion that can lose information returns a nullable so the failure is in the
+type. (The `as` keyword survives only as an import alias.)
 
-| Cast | Behavior |
-|------|----------|
-| `int as float` | Convert integer to floating-point |
-| `float as int` | Truncate toward zero |
-| `int as bool` | `0` → `false`, non-zero → `true` |
-| `bool as int` | `false` → `0`, `true` → `1` |
-| `int as byte` | Truncate to low 8 bits |
-| `byte as int` | Zero-extend to 64 bits |
+| Method | From → To | Failure mode |
+|--------|-----------|--------------|
+| `b.to_int()` | `byte` → `int` | total (zero-extend) |
+| `b.to_int()` | `bool` → `int` | total (`false` → `0`, `true` → `1`) |
+| `x.to_float()` | `int` → `float` | total; rounds to nearest for magnitudes above `2^53` |
+| `f.to_int()` | `float` → `int?` | `none` for `NaN`, `±inf`, or out of `int` range; otherwise truncates toward zero |
+| `x.to_byte()` | `int` → `byte?` | `none` outside `0..=255` |
+| `x.low_byte()` | `int` → `byte` | total; keeps the low 8 bits (deliberate truncation) |
 
-All other casts are compile errors.
+A boolean "conversion" is just a comparison: write `x != 0` instead of a cast to
+`bool`.
+
+**Proof narrowing.** When the flow-fact engine proves the input of a nullable
+conversion is in range at the call site, the result narrows from `T?` to `T` —
+the same mechanism as nullable narrowing. A literal (`(61).to_byte()`), a masked
+value (`(x & 0xFF).to_byte()`), or a value guarded by `if`/`assert` converts to
+the non-nullable type directly; otherwise the result stays `T?` and must be
+handled (`?? fallback`, a guard, or `assert`). Rounding composes explicitly:
+`f.round().to_int()`, `f.floor().to_int()`.
+
+Conversions involving user-defined types are ordinary functions; there are no
+user-defined conversions or cast operators.
 
 ## Type Compatibility
 

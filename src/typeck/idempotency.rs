@@ -480,7 +480,6 @@ impl<'a> Analyzer<'a> {
                 .functions
                 .get(&name.node)
                 .map(|s| s.return_type.clone()),
-            Expr::Cast { target_type, .. } => self.type_of_type_expr(&target_type.node),
             Expr::Propagate { expr } | Expr::Catch { expr, .. } => self.type_of_expr(&expr.node),
             _ => None,
         }
@@ -576,8 +575,7 @@ impl<'a> Analyzer<'a> {
                 crate::parser::ast::StringInterpPart::Lit(_) => false,
             }),
             Expr::Propagate { expr }
-            | Expr::NullPropagate { expr }
-            | Expr::Cast { expr, .. } => self.has_unsafe_call(&expr.node),
+            | Expr::NullPropagate { expr } => self.has_unsafe_call(&expr.node),
             Expr::Catch { expr, handlers } => {
                 self.has_unsafe_call(&expr.node)
                     || handlers.iter().any(|h| match h {
@@ -665,8 +663,7 @@ impl<'a> Analyzer<'a> {
                 crate::parser::ast::StringInterpPart::Lit(_) => false,
             }),
             Expr::Propagate { expr }
-            | Expr::NullPropagate { expr }
-            | Expr::Cast { expr, .. } => self.contains_effect(expr, exempt),
+            | Expr::NullPropagate { expr } => self.contains_effect(expr, exempt),
             Expr::Catch { expr, handlers } => {
                 self.contains_effect(expr, exempt)
                     || handlers.iter().any(|h| match h {
@@ -996,8 +993,7 @@ impl<'a> Analyzer<'a> {
                 }
             }
             Expr::Propagate { expr }
-            | Expr::NullPropagate { expr }
-            | Expr::Cast { expr, .. } => self.misuse_scan(expr),
+            | Expr::NullPropagate { expr } => self.misuse_scan(expr),
             Expr::Catch { expr, handlers } => {
                 self.misuse_scan(expr);
                 for h in handlers {
@@ -1215,8 +1211,7 @@ impl<'a> Analyzer<'a> {
                 }
             }
             Expr::Propagate { expr }
-            | Expr::NullPropagate { expr }
-            | Expr::Cast { expr, .. } => self.scan_nested(&expr.node),
+            | Expr::NullPropagate { expr } => self.scan_nested(&expr.node),
             Expr::Range { start, end, .. } => {
                 self.scan_nested(&start.node);
                 self.scan_nested(&end.node);

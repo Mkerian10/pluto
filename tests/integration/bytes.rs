@@ -7,8 +7,8 @@ use common::*;
 fn byte_basic_cast_and_print() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = 42 as byte
-    print(b as int)
+    let mut b = (42).to_byte()
+    print(b.to_int())
     return 0
 }
 "#);
@@ -19,11 +19,11 @@ fn main() int {
 fn byte_function_param_and_return() {
     let out = compile_and_run_stdout(r#"
 fn double(b: byte) byte {
-    return ((b as int) * 2) as byte
+    return (b.to_int() * 2).low_byte()
 }
 fn main() int {
-    let result = double(21 as byte)
-    print(result as int)
+    let result = double((21).to_byte())
+    print(result.to_int())
     return 0
 }
 "#);
@@ -34,8 +34,8 @@ fn main() int {
 fn byte_let_with_type_annotation() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b: byte = 65 as byte
-    print(b as int)
+    let mut b: byte = (65).to_byte()
+    print(b.to_int())
     return 0
 }
 "#);
@@ -120,8 +120,8 @@ fn main() int {
 fn hex_literal_as_byte() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = 0xFF as byte
-    print(b as int)
+    let mut b = (0xFF).to_byte()
+    print(b.to_int())
     return 0
 }
 "#);
@@ -134,8 +134,8 @@ fn main() int {
 fn byte_cast_truncation() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = 256 as byte
-    print(b as int)
+    let mut b = (256).low_byte()
+    print(b.to_int())
     return 0
 }
 "#);
@@ -146,8 +146,8 @@ fn main() int {
 fn byte_cast_negative() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = -1 as byte
-    print(b as int)
+    let mut b = (-1).low_byte()
+    print(b.to_int())
     return 0
 }
 "#);
@@ -158,8 +158,8 @@ fn main() int {
 fn byte_cast_roundtrip() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = 42 as byte
-    let i = b as int
+    let mut b = (42).to_byte()
+    let i = b.to_int()
     print(i)
     return 0
 }
@@ -173,9 +173,9 @@ fn main() int {
 fn byte_equality() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut a = 42 as byte
-    let mut b = 42 as byte
-    let c = 43 as byte
+    let mut a = (42).to_byte()
+    let mut b = (42).to_byte()
+    let c = (43).to_byte()
     if a == b {
         print("eq")
     }
@@ -194,18 +194,18 @@ fn main() int {
 fn byte_ordering() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut a = 10 as byte
-    let mut b = 20 as byte
+    let mut a = (10).to_byte()
+    let mut b = (20).to_byte()
     if a < b {
         print("lt")
     }
     if b > a {
         print("gt")
     }
-    if a <= 10 as byte {
+    if a <= (10).to_byte() {
         print("lte")
     }
-    if b >= 20 as byte {
+    if b >= (20).to_byte() {
         print("gte")
     }
     return 0
@@ -219,8 +219,8 @@ fn byte_ordering_unsigned() {
     // Regression: bytes are unsigned, 0xFF > 0x7F
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let high = 0xFF as byte
-    let mid = 0x7F as byte
+    let high = (0xFF).to_byte()
+    let mid = (0x7F).to_byte()
     if high > mid {
         print("unsigned_correct")
     }
@@ -237,9 +237,9 @@ fn bytes_new_push_len() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let mut buf = bytes_new()
-    buf.push(65 as byte)
-    buf.push(66 as byte)
-    buf.push(67 as byte)
+    buf.push((65).to_byte())
+    buf.push((66).to_byte())
+    buf.push((67).to_byte())
     print(buf.len())
     return 0
 }
@@ -254,11 +254,11 @@ fn bytes_index_read() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let mut buf = bytes_new()
-    buf.push(65 as byte)
-    buf.push(66 as byte)
+    buf.push((65).to_byte())
+    buf.push((66).to_byte())
     let mut b = buf[0]
-    print(b as int)
-    print(buf[1] as int)
+    print(b.to_int())
+    print(buf[1].to_int())
     return 0
 }
 "#);
@@ -270,9 +270,9 @@ fn bytes_index_write() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let mut buf = bytes_new()
-    buf.push(65 as byte)
-    buf[0] = 90 as byte
-    print(buf[0] as int)
+    buf.push((65).to_byte())
+    buf[0] = (90).to_byte()
+    print(buf[0].to_int())
     return 0
 }
 "#);
@@ -286,12 +286,12 @@ fn bytes_for_loop() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let mut buf = bytes_new()
-    buf.push(1 as byte)
-    buf.push(2 as byte)
-    buf.push(3 as byte)
+    buf.push((1).to_byte())
+    buf.push((2).to_byte())
+    buf.push((3).to_byte())
     let mut sum = 0
     for b in buf {
-        sum = sum + (b as int)
+        sum = sum + (b.to_int())
     }
     print(sum)
     return 0
@@ -307,8 +307,8 @@ fn bytes_to_string() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let mut buf = bytes_new()
-    buf.push(72 as byte)
-    buf.push(105 as byte)
+    buf.push((72).to_byte())
+    buf.push((105).to_byte())
     let mut s = buf.to_string()
     print(s)
     return 0
@@ -324,9 +324,9 @@ fn main() int {
     let mut s = "ABC"
     let mut buf = s.to_bytes()
     print(buf.len())
-    print(buf[0] as int)
-    print(buf[1] as int)
-    print(buf[2] as int)
+    print(buf[0].to_int())
+    print(buf[1].to_int())
+    print(buf[2].to_int())
     return 0
 }
 "#);
@@ -353,9 +353,9 @@ fn bytes_interior_nul_truncates_on_print() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let mut buf = bytes_new()
-    buf.push(65 as byte)
-    buf.push(0 as byte)
-    buf.push(66 as byte)
+    buf.push((65).to_byte())
+    buf.push((0).to_byte())
+    buf.push((66).to_byte())
     let mut s = buf.to_string()
     print(s)
     return 0
@@ -371,10 +371,10 @@ fn byte_as_map_key() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let mut m = Map<byte, string> {}
-    m[65 as byte] = "A"
-    m[66 as byte] = "B"
-    print(m[65 as byte])
-    print(m[66 as byte])
+    m[(65).to_byte()] = "A"
+    m[(66).to_byte()] = "B"
+    print(m[(65).to_byte()])
+    print(m[(66).to_byte()])
     return 0
 }
 "#);
@@ -388,11 +388,11 @@ fn byte_as_set_element() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let mut s = Set<byte> {}
-    s.insert(10 as byte)
-    s.insert(20 as byte)
-    s.insert(10 as byte)
+    s.insert((10).to_byte())
+    s.insert((20).to_byte())
+    s.insert((10).to_byte())
     print(s.len())
-    if s.contains(10 as byte) {
+    if s.contains((10).to_byte()) {
         print("has_10")
     }
     return 0
@@ -407,7 +407,7 @@ fn main() int {
 fn byte_string_interpolation() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = 42 as byte
+    let mut b = (42).to_byte()
     print(f"value: {b}")
     return 0
 }
@@ -423,16 +423,16 @@ fn bytes_as_function_param() {
 fn sum_bytes(buf: bytes) int {
     let mut total = 0
     for b in buf {
-        total = total + (b as int)
+        total = total + (b.to_int())
     }
     return total
 }
 
 fn main() int {
     let mut buf = bytes_new()
-    buf.push(10 as byte)
-    buf.push(20 as byte)
-    buf.push(30 as byte)
+    buf.push((10).to_byte())
+    buf.push((20).to_byte())
+    buf.push((30).to_byte())
     print(sum_bytes(buf))
     return 0
 }
@@ -445,15 +445,15 @@ fn bytes_as_function_return() {
     let out = compile_and_run_stdout(r#"
 fn make_bytes() bytes {
     let mut buf = bytes_new()
-    buf.push(1 as byte)
-    buf.push(2 as byte)
+    buf.push((1).to_byte())
+    buf.push((2).to_byte())
     return buf
 }
 
 fn main() int {
     let mut buf = make_bytes()
     print(buf.len())
-    print(buf[0] as int)
+    print(buf[0].to_int())
     return 0
 }
 "#);
@@ -466,8 +466,8 @@ fn main() int {
 fn byte_test_to_equal() {
     let (stdout, _stderr, code) = compile_test_and_run(r#"
 test "byte equality" {
-    let mut b = 42 as byte
-    expect(b).to_equal(42 as byte)
+    let mut b = (42).to_byte()
+    expect(b).to_equal((42).to_byte())
 }
 "#);
     assert_eq!(code, 0, "stdout: {stdout}");
@@ -539,7 +539,7 @@ fn bytes_oob_index_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
     let mut buf = bytes_new()
-    buf.push(1 as byte)
+    buf.push((1).to_byte())
     let x = buf[5]
     return 0
 }
@@ -557,12 +557,12 @@ fn main() int {
     let mut buf = bytes_new()
     let mut i = 0
     while i < 100 {
-        buf.push((i as byte))
+        buf.push((i.low_byte()))
         i = i + 1
     }
     print(buf.len())
-    print(buf[0] as int)
-    print(buf[99] as int)
+    print(buf[0].to_int())
+    print(buf[99].to_int())
     return 0
 }
 "#);
@@ -598,7 +598,7 @@ fn fstring_interpolation_of_bytes_rejected() {
     compile_should_fail_with(r#"
 fn main() {
     let mut b = bytes_new()
-    b.push(65 as byte)
+    b.push((65).to_byte())
     print(f"{b}")
 }
 "#, "cannot interpolate bytes into string");
@@ -613,7 +613,7 @@ fn main() int {
     let mut buf = bytes_new()
     let mut i = 0
     while i < 256 {
-        buf.push(i as byte)
+        buf.push(i.low_byte())
         i = i + 1
     }
     let mut s = buf.to_string()
@@ -621,7 +621,7 @@ fn main() int {
     let mut ok = back.len() == 256
     let mut j = 0
     while j < back.len() {
-        if (back[j] as int) != j {
+        if (back[j].to_int()) != j {
             ok = false
         }
         j = j + 1
@@ -668,7 +668,7 @@ fn main() {
     let mut payload = bytes_new()
     let mut i = 0
     while i < 256 {
-        payload.push(i as byte)
+        payload.push(i.low_byte())
         i = i + 1
     }
 
@@ -693,7 +693,7 @@ fn main() {
     let mut ok = got.len() == 256
     let mut j = 0
     while j < got.len() {
-        if (got[j] as int) != j {
+        if (got[j].to_int()) != j {
             ok = false
         }
         j = j + 1
@@ -721,16 +721,16 @@ fn main() {
 
     let client = net.connect("127.0.0.1", port)
     let mut data = bytes_new()
-    data.push(0 as byte)
-    data.push(255 as byte)
+    data.push((0).to_byte())
+    data.push((255).to_byte())
     print(client.write_bytes(data))
     client.close()
 
     let conn = server.accept()
     let first = conn.read_bytes(16)
     print(first.len())
-    print(first[0] as int)
-    print(first[1] as int)
+    print(first[0].to_int())
+    print(first[1].to_int())
     // Peer closed: next read yields empty bytes (EOF)
     let rest = conn.read_bytes(16)
     print(rest.len())
@@ -764,7 +764,7 @@ fn bytes_slice_is_a_fresh_copy() {
 fn main() int {
     let mut b = "abcdef".to_bytes()
     let mut s = b.slice(0, 3)
-    s[0] = 122 as byte
+    s[0] = (122).to_byte()
     print(b.to_string())
     print(s.to_string())
     return 0
@@ -874,7 +874,7 @@ fn main() int {
         i = i + 1
     }
     print(b.len())
-    print(b[1599] as int)
+    print(b[1599].to_int())
     return 0
 }
 "#);
@@ -887,14 +887,14 @@ fn main() int {
 fn bytes_filled_and_fill() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = bytes_filled(4, 65 as byte)
+    let mut b = bytes_filled(4, (65).to_byte())
     print(b.len())
     print(b.to_string())
-    b.fill(66 as byte)
+    b.fill((66).to_byte())
     print(b.to_string())
-    let z = bytes_filled(0, 1 as byte)
+    let z = bytes_filled(0, (1).to_byte())
     print(z.len())
-    bytes_new().fill(0 as byte)
+    bytes_new().fill((0).to_byte())
     return 0
 }
 "#);
@@ -906,7 +906,7 @@ fn bytes_filled_negative_length_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
     let n = 0 - 1
-    let mut b = bytes_filled(n, 0 as byte)
+    let mut b = bytes_filled(n, (0).to_byte())
     return 0
 }
 "#);
@@ -987,14 +987,14 @@ fn bytes_find_hit_miss_and_from_offset() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let mut b = "Hello, Pluto!".to_bytes()
-    print(b.find(111 as byte, 0))
-    print(b.find(111 as byte, 5))
-    print(b.find(111 as byte, 12))
-    print(b.find(122 as byte, 0))
-    print(b.find(72 as byte, 0))
+    print(b.find((111).to_byte(), 0))
+    print(b.find((111).to_byte(), 5))
+    print(b.find((111).to_byte(), 12))
+    print(b.find((122).to_byte(), 0))
+    print(b.find((72).to_byte(), 0))
     // from == len is the natural end of a scanning loop: -1, not a trap
-    print(b.find(111 as byte, b.len()))
-    print(bytes_new().find(0 as byte, 0))
+    print(b.find((111).to_byte(), b.len()))
+    print(bytes_new().find((0).to_byte(), 0))
     return 0
 }
 "#);
@@ -1007,10 +1007,10 @@ fn bytes_find_scanning_loop() {
 fn main() int {
     let mut b = "a,b,,c,".to_bytes()
     let mut count = 0
-    let mut at = b.find(44 as byte, 0)
+    let mut at = b.find((44).to_byte(), 0)
     while at != -1 {
         count = count + 1
-        at = b.find(44 as byte, at + 1)
+        at = b.find((44).to_byte(), at + 1)
     }
     print(count)
     return 0
@@ -1025,7 +1025,7 @@ fn bytes_find_negative_from_aborts() {
 fn main() int {
     let mut b = "abc".to_bytes()
     let from = 0 - 1
-    let i = b.find(97 as byte, from)
+    let i = b.find((97).to_byte(), from)
     return 0
 }
 "#);
@@ -1058,9 +1058,9 @@ fn bytes_compare_unsigned_byte_order() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     let mut hi = bytes_new()
-    hi.push(255 as byte)
+    hi.push((255).to_byte())
     let mut lo = bytes_new()
-    lo.push(1 as byte)
+    lo.push((1).to_byte())
     print(hi.compare(lo))
     print(lo.compare(hi))
     return 0
@@ -1075,7 +1075,7 @@ fn main() int {
 fn bytes_codec_u8_roundtrip_boundaries() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = bytes_filled(1, 0 as byte)
+    let mut b = bytes_filled(1, (0).to_byte())
     b.write_u8(0, 0)
     print(b.read_u8(0))
     b.write_u8(0, 255)
@@ -1092,19 +1092,19 @@ fn main() int {
 fn bytes_codec_u16_roundtrip_both_endiannesses() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = bytes_filled(2, 0 as byte)
+    let mut b = bytes_filled(2, (0).to_byte())
     b.write_u16_le(0, 0)
     print(b.read_u16_le(0))
     b.write_u16_le(0, 65535)
     print(b.read_u16_le(0))
     b.write_u16_le(0, 4660)
     print(b.read_u16_le(0))
-    print(b[0] as int)
-    print(b[1] as int)
+    print(b[0].to_int())
+    print(b[1].to_int())
     b.write_u16_be(0, 4660)
     print(b.read_u16_be(0))
-    print(b[0] as int)
-    print(b[1] as int)
+    print(b[0].to_int())
+    print(b[1].to_int())
     b.write_u16_be(0, 65535)
     print(b.read_u16_be(0))
     return 0
@@ -1118,7 +1118,7 @@ fn main() int {
 fn bytes_codec_u32_roundtrip_both_endiannesses() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = bytes_filled(4, 0 as byte)
+    let mut b = bytes_filled(4, (0).to_byte())
     b.write_u32_le(0, 0)
     print(b.read_u32_le(0))
     b.write_u32_le(0, 4294967295)
@@ -1127,10 +1127,10 @@ fn main() int {
     print(b.read_u32_be(0))
     b.write_u32_le(0, 305419896)
     print(b.read_u32_le(0))
-    print(b[0] as int)
+    print(b[0].to_int())
     b.write_u32_be(0, 305419896)
     print(b.read_u32_be(0))
-    print(b[0] as int)
+    print(b[0].to_int())
     b.write_u32_be(0, 65535)
     print(b.read_u32_be(0))
     b.write_u32_le(0, 255)
@@ -1146,7 +1146,7 @@ fn main() int {
 fn bytes_codec_i64_roundtrip_both_endiannesses() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = bytes_filled(8, 0 as byte)
+    let mut b = bytes_filled(8, (0).to_byte())
     let mut lo = -9223372036854775807 - 1
     let mut hi = 9223372036854775807
 
@@ -1183,7 +1183,7 @@ fn bytes_codec_endianness_cross_check() {
     // Writing LE and reading BE must byte-swap, proving the lane order.
     let out = compile_and_run_stdout(r#"
 fn main() int {
-    let mut b = bytes_filled(8, 0 as byte)
+    let mut b = bytes_filled(8, (0).to_byte())
     b.write_u16_le(0, 1)
     print(b.read_u16_be(0))
     b.write_u32_le(0, 1)
@@ -1201,7 +1201,7 @@ fn bytes_codec_at_nonzero_offsets() {
     let out = compile_and_run_stdout(r#"
 fn main() int {
     // A little frame: u8 tag, u16_be length, u32_be value, i64_le payload
-    let mut b = bytes_filled(15, 0 as byte)
+    let mut b = bytes_filled(15, (0).to_byte())
     b.write_u8(0, 7)
     b.write_u16_be(1, 513)
     b.write_u32_be(3, 70000)
@@ -1222,7 +1222,7 @@ fn main() int {
 fn bytes_codec_read_oob_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let mut b = bytes_filled(4, 0 as byte)
+    let mut b = bytes_filled(4, (0).to_byte())
     let v = b.read_u32_le(1)
     return 0
 }
@@ -1235,7 +1235,7 @@ fn main() int {
 fn bytes_codec_read_i64_from_short_buffer_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let mut b = bytes_filled(7, 0 as byte)
+    let mut b = bytes_filled(7, (0).to_byte())
     let v = b.read_i64_be(0)
     return 0
 }
@@ -1248,7 +1248,7 @@ fn main() int {
 fn bytes_codec_write_oob_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let mut b = bytes_filled(2, 0 as byte)
+    let mut b = bytes_filled(2, (0).to_byte())
     b.write_u16_be(1, 1)
     return 0
 }
@@ -1261,7 +1261,7 @@ fn main() int {
 fn bytes_codec_write_negative_offset_aborts() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let mut b = bytes_filled(4, 0 as byte)
+    let mut b = bytes_filled(4, (0).to_byte())
     let off = 0 - 1
     b.write_u8(off, 1)
     return 0
@@ -1277,7 +1277,7 @@ fn main() int {
 fn bytes_write_u8_out_of_range_traps() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let mut b = bytes_filled(1, 0 as byte)
+    let mut b = bytes_filled(1, (0).to_byte())
     b.write_u8(0, 256)
     return 0
 }
@@ -1290,7 +1290,7 @@ fn main() int {
 fn bytes_write_u16_negative_value_traps() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let mut b = bytes_filled(2, 0 as byte)
+    let mut b = bytes_filled(2, (0).to_byte())
     let v = 0 - 1
     b.write_u16_le(0, v)
     return 0
@@ -1304,7 +1304,7 @@ fn main() int {
 fn bytes_write_u32_out_of_range_traps() {
     let (_stdout, stderr, code) = compile_and_run_output(r#"
 fn main() int {
-    let mut b = bytes_filled(4, 0 as byte)
+    let mut b = bytes_filled(4, (0).to_byte())
     b.write_u32_be(0, 4294967296)
     return 0
 }
@@ -1319,7 +1319,7 @@ fn main() int {
 fn bytes_read_u64_rejected_with_guidance() {
     compile_should_fail_with(r#"
 fn main() int {
-    let mut b = bytes_filled(8, 0 as byte)
+    let mut b = bytes_filled(8, (0).to_byte())
     let v = b.read_u64_le(0)
     return 0
 }
@@ -1333,7 +1333,7 @@ fn bytes_slice_wrong_arg_type() {
     compile_should_fail_with(r#"
 fn main() int {
     let mut b = bytes_new()
-    let mut s = b.slice(0 as byte, 1)
+    let mut s = b.slice((0).to_byte(), 1)
     return 0
 }
 "#, "expected int, found byte");
@@ -1386,7 +1386,7 @@ fn main() int {
 fn bytes_write_wrong_arity() {
     compile_should_fail_with(r#"
 fn main() int {
-    let mut b = bytes_filled(4, 0 as byte)
+    let mut b = bytes_filled(4, (0).to_byte())
     b.write_u32_le(0)
     return 0
 }

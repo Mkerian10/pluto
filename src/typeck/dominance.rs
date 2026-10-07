@@ -712,7 +712,6 @@ impl<'a> Analyzer<'a> {
                 .functions
                 .get(&name.node)
                 .map(|s| s.return_type.clone()),
-            Expr::Cast { target_type, .. } => self.type_of_type_expr(&target_type.node),
             Expr::Propagate { expr } | Expr::Catch { expr, .. } => self.type_of_expr(&expr.node),
             Expr::BinOp { op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod, lhs, .. } => {
                 match self.type_of_expr(&lhs.node) {
@@ -838,8 +837,7 @@ impl<'a> Analyzer<'a> {
                 crate::parser::ast::StringInterpPart::Lit(_) => false,
             }),
             Expr::Propagate { expr }
-            | Expr::NullPropagate { expr }
-            | Expr::Cast { expr, .. } => self.has_unsafe_call(&expr.node),
+            | Expr::NullPropagate { expr } => self.has_unsafe_call(&expr.node),
             Expr::Catch { expr, handlers } => {
                 self.has_unsafe_call(&expr.node)
                     || handlers.iter().any(|h| match h {
@@ -1046,8 +1044,7 @@ impl<'a> Analyzer<'a> {
                 }
             }
             Expr::Propagate { expr }
-            | Expr::NullPropagate { expr }
-            | Expr::Cast { expr, .. } => self.scan_nested(&expr.node),
+            | Expr::NullPropagate { expr } => self.scan_nested(&expr.node),
             Expr::Range { start, end, .. } => {
                 self.scan_nested(&start.node);
                 self.scan_nested(&end.node);
@@ -1608,8 +1605,7 @@ impl<'a> Analyzer<'a> {
                 }
             }
             Expr::Propagate { expr }
-            | Expr::NullPropagate { expr }
-            | Expr::Cast { expr, .. } => self.alias_scan(expr),
+            | Expr::NullPropagate { expr } => self.alias_scan(expr),
             Expr::Catch { expr, handlers } => {
                 self.alias_scan(expr);
                 for h in handlers {

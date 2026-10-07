@@ -55,7 +55,7 @@ fn main() {
     let mut payload = bytes_new()
     let mut i = 0
     while i < size {
-        payload.push((i % 256) as byte)
+        payload.push(i.low_byte())
         i = i + 1
     }
     fs.write_all_bytes(src, payload)!
@@ -90,7 +90,7 @@ fn main() {
     let mut ok = back.len() == size
     let mut j = 0
     while j < back.len() {
-        if (back[j] as int) != j % 256 {
+        if back[j].to_int() != j % 256 {
             ok = false
         }
         j = j + 1

@@ -10,7 +10,7 @@ fn pseudo_random(n: int, seed: int) bytes {
     let mut i = 0
     while i < n {
         state = (state * 1103515245 + 12345) & 0x7FFFFFFF
-        out.push(((state >> 16) & 0xFF) as byte)
+        out.push(((state >> 16) & 0xFF).to_byte())
         i = i + 1
     }
     return out
@@ -21,7 +21,7 @@ fn repeated(b: int, n: int) bytes {
     let mut out = bytes_new()
     let mut i = 0
     while i < n {
-        out.push(b as byte)
+        out.push(b.low_byte())
         i = i + 1
     }
     return out
@@ -32,39 +32,39 @@ fn repeated(b: int, n: int) bytes {
 // read a stream written by stock gzip, we speak the real format.
 fn gzip_vector() bytes {
     let mut out = bytes_new()
-    out.push(0x1f as byte)
-    out.push(0x8b as byte)
-    out.push(0x08 as byte)
-    out.push(0x00 as byte)
-    out.push(0x00 as byte)
-    out.push(0x00 as byte)
-    out.push(0x00 as byte)
-    out.push(0x00 as byte)
-    out.push(0x02 as byte)
-    out.push(0x03 as byte)
-    out.push(0xcb as byte)
-    out.push(0x48 as byte)
-    out.push(0xcd as byte)
-    out.push(0xc9 as byte)
-    out.push(0xc9 as byte)
-    out.push(0xd7 as byte)
-    out.push(0x51 as byte)
-    out.push(0x28 as byte)
-    out.push(0xc8 as byte)
-    out.push(0x29 as byte)
-    out.push(0x2d as byte)
-    out.push(0xc9 as byte)
-    out.push(0xe7 as byte)
-    out.push(0x02 as byte)
-    out.push(0x00 as byte)
-    out.push(0x81 as byte)
-    out.push(0x2d as byte)
-    out.push(0x97 as byte)
-    out.push(0xc2 as byte)
-    out.push(0x0d as byte)
-    out.push(0x00 as byte)
-    out.push(0x00 as byte)
-    out.push(0x00 as byte)
+    out.push((0x1f).to_byte())
+    out.push((0x8b).to_byte())
+    out.push((0x08).to_byte())
+    out.push((0x00).to_byte())
+    out.push((0x00).to_byte())
+    out.push((0x00).to_byte())
+    out.push((0x00).to_byte())
+    out.push((0x00).to_byte())
+    out.push((0x02).to_byte())
+    out.push((0x03).to_byte())
+    out.push((0xcb).to_byte())
+    out.push((0x48).to_byte())
+    out.push((0xcd).to_byte())
+    out.push((0xc9).to_byte())
+    out.push((0xc9).to_byte())
+    out.push((0xd7).to_byte())
+    out.push((0x51).to_byte())
+    out.push((0x28).to_byte())
+    out.push((0xc8).to_byte())
+    out.push((0x29).to_byte())
+    out.push((0x2d).to_byte())
+    out.push((0xc9).to_byte())
+    out.push((0xe7).to_byte())
+    out.push((0x02).to_byte())
+    out.push((0x00).to_byte())
+    out.push((0x81).to_byte())
+    out.push((0x2d).to_byte())
+    out.push((0x97).to_byte())
+    out.push((0xc2).to_byte())
+    out.push((0x0d).to_byte())
+    out.push((0x00).to_byte())
+    out.push((0x00).to_byte())
+    out.push((0x00).to_byte())
     return out
 }
 
@@ -166,7 +166,7 @@ test "gunzip reads a stream from system gzip" {
 test "gunzip rejects a corrupted stream" {
     let mut good = gzip_vector()
     // Flip a byte in the DEFLATE body (past the 10-byte header).
-    good[15] = (((good[15] as int) ^ 0xFF) & 0xFF) as byte
+    good[15] = ((good[15].to_int() ^ 0xFF) & 0xFF).to_byte()
     expect_raises(compress.CompressError) {
         compress.gunzip(good)!
     }

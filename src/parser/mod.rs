@@ -3876,20 +3876,30 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Postfix as — type cast (binds tighter than all infix operators, but
-            // looser than prefix unary ops so that `-1 as byte` = `(-1) as byte`)
+            // Postfix `as` — the cast operator was removed (rfc-number-types
+            // phase 3). We still consume `as` + the target type here so the
+            // diagnostic points at the whole expression and can tailor its
+            // fix-it to the target, instead of surfacing a generic parse error.
             if min_bp < 21 && self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::As) {
                 self.advance(); // consume 'as'
                 let target_type = self.parse_type()?;
                 let span = Span::new(lhs.span.start, target_type.span.end);
-                lhs = Spanned::new(
-                    Expr::Cast {
-                        expr: Box::new(lhs),
-                        target_type,
-                    },
-                    span,
-                );
-                continue;
+                let fix = match &target_type.node {
+                    TypeExpr::Named(n) if n == "int" => {
+                        "`as int` was removed; use `.to_int()` (float → `int?`; `byte`/`bool` total)"
+                    }
+                    TypeExpr::Named(n) if n == "float" => {
+                        "`as float` was removed; use `.to_float()`"
+                    }
+                    TypeExpr::Named(n) if n == "bool" => {
+                        "`as bool` was removed; use `x != 0`"
+                    }
+                    TypeExpr::Named(n) if n == "byte" => {
+                        "`as byte` was removed; use `.to_byte()` (checked, `byte?`) or `.low_byte()` (truncating)"
+                    }
+                    _ => "the `as` cast operator was removed; use a conversion method (`.to_int()`, `.to_float()`, `.to_byte()`, `.low_byte()`)",
+                };
+                return Err(CompileError::syntax(fix, span));
             }
 
             // Check for generic enum expression: EnumName<type_args>.Variant
@@ -6201,33 +6211,30 @@ mod tests {
     // Type casting & operators parser tests
 
     #[test]
-    fn parse_cast_int_to_float() {
-        let prog = parse("fn main() {\n    let x = 42 as float\n}");
-        let f = &prog.functions[0].node;
-        match &f.body.node.stmts[0].node {
-            Stmt::Let { value, .. } => {
-                assert!(matches!(value.node, Expr::Cast { .. }));
-            }
-            _ => panic!("expected let statement"),
-        }
+    fn parse_cast_removed_to_float() {
+        // `as` was removed (rfc-number-types phase 3): the parser rejects it
+        // with a target-specific fix-it pointing at the conversion method.
+        let err = parse_err("fn main() {\n    let x = 42 as float\n}");
+        assert!(err.to_string().contains(".to_float()"), "got: {err}");
     }
 
     #[test]
-    fn parse_cast_in_expression() {
-        let prog = parse("fn main() {\n    let x = (1 + 2) as float\n}");
-        let f = &prog.functions[0].node;
-        match &f.body.node.stmts[0].node {
-            Stmt::Let { value, .. } => {
-                match &value.node {
-                    Expr::Cast { expr, .. } => {
-                        // Inner expression should be the addition
-                        assert!(matches!(expr.node, Expr::BinOp { op: BinOp::Add, .. }));
-                    }
-                    _ => panic!("expected cast expression"),
-                }
-            }
-            _ => panic!("expected let statement"),
-        }
+    fn parse_cast_removed_to_int() {
+        let err = parse_err("fn main() {\n    let x = (1 + 2) as int\n}");
+        assert!(err.to_string().contains(".to_int()"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_cast_removed_to_byte() {
+        let err = parse_err("fn main() {\n    let x = 300 as byte\n}");
+        let msg = err.to_string();
+        assert!(msg.contains(".to_byte()") && msg.contains(".low_byte()"), "got: {msg}");
+    }
+
+    #[test]
+    fn parse_cast_removed_to_bool() {
+        let err = parse_err("fn main() {\n    let x = 1 as bool\n}");
+        assert!(err.to_string().contains("x != 0"), "got: {err}");
     }
 
     #[test]

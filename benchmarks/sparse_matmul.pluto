@@ -25,7 +25,7 @@ fn init_sparse(n: int, nnz: int, mut val: [float], mut col: [int], mut row: [int
             }
             col[idx] = c
             seed = (seed * a) % m
-            val[idx] = (seed as float) / (m as float)
+            val[idx] = (seed.to_float()) / (m.to_float())
             idx = idx + 1
             j = j + 1
         }
@@ -95,7 +95,7 @@ fn main() {
     // Initialize x vector
     i = 0
     while i < n {
-        x[i] = 1.0 / ((i + 1) as float)
+        x[i] = 1.0 / ((i + 1).to_float())
         i = i + 1
     }
 

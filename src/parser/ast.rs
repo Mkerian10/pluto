@@ -691,10 +691,6 @@ pub enum Expr {
         /// a catch-all and must come last. Tried in order at runtime.
         handlers: Vec<CatchHandler>,
     },
-    Cast {
-        expr: Box<Spanned<Expr>>,
-        target_type: Spanned<TypeExpr>,
-    },
     Range {
         start: Box<Spanned<Expr>>,
         end: Box<Spanned<Expr>>,
