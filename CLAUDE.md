@@ -107,6 +107,8 @@ Each `.c` file is compiled to a `.o` file, then linked with `ld -r` into a singl
 
 **Stdlib modules** — 22 modules in `stdlib/`: `std.base64`, `std.blob`, `std.collections`, `std.env`, `std.fs`, `std.hash`, `std.http`, `std.io`, `std.json`, `std.log`, `std.math`, `std.net`, `std.path`, `std.random`, `std.regex`, `std.rpc`, `std.socket`, `std.strings`, `std.time`, `std.uuid`, `std.verify`, `std.wire`. Plus `stdlib/prelude.pt` (auto-imported into every program).
 
+**Stdlib ABI handshake** — The compiler embeds `STDLIB_ABI_VERSION` (in `src/toolchain.rs`) and the stdlib ships a `stdlib/ABI` manifest (`requires-compiler-abi = N`). Before flattening any stdlib module, `modules::resolve_modules_inner` calls `toolchain::check_stdlib_abi` on the resolved stdlib root (fires for `--stdlib`/`PLUTO_STDLIB`/`./stdlib` discovery, never for user modules); a stdlib requiring a newer compiler than the binary supports is rejected with one clear sentence instead of a misleading downstream type error (issue #396). **Like `SCHEMA_VERSION` in `src/binary.rs`, bump `STDLIB_ABI_VERSION` (and `stdlib/ABI`) by hand** whenever a change makes a newer stdlib unloadable by older compilers — widening the extern-type whitelist, changing the prelude shape the stdlib depends on, or changing marshaling/wire contracts. A missing `stdlib/ABI` is accepted silently (pre-handshake stdlib); purely additive stdlib changes need no bump.
+
 **No semicolons** — Pluto uses newline-based statement termination. Newlines are lexed as `Token::Newline` and the parser consumes them at statement boundaries while skipping them inside expressions.
 
 ## Cranelift API Quirks (v0.116)
