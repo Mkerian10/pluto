@@ -662,6 +662,19 @@ fn check_stmt(
                 for f in &guard_facts.then_facts {
                     env.facts.assume(f.clone());
                 }
+                // Mirror the guard into the ghost vocabulary too, so a
+                // length-guarded mutation inside the body (`while
+                // self.xs.len() > 1 { self.xs.pop() }`) can prove the
+                // invariant at the body end.
+                let ghost_cond = env
+                    .invariant_scope
+                    .as_ref()
+                    .map(|scope| super::facts::condition_facts_with(&condition.node, &|e| scope.resolve(env, e)));
+                if let (Some(gc), Some(scope)) = (ghost_cond, env.invariant_scope.as_mut()) {
+                    for f in &gc.then_facts {
+                        scope.ghost_facts.assume(f.clone());
+                    }
+                }
             }
             // Null checks in the guard narrow the same way (`while x != none
             // && ...`): the guard was just evaluated true at every body

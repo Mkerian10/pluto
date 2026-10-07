@@ -3282,6 +3282,14 @@ fn collection_expr_len(expr: &Expr) -> Option<i128> {
         Expr::ArrayLit { elements } => Some(elements.len() as i128),
         Expr::SetLit { elements, .. } => Some(elements.len() as i128),
         Expr::MapLit { entries, .. } => Some(entries.len() as i128),
+        // `bytes_new()` → 0; `bytes_filled(n, _)` → n when n is a literal.
+        Expr::Call { name, args, .. } if name.node == "bytes_new" && args.is_empty() => Some(0),
+        Expr::Call { name, args, .. } if name.node == "bytes_filled" && args.len() == 2 => {
+            match &args[0].node {
+                Expr::IntLit(n) => Some(*n as i128),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -3300,6 +3308,8 @@ fn is_fresh_collection_expr(expr: &Expr) -> bool {
         Expr::MethodCall { method, .. } => {
             matches!(method.node.as_str(), "slice" | "keys" | "values" | "to_array")
         }
+        // Bytes have no literal form; these builtins allocate a fresh buffer.
+        Expr::Call { name, .. } => matches!(name.node.as_str(), "bytes_new" | "bytes_filled"),
         _ => false,
     }
 }
@@ -3490,18 +3500,23 @@ fn apply_len_delta(
         .get(field)
         .cloned()
         .unwrap_or_else(|| Affine::term(scope.field_ghost(field, 0)));
-    // Build a fresh anchor length ghost (a len term → automatic `>= 0`) and
-    // optionally relate it to the current length `l` via `op`.
-    let mut havoc_related = |scope: &mut InvariantScope, op: BinOp| -> Affine {
+    // A fresh non-negative *delta* term bounded to `[lo, hi]`; the new length
+    // is `l + delta`. Because the delta's bound is an exact interval, the
+    // affine-bound engine sums it with `l`'s known bounds — so a lower bound
+    // on `l` (e.g. the invariant `len > 0`) carries through the insert. (A
+    // bare relation `new >= l` would not combine with `l`'s interval.)
+    let mut add_delta = |scope: &mut InvariantScope, lo: i64, hi: Option<i64>| -> Option<Affine> {
         scope.next_ghost += 1;
-        let g = scope.field_ghost(field, scope.next_ghost);
-        let gt = Affine::term(g);
-        if let Some(d) = diff_affine(&gt, &l) {
-            for f in facts_from_diff(op, &d) {
-                scope.ghost_facts.assume(f);
-            }
-        }
-        gt
+        let d = format!("<delta:{field}>@{}", scope.next_ghost);
+        let iv = match hi {
+            Some(h) => Interval { lo, hi: h },
+            None => Interval::at_least(lo),
+        };
+        scope.ghost_facts.assume(Fact::Bound(d.clone(), iv));
+        // new = l + d (d is fresh, so no coefficient collision).
+        let mut new = l.clone();
+        *new.terms.entry(d).or_insert(0) += 1;
+        Some(new)
     };
     let new = match delta {
         LenDelta::Inc => affine_add_const(&l, 1),
@@ -3513,11 +3528,24 @@ fn apply_len_delta(
             }
             affine_add_const(&l, -1)
         }
-        // new >= l (non-decrease): sound for lower-bound invariants; the
-        // [l, l+1] upper bound is intentionally dropped.
-        LenDelta::MaybeInc | LenDelta::Extend => Some(havoc_related(scope, BinOp::GtEq)),
-        // new <= l (non-increase); the fresh len term keeps `>= 0`.
-        LenDelta::MaybeDec => Some(havoc_related(scope, BinOp::LtEq)),
+        // map/set insert: new = l + d, d in [0, 1] (exact [l, l+1]).
+        LenDelta::MaybeInc => add_delta(scope, 0, Some(1)),
+        // bytes extend: adds len(arg) >= 0 — new = l + d, d >= 0.
+        LenDelta::Extend => add_delta(scope, 0, None),
+        // map/set remove (key may be absent): non-increase. A fresh len term
+        // (auto `>= 0`) bounded above by `l`; the lower bound is intentionally
+        // dropped (a `len > 0` invariant must guard a remove).
+        LenDelta::MaybeDec => {
+            scope.next_ghost += 1;
+            let g = scope.field_ghost(field, scope.next_ghost);
+            let gt = Affine::term(g);
+            if let Some(d) = diff_affine(&gt, &l) {
+                for f in facts_from_diff(BinOp::LtEq, &d) {
+                    scope.ghost_facts.assume(f);
+                }
+            }
+            Some(gt)
+        }
     };
     let new = new.unwrap_or_else(|| {
         // Arithmetic overflow building the delta: havoc to a fresh len ghost.

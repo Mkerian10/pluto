@@ -217,6 +217,14 @@ Demonstrates Pluto's contract system: `requires` (preconditions) and class `inva
 cargo run -- run examples/contracts/main.pt
 ```
 
+## collection_invariants
+
+Class invariants over collection length (rfc-number-types.md §4). A `SegmentIndex` declares `invariant self.segs.len() > 0`; the compiler models the field's length as a ghost integer and updates it across the builtin mutators (push `+1`, pop `-1`, clear `0`, ...), proving the invariant at every boundary. A guarded pop (`if self.segs.len() > 1`) and a compacting loop both discharge; an unguarded pop would be a compile error. The collection never escapes the class — reads go through methods, since a raw external read would hand out a mutable alias.
+
+```bash
+cargo run -- run examples/collection_invariants/main.pt
+```
+
 ## errors
 
 Demonstrates Pluto's typed error system: error declarations with multiple error types, `raise` to throw errors, `!` postfix for error propagation (at call sites only, never in signatures), `catch` with wildcard error handling, shorthand catch with default values, and compiler-inferred error-ability. Shows that error inference works identically for primitives and custom types — no error annotations are ever written in function signatures — and that caller facts shrink error sets: a guard that refutes every raise condition in the callee makes the call site provably infallible, needing no handling.

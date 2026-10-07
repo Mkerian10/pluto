@@ -1,0 +1,60 @@
+// Collection length invariants (rfc-number-types.md §4).
+//
+// A class invariant can constrain the length of its own collection field
+// through `self.<field>.len()`. The compiler models that length as a ghost
+// integer, updates it across the builtin mutators (push +1, pop -1, clear 0,
+// ...), and proves the invariant at every boundary — the same strict,
+// compile-time discipline as integer invariants. No runtime check is emitted.
+
+class SegmentIndex {
+    // The index always holds at least one segment: the base offset 0.
+    segs: [int]
+
+    invariant self.segs.len() > 0
+
+    // push is +1, so the invariant survives trivially.
+    fn append(mut self, base: int) {
+        self.segs.push(base)
+    }
+
+    // A pop guarded by len() > 1 keeps at least one segment. An unguarded
+    // pop here would be a compile error: it cannot prove len() > 0 afterward.
+    fn drop_last(mut self) {
+        if self.segs.len() > 1 {
+            self.segs.pop()
+        }
+    }
+
+    // Compact down to the base. The loop guard len() > 1 dominates every pop.
+    fn compact(mut self) {
+        while self.segs.len() > 1 {
+            self.segs.pop()
+        }
+    }
+
+    // The collection never escapes the class: callers go through methods.
+    // A raw `idx.segs` read from outside is a compile error (it would hand
+    // out a mutable alias and desync the invariant).
+    fn count(self) int {
+        return self.segs.len()
+    }
+
+    fn base(self) int {
+        return self.segs[0]
+    }
+}
+
+fn main() {
+    let mut idx = SegmentIndex { segs: [0] }
+    idx.append(100)
+    idx.append(200)
+    idx.append(300)
+    print(idx.count())   // 4
+
+    idx.drop_last()
+    print(idx.count())   // 3
+
+    idx.compact()
+    print(idx.count())   // 1
+    print(idx.base())    // 0
+}

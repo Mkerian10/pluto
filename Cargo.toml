@@ -189,6 +189,10 @@ name = "contracts"
 path = "tests/integration/contracts.rs"
 
 [[test]]
+name = "collection_invariants"
+path = "tests/integration/collection_invariants.rs"
+
+[[test]]
 name = "dominance"
 path = "tests/integration/dominance.rs"
 
