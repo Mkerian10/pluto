@@ -173,57 +173,84 @@ and the clause is a theorem. This is a breaking change for any code that
 leaned on remote ensures; the Blob exercise suggests well-shaped protocols
 never needed them, and the ones that did were the problem.
 
-## Mechanism 2: session-typed remote handles (leased conversations)
+## Mechanism 2: the conversation is a typestated evidence handle
 
-The centerpiece, and the one genuinely new construct. Today nothing types
-the *order* of calls on a remote handle: begin-before-insert,
-commit-consumes, at-most-one-outstanding. Typestates do this for local
-values; entity handles deliberately carry no state params — because an
-entity's state param would claim knowledge of the authority's truth, which
-was rightly rejected (authorities-vs-evidence).
+Today nothing types the *order* of calls on a remote handle:
+begin-before-insert, commit-consumes, at-most-one-outstanding. Typestates do
+this for local values; entity handles deliberately carry no state params —
+because an entity's state param would claim knowledge of the authority's
+truth, which was rightly rejected (authorities-vs-evidence).
 
-The resolution is to type a different thing. A session handle's state is not
-the remote's truth — it is **the client's knowledge state**: "as of the last
-message, the conversation stood here." That is honest exactly when every
+The resolution is to type a different thing. A conversation handle's state is
+not the remote's truth — it is **the client's knowledge state**: "as of the
+last message, the conversation stood here." That is honest exactly when every
 transition the *world* can force is an edge in the type the client must
-handle: revocation, timeout, disconnect, supersession. Which is precisely
-the lease discipline rfc-entity-lifecycle.md just ratified — a session
-handle **is** a lease, and degradation edges are its expiry.
+handle: revocation, timeout, disconnect, supersession. Which is precisely the
+lease discipline rfc-entity-lifecycle.md ratified — the handle **is** a lease,
+and degradation edges are its expiry.
 
-Sketch (surface illustrative — decision 2):
+**This needs no new construct.** The client's knowledge state is, by
+definition, *evidence* — a client-side, linear, typestated value — the exact
+counterpart to the authorities (which we typestate-reject) in the
+authorities-vs-evidence split. Evidence is already "a typestated linear
+value," which the language already has. So the conversation handle is an
+**ordinary typestated class**, generated as the client stub of a served
+interface; it is not a new `session` declaration form. This mirrors the
+module-semantics resolution ("the protocol is the module," no new `protocol`
+construct): here, the typestated handle *is* the session.
+
+Concretely, the served interface carries the per-method facts inline, and the
+generated client stub is a typestated evidence class:
 
 ```pluto
-// Declared against the served interface; states describe the CONVERSATION.
-pub session Txn for Ledger {
-    states Active, Done, Lost
-
-    fn insert(self, e: Entry)            where S == Active   // raises Refused
-    fn commit(self) Txn<Done>            where S == Active   // consuming
-    fn rollback(self) Txn<Done>          where S == Active   // consuming
-
-    // The world's edges: any Active-state call may yield these instead.
-    // Receiving one degrades the handle; the payload carries Txn<Lost>,
-    // whose only method is discard(). must_release covers Active and Lost.
-    degrades Disconnected { txn: Txn<Lost> }     // transport died: AMBIGUOUS
-    degrades Expired      { txn: Txn<Lost> }     // authority reaped the lease
-}
+// On the served interface — per-method preconditions and transitions only.
+// The handle type Txn<S> is an ordinary typestated class; the stub is generated.
+fn insert(self, e: Entry)   where S == Active   // raises Refused
+fn commit(self) Txn<Done>   where S == Active   // consuming transition
+fn rollback(self) Txn<Done> where S == Active   // consuming transition
 ```
 
-What the machinery buys, all with existing passes: leaking an open
-transaction is a compile error (`must_release`); using a handle after
-commit is a compile error (linearity); ignoring the possibility of
-disconnection is a compile error (error-set coverage — the projection
-check); and the ambiguous/definite classification of each degradation edge
-rides the rfc-distributed-safety taxonomy, so "commit sent, no ack" is a
-typed ambiguous outcome whose safe retry can lean on a checked idempotency
-key. Blob remains the degenerate case: a single-shot protocol is a session
-with one state, and its code compiles unchanged.
+The world's edges are **not author-written and not per-conversation to
+declare** — disconnect (transport died: AMBIGUOUS) and expiry (the authority
+reaped the lease: clean) are *universal consequences of remoteness*,
+identical for every served handle. The **stub generator injects them**,
+because generating a remote stub is precisely where "this handle is remote"
+is known; the author never types a `degrades` list. (A genuinely
+protocol-specific edge — a `Superseded` that is not generic expiry — is one
+extra edge on the single method that can emit it: per-method and correct, not
+a smeared per-conversation annotation. No handle-level `volatile`-style marker
+is needed; "remote" is already known from the interface being served.)
 
-The implementation reuses linearity.rs, the error-set machinery, and the
-lifecycle RFC's lease runtime; the new work is the declaration form, the
-projection of a session onto the generated client stub, and the server-side
-dual (the authority's handler set checked against the same session — its
-projection obligations are dominance-shaped and use the existing engines).
+What the machinery buys, all with existing, *shipped* passes — `std.fs`'s
+`File<M, S>` (must_release, `Degraded`-carrying-`Poisoned`) is the local
+existence proof: leaking an open transaction is a compile error
+(`must_release`, live); using a handle after commit is a compile error
+(linearity transitions consume, live); ignoring a degradation edge is a
+compile error (error-set coverage — the projection check, live); and the
+ambiguous/definite classification rides the rfc-distributed-safety taxonomy,
+so "commit sent, no ack" is a typed ambiguous outcome whose safe retry leans
+on a checked idempotency key. Blob is the degenerate case: a single-state
+conversation, compiling unchanged.
+
+**One axis stays open** (does not block the construct decision): the injected
+world-edges may surface either as **degradable-typestate errors** the caller
+`catch`es — which composes directly with `!` propagation and the existing
+error-set coverage that powers the projection check — or as a **sum the
+caller `match`es/narrows** (like nullable narrowing), which is more honest
+that an expired lease is a *transition*, not a failure, but must earn the
+"every world-edge handled" guarantee from match-exhaustiveness instead of
+error-set coverage. Error-surfacing is the lower-risk default (free
+integration with the projection checker); narrowing is the cleaner semantics.
+The Postgres dogfood (acceptance, below) is the right place to decide.
+
+Because the local building blocks are shipped and proven in `std.fs`/`std.wal`,
+the only genuinely new implementation work is **the remote half**: (1) the
+stub generator that projects a served interface into the typestated evidence
+handle (and injects the universal edges), and (2) transport-delivered edges —
+a real network disconnect, and an authority-side lease timeout/revocation,
+arriving as degradation — which is where the lifecycle RFC's lease runtime
+bites. A conversation against a *local* authority works on today's machinery;
+the remote projection + transport-edge delivery is this mechanism's new code.
 
 ## Mechanism 3: the deployment plan as composition certificate
 
@@ -263,38 +290,58 @@ Two programs, two ends of the spectrum:
    with no replacement needed, demonstrating that well-shaped existing code
    pays nothing.
 2. **A transactional client** — the Postgres library (separate RFC) is the
-   real test: a multi-step session against a sovereign peer that will never
-   run Pluto. begin/insert/commit typed as a session; leaked transactions
-   a compile error; disconnection and expiry as degradation edges with
-   honest ambiguity on commit; constraints perceived at decode. If the
-   session machinery cannot type the Postgres protocol cleanly, mechanism 2
-   is wrong and comes back to this document.
+   real test: a multi-step conversation against a sovereign peer that will
+   never run Pluto. begin/insert/commit typed as a typestated evidence
+   handle; leaked transactions a compile error; disconnection and expiry as
+   degradation edges with honest ambiguity on commit; constraints perceived
+   at decode. If a typestated evidence handle cannot type the Postgres
+   protocol cleanly, mechanism 2 is wrong and comes back to this document —
+   and this is also where the open error-vs-narrow surfacing axis is decided.
 
 ## Owner decisions
 
 1. **Demote remote ensures** (mechanism 1) — recommended yes; breaking, with
    `pluto analyze` naming every affected site.
-2. **Session declaration surface** — a `session` form attached to interfaces
-   (sketched above) vs session clauses inline on the interface methods. The
-   separate form keeps conversation structure readable in one place and is
-   recommended.
-3. **Sessions are leases** — session handles ride the lifecycle RFC's lease
+2. **No `session` construct — the conversation is a typestated evidence
+   handle** (mechanism 2, revised). The earlier draft proposed a dedicated
+   `session … for …` declaration form; it is withdrawn. The handle is the
+   client's knowledge state = evidence = an ordinary typestated linear value,
+   generated as the client stub of a served interface. Preconditions and
+   transitions are per-method on the interface; the universal world-edges
+   (disconnect, expiry) are injected by the stub generator, not author-written.
+   No new keyword, no handle-level marker. **Recommended.** Open sub-axis,
+   deferred to the Postgres dogfood: degradation edges surface as
+   `catch`-able errors (composes with error-set coverage — lower risk) vs a
+   `match`/narrow sum (more honest; needs exhaustiveness to carry the
+   all-edges-handled guarantee).
+3. **Conversations are leases** — the handle rides the lifecycle RFC's lease
    runtime (expiry, reaping) rather than growing a parallel mechanism.
-   Recommended yes.
+   Recommended yes. (Entails #2; the lease is what delivers the injected
+   expiry edge.)
 4. **Deployment-plan scope** — schema + analyze reporting now, tooling
    later. Recommended yes.
 5. **Vocabulary** — "conduct / perceived / sovereign / structural" as the
    diagnostic and documentation terms for the four bins. Naming is doctrine
    here; alternatives welcome.
 
+Note on status: the *local* building blocks for mechanism 2 — typestates,
+consuming transitions (linearity), `must_release`, and
+degradable-typestate errors carrying the post-state — are implemented and
+shipped (`std.fs`'s `File<M, S>` with `Degraded`/`Poisoned`; `std.wal`). Only
+the remote half (stub projection + transport-delivered edges) is new work.
+
 ## Phasing
 
 1. **The demotion** — mechanism 1, plus assumption-surface accounting of
    every formerly-assumed remote clause. Small, breaking, honest; ships the
    doctrine's teeth first.
-2. **Session handles** — the `session` form, client-stub projection,
-   linearity + error-set enforcement, degradation edges on the lease
-   runtime. The large phase; depends on the lifecycle RFC's implementation.
+2. **Conversation handles** — the client-stub projection of a served
+   interface into a typestated evidence handle (and injection of the
+   universal world-edges), plus transport-delivered degradation on the lease
+   runtime. Linearity, `must_release`, and error-set/degradable-typestate
+   enforcement are already shipped (`std.fs`), so this phase is the *remote*
+   half only: the generator and the transport edges. Depends on the lifecycle
+   RFC's lease runtime.
 3. **The certificate** — deployment-plan schema and analyze surface.
 4. **The dogfood** — the Postgres RFC and library, exercising all three
    against a peer we do not control.
