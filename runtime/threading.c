@@ -638,11 +638,11 @@ static void fiber_entry_fn(int fiber_id) {
 
     // Store result or error in task handle
     if (__pluto_current_error) {
-        PLUTO_GC_BARRIER(task, __pluto_current_error);
+        PLUTO_GC_STORE(task, 0, __pluto_current_error);
         task[2] = (long)__pluto_current_error;
         __pluto_current_error = NULL;
     } else {
-        PLUTO_GC_BARRIER(task, result);
+        PLUTO_GC_STORE(task, 0, result);
         task[1] = result;
     }
     task[3] = 1;  // done
@@ -984,11 +984,11 @@ static long task_spawn_sequential(long closure_ptr) {
     long result = ((long(*)(long))fn_ptr)(closure_ptr);
 
     if (__pluto_current_error) {
-        PLUTO_GC_BARRIER(task, __pluto_current_error);
+        PLUTO_GC_STORE(task, 0, __pluto_current_error);
         task[2] = (long)__pluto_current_error;
         __pluto_current_error = NULL;
     } else {
-        PLUTO_GC_BARRIER(task, result);
+        PLUTO_GC_STORE(task, 0, result);
         task[1] = result;
     }
     task[3] = 1;
@@ -1236,11 +1236,11 @@ static void *__pluto_spawn_trampoline(void *arg) {
     TaskSync *sync = (TaskSync *)task[4];
     pthread_mutex_lock(&sync->mutex);
     if (__pluto_current_error) {
-        PLUTO_GC_BARRIER(task, __pluto_current_error);
+        PLUTO_GC_STORE(task, 0, __pluto_current_error);
         task[2] = (long)__pluto_current_error;
         __pluto_current_error = NULL;
     } else {
-        PLUTO_GC_BARRIER(task, result);
+        PLUTO_GC_STORE(task, 0, result);
         task[1] = result;
     }
     task[3] = 1;  // done
@@ -1830,7 +1830,7 @@ long __pluto_chan_send(long handle, long value) {
             if (ch[3] < ch[2]) {
                 // Space available — push value
                 long *buf = (long *)ch[1];
-                PLUTO_GC_BARRIER(ch, value);
+                PLUTO_GC_STORE(ch, 0, value);
                 buf[ch[5]] = value;
                 ch[5] = (ch[5] + 1) % ch[2];
                 ch[3]++;
@@ -1858,7 +1858,7 @@ long __pluto_chan_send(long handle, long value) {
         seq_test_blocked_abort("channel send on full buffer");
     }
     long *buf = (long *)ch[1];
-    PLUTO_GC_BARRIER(ch, value);
+    PLUTO_GC_STORE(ch, 0, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -1878,6 +1878,7 @@ long __pluto_chan_recv(long handle) {
                 // Data available — pop value
                 long *buf = (long *)ch[1];
                 long val = buf[ch[4]];
+                PLUTO_GC_DELETE(val);   // leaves the buffer
                 ch[4] = (ch[4] + 1) % ch[2];
                 ch[3]--;
                 // Wake any fibers waiting to send on this channel
@@ -1908,6 +1909,7 @@ long __pluto_chan_recv(long handle) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     return val;
@@ -1940,6 +1942,7 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
                 cur->has_timeout = 0;
                 long *buf = (long *)ch[1];
                 long val = buf[ch[4]];
+                PLUTO_GC_DELETE(val);   // leaves the buffer
                 ch[4] = (ch[4] + 1) % ch[2];
                 ch[3]--;
                 wake_fibers_blocked_on_chan(ch);
@@ -1973,6 +1976,7 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     return val;
@@ -1989,7 +1993,7 @@ long __pluto_chan_try_send(long handle, long value) {
         return 0;
     }
     long *buf = (long *)ch[1];
-    PLUTO_GC_BARRIER(ch, value);
+    PLUTO_GC_STORE(ch, 0, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -2012,6 +2016,7 @@ long __pluto_chan_try_recv(long handle) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
@@ -2127,7 +2132,7 @@ long __pluto_chan_send(long handle, long value) {
         return 0;
     }
     long *buf = (long *)ch[1];
-    PLUTO_GC_BARRIER(ch, value);
+    PLUTO_GC_STORE(ch, 0, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -2157,6 +2162,7 @@ long __pluto_chan_recv(long handle) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     pthread_cond_signal(&sync->not_full);
@@ -2211,6 +2217,7 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     pthread_cond_signal(&sync->not_full);
@@ -2234,7 +2241,7 @@ long __pluto_chan_try_send(long handle, long value) {
         return 0;
     }
     long *buf = (long *)ch[1];
-    PLUTO_GC_BARRIER(ch, value);
+    PLUTO_GC_STORE(ch, 0, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -2260,6 +2267,7 @@ long __pluto_chan_try_recv(long handle) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     pthread_cond_signal(&sync->not_full);
@@ -2346,10 +2354,11 @@ static long select_fire_arm(long *handles, long *ops, long *values, int i) {
     long *cbuf = (long *)ch[1];
     if (ops[i] == 0) {
         values[i] = cbuf[ch[4]];
+        PLUTO_GC_DELETE(values[i]);   // leaves the buffer
         ch[4] = (ch[4] + 1) % ch[2];
         ch[3]--;
     } else {
-        PLUTO_GC_BARRIER(ch, values[i]);
+        PLUTO_GC_STORE(ch, 0, values[i]);
         cbuf[ch[5]] = values[i];
         ch[5] = (ch[5] + 1) % ch[2];
         ch[3]++;
@@ -2538,6 +2547,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                     /* data available */
                     long *cbuf = (long *)ch[1];
                     long val = cbuf[ch[4]];
+                    PLUTO_GC_DELETE(val);   // leaves the buffer
                     ch[4] = (ch[4] + 1) % ch[2];
                     ch[3]--;
                     pthread_cond_signal(&sync->not_full);
@@ -2553,7 +2563,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                 if (!ch[6] && ch[3] < ch[2]) {
                     /* space available */
                     long *cbuf = (long *)ch[1];
-                    PLUTO_GC_BARRIER(ch, values[i]);
+                    PLUTO_GC_STORE(ch, 0, values[i]);
                     cbuf[ch[5]] = values[i];
                     ch[5] = (ch[5] + 1) % ch[2];
                     ch[3]++;

@@ -2,7 +2,8 @@
 //! backend with the heap verifier on and torture collections, and must print
 //! exactly what the reference mark-sweep backend prints. Under `tlh` the
 //! verifier also checks invariant I (no shared object points at a private
-//! one) at every global collection, so a missing promotion barrier aborts.
+//! one) at every global collection, and under `incr` that no marked object
+//! points at an unmarked one when marking ends, so a missing barrier aborts.
 
 use pluto::GcBackend;
 use std::path::Path;
@@ -43,4 +44,12 @@ fn differential(program: &str) {
 #[test]
 fn sharing_through_entities_tasks_and_channels() {
     differential("sharing.pt");
+}
+
+/// Cuts snapshot-reachable objects out of not-yet-scanned containers and
+/// moves them into objects allocated mid-cycle: under `incr` every cut must
+/// reach the deletion log, which the verifier checks at the end of marking.
+#[test]
+fn references_moved_during_marking() {
+    differential("satb.pt");
 }

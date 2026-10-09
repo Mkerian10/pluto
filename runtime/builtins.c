@@ -256,7 +256,7 @@ void __pluto_array_push(void *handle, long value) {
         h[1] = cap;
         h[2] = (long)data;
     }
-    PLUTO_GC_BARRIER(h, value);
+    PLUTO_GC_STORE(h, 0, value);
     data[len] = value;
     h[0] = len + 1;
 }
@@ -280,7 +280,7 @@ void __pluto_array_set(void *handle, long index, long value) {
         exit(1);
     }
     long *data = (long *)h[2];
-    PLUTO_GC_BARRIER(h, value);
+    PLUTO_GC_STORE(h, data[index], value);
     data[index] = value;
 }
 
@@ -296,6 +296,7 @@ long __pluto_array_pop(void *handle) {
         exit(1);
     }
     long *data = (long *)h[2];
+    PLUTO_GC_DELETE(data[len - 1]);
     h[0] = len - 1;
     return data[len - 1];
 }
@@ -323,7 +324,12 @@ long __pluto_array_first(void *handle) {
 }
 
 void __pluto_array_clear(void *handle) {
-    ((long *)handle)[0] = 0;
+    long *h = (long *)handle;
+    if (__pluto_gc_barrier_mode == 2) {
+        long *data = (long *)h[2];
+        for (long i = 0; i < h[0]; i++) PLUTO_GC_DELETE(data[i]);
+    }
+    h[0] = 0;
 }
 
 long __pluto_array_remove_at(void *handle, long index) {
@@ -335,6 +341,7 @@ long __pluto_array_remove_at(void *handle, long index) {
     }
     long *data = (long *)h[2];
     long removed = data[index];
+    PLUTO_GC_DELETE(removed);
     for (long i = index; i < len - 1; i++) {
         data[i] = data[i + 1];
     }
@@ -362,7 +369,7 @@ void __pluto_array_insert_at(void *handle, long index, long value) {
     for (long i = len; i > index; i--) {
         data[i] = data[i - 1];
     }
-    PLUTO_GC_BARRIER(h, value);
+    PLUTO_GC_STORE(h, 0, value);   // existing elements only shift
     data[index] = value;
     h[0] = len + 1;
 }
@@ -2328,14 +2335,14 @@ void __pluto_map_insert(void *handle, long key_type, long key, long value) {
     unsigned long idx = ht_hash(key, key_type) & (unsigned long)(cap - 1);
     while (1) {
         if (meta[idx] == 0) { // empty
-            PLUTO_GC_BARRIER(h, key);
-            PLUTO_GC_BARRIER(h, value);
+            PLUTO_GC_STORE(h, 0, key);
+            PLUTO_GC_STORE(h, 0, value);
             keys[idx] = key; vals[idx] = value; meta[idx] = 0x80;
             h[0] = count + 1;
             return;
         }
         if (meta[idx] >= 0x80 && ht_eq(keys[idx], key, key_type)) { // overwrite
-            PLUTO_GC_BARRIER(h, value);
+            PLUTO_GC_STORE(h, vals[idx], value);
             vals[idx] = value;
             return;
         }
@@ -2383,6 +2390,8 @@ void __pluto_map_remove(void *handle, long key_type, long key) {
     while (1) {
         if (meta[idx] == 0) return; // not found
         if (meta[idx] >= 0x80 && ht_eq(keys[idx], key, key_type)) {
+            PLUTO_GC_DELETE(keys[idx]);
+            PLUTO_GC_DELETE(((long *)h[3])[idx]);
             // Robin Hood / backward-shift deletion for correctness with linear probing
             unsigned long empty = idx;
             meta[empty] = 0;
@@ -2487,7 +2496,7 @@ void __pluto_set_insert(void *handle, long key_type, long elem) {
     unsigned long idx = ht_hash(elem, key_type) & (unsigned long)(cap - 1);
     while (1) {
         if (meta[idx] == 0) {
-            PLUTO_GC_BARRIER(h, elem);
+            PLUTO_GC_STORE(h, 0, elem);
             keys[idx] = elem; meta[idx] = 0x80;
             h[0] = count + 1;
             return;
@@ -2519,6 +2528,7 @@ void __pluto_set_remove(void *handle, long key_type, long elem) {
     while (1) {
         if (meta[idx] == 0) return;
         if (meta[idx] >= 0x80 && ht_eq(keys[idx], elem, key_type)) {
+            PLUTO_GC_DELETE(keys[idx]);
             unsigned long empty = idx;
             meta[empty] = 0;
             unsigned long j = (empty + 1) & (unsigned long)(cap - 1);

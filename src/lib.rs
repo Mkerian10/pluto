@@ -690,6 +690,11 @@ pub enum GcBackend {
     /// shared when they cross a thread boundary or are stored into a shared
     /// object.
     Tlh,
+    /// Incremental mark-sweep: snapshot-at-the-beginning marking in short
+    /// stop-the-world steps paced by allocation, with a deletion write
+    /// barrier, followed by lazy sweeping. Bounds pauses independently of
+    /// heap size.
+    Incr,
 }
 
 /// The default backend is mark-sweep; PLUTO_GC_BACKEND=<name> overrides it
@@ -705,7 +710,7 @@ impl Default for GcBackend {
 
 impl GcBackend {
     /// Every backend, in a stable order (index = position).
-    pub const ALL: [GcBackend; 8] = [
+    pub const ALL: [GcBackend; 9] = [
         GcBackend::MarkSweep,
         GcBackend::Noop,
         GcBackend::Legacy,
@@ -714,6 +719,7 @@ impl GcBackend {
         GcBackend::ParMark,
         GcBackend::Tlab,
         GcBackend::Tlh,
+        GcBackend::Incr,
     ];
 
     fn index(&self) -> usize {
@@ -730,6 +736,7 @@ impl GcBackend {
             GcBackend::ParMark => "parmark",
             GcBackend::Tlab => "tlab",
             GcBackend::Tlh => "tlh",
+            GcBackend::Incr => "incr",
         }
     }
 
@@ -742,7 +749,8 @@ impl GcBackend {
             GcBackend::MarkSweep => include_str!("../runtime/gc/marksweep.c"),
             GcBackend::Noop => include_str!("../runtime/gc/noop.c"),
             GcBackend::Legacy => include_str!("../runtime/gc/legacy.c"),
-            GcBackend::Lazy | GcBackend::Gen | GcBackend::ParMark | GcBackend::Tlab | GcBackend::Tlh => {
+            GcBackend::Lazy | GcBackend::Gen | GcBackend::ParMark | GcBackend::Tlab | GcBackend::Tlh
+            | GcBackend::Incr => {
                 include_str!("../runtime/gc/marksweep.c")
             }
         }
@@ -758,6 +766,7 @@ impl GcBackend {
             GcBackend::ParMark => &["-DGC_PARALLEL_MARK"],
             GcBackend::Tlab => &["-DGC_TLAB"],
             GcBackend::Tlh => &["-DGC_TLH"],
+            GcBackend::Incr => &["-DGC_INCREMENTAL", "-DGC_LAZY_SWEEP"],
         }
     }
 }

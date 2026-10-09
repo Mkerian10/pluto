@@ -1,21 +1,28 @@
 use std::collections::HashMap;
 
 use cranelift_codegen::ir::{types, AbiParam};
-use cranelift_module::{FuncId, Linkage, Module};
+use cranelift_module::{DataId, FuncId, Linkage, Module};
 
 use crate::diagnostics::CompileError;
 
 /// Registry of runtime (builtins.c) functions declared in the Cranelift module.
 pub struct RuntimeRegistry {
     ids: HashMap<&'static str, FuncId>,
+    /// `__pluto_gc_barrier_mode` (runtime/builtins.h): which write barrier
+    /// the linked GC backend has live. Read before every barriered store.
+    gc_barrier_mode: DataId,
 }
 
 impl RuntimeRegistry {
     /// Declare all runtime functions in the module. Each entry specifies raw Cranelift
     /// types for parameters and returns, preserving exact C ABI compatibility.
     pub fn new(module: &mut dyn Module) -> Result<Self, CompileError> {
+        let gc_barrier_mode = module
+            .declare_data("__pluto_gc_barrier_mode", Linkage::Import, true, false)
+            .map_err(|e| CompileError::codegen(format!("declare __pluto_gc_barrier_mode: {e}")))?;
         let mut reg = RuntimeRegistry {
             ids: HashMap::new(),
+            gc_barrier_mode,
         };
 
         // Builtin methods on primitive/collection receivers: these externs
@@ -177,6 +184,7 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_gc_heap_size", &[], &[types::I64])?;
         reg.declare(module, "__pluto_safepoint", &[], &[])?;
         reg.declare(module, "__pluto_gc_promote_store", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_gc_log_deleted", &[types::I64], &[])?;
 
         // Concurrency
         reg.declare(module, "__pluto_task_spawn", &[types::I64], &[types::I64])?;
@@ -254,6 +262,10 @@ impl RuntimeRegistry {
     /// Look up a runtime function by its full C name.
     pub fn get(&self, name: &str) -> FuncId {
         self.ids[name]
+    }
+
+    pub fn gc_barrier_mode(&self) -> DataId {
+        self.gc_barrier_mode
     }
 
     fn declare(

@@ -137,6 +137,47 @@ static size_t gc_shared_threshold = GC_TLH_SHARED_FLOOR;
 #define gc_sort_tmp             (gc_ctx->sort_tmp)
 #define gc_sort_tmp_cap         (gc_ctx->sort_tmp_cap)
 
+// Which write barrier is live (runtime/builtins.h). tlh promotes on every
+// store into a shared object; incr turns its deletion barrier on only for
+// the duration of a marking cycle.
+#if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
+int __pluto_gc_barrier_mode = 1;
+#else
+int __pluto_gc_barrier_mode = 0;
+#endif
+
+#ifdef GC_INCREMENTAL
+// Snapshot-at-the-beginning log: references overwritten in or removed from
+// heap objects while a cycle is marking. Each thread appends to its own
+// buffer without locking; the collector drains every buffer at each step,
+// when all threads are stopped.
+typedef struct { long *v; size_t n, cap; } GCSatbBuf;
+static __thread GCSatbBuf gc_satb_local;
+static GCSatbBuf gc_satb_global;   // buffers of exited threads, under gc_mutex
+static int gc_incr_marking = 0;
+#define GC_INCR_STEP_BYTES ((size_t)256 << 10)   // allocation between steps
+#define GC_INCR_WORK_RATIO 4                     // bytes traced per byte allocated
+#define GC_INCR_SWEEP_BATCH 64                   // leftover blocks swept per allocation
+static size_t gc_incr_since_step = 0;
+
+static void gc_oom(const char *what);
+static inline void gc_satb_push(GCSatbBuf *b, long v) {
+    if (b->n == b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 1024;
+        long *grown = (long *)realloc(b->v, cap * sizeof(long));
+        if (!grown) gc_oom("GC deletion log");
+        b->v = grown;
+        b->cap = cap;
+    }
+    b->v[b->n++] = v;
+}
+
+static void gc_satb_move(GCSatbBuf *dst, GCSatbBuf *src) {
+    for (size_t i = 0; i < src->n; i++) gc_satb_push(dst, src->v[i]);
+    src->n = 0;
+}
+#endif
+
 // ── Heap: size-class blocks + page map ────────────────────────────────────────
 //
 // Small objects (header + user data <= GC_SMALL_MAX) live in 16 KiB blocks,
@@ -493,6 +534,12 @@ static void *gc_obj_alloc(size_t user_size, uint8_t type_tag, uint16_t field_cou
 #endif
     if (gc_is_container_tag(type_tag)) b->has_containers = 1;
     gc_bytes_allocated += slot_bytes;
+#ifdef GC_INCREMENTAL
+    if (gc_incr_marking) {   // allocated black: survives the cycle in progress
+        h->mark = 1;
+        gc_marked_bytes += slot_bytes;
+    }
+#endif
     return (char *)h + sizeof(GCHeader);
 }
 
@@ -815,6 +862,9 @@ typedef struct {
     void *stack_cur;
     jmp_buf park_regs;
     int active;
+#ifdef GC_INCREMENTAL
+    GCSatbBuf *satb;   // the thread's deletion log, drained at each step
+#endif
 } GCThreadStack;
 static GCThreadStack **gc_thread_stacks = NULL;
 static int gc_thread_stack_count = 0;   // high-water slot count
@@ -992,6 +1042,9 @@ void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
     slot->stack_hi = stack_hi;
     slot->stack_cur = NULL;   // no park record yet: scan full range if needed
     slot->active = 1;
+#ifdef GC_INCREMENTAL
+    slot->satb = &gc_satb_local;
+#endif
     gc_active_thread_count++;
     gc_my_slot = slot;
     // Flag and slot flip together under gc_mutex: the collector (which also
@@ -1083,6 +1136,10 @@ void __pluto_gc_deregister_thread_stack(void) {
     }
 #endif
     if (gc_my_slot) {
+#ifdef GC_INCREMENTAL
+        gc_satb_move(&gc_satb_global, &gc_satb_local);   // nothing logged is lost
+        gc_my_slot->satb = NULL;
+#endif
         gc_my_slot->active = 0;
         gc_active_thread_count--;
         gc_my_slot = NULL;
@@ -1138,6 +1195,10 @@ void __pluto_gc_after_fork(int is_child) {
         for (int i = 0; i < gc_thread_stack_count; i++) {
             if (gc_thread_stacks[i]->active
                 && !pthread_equal(gc_thread_stacks[i]->thread, self)) {
+#ifdef GC_INCREMENTAL
+                if (gc_thread_stacks[i]->satb) gc_satb_move(&gc_satb_global, gc_thread_stacks[i]->satb);
+                gc_thread_stacks[i]->satb = NULL;
+#endif
                 gc_thread_stacks[i]->active = 0;
             }
             if (gc_thread_stacks[i]->active) gc_active_thread_count++;
@@ -1265,8 +1326,27 @@ static inline void gc_poison(GCHeader *h) {
     if (gc_verify_enabled > 0) memset((char *)h + sizeof(GCHeader), 0xA5, h->size);
 }
 
+#ifdef GC_INCREMENTAL
+static void gc_incr_start(void);
+static void gc_incr_step(void);
+static int gc_sweep_some(size_t max_blocks);
+#endif
+
 #ifdef PLUTO_TEST_MODE
 void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
+#ifdef GC_INCREMENTAL
+    if (gc_stack_bottom && !gc_collecting) {
+        int torture = gc_torture_due();
+        if (gc_incr_marking) {
+            gc_incr_since_step += user_size + sizeof(GCHeader);
+            if (torture || gc_incr_since_step >= GC_INCR_STEP_BYTES) gc_incr_step();
+        } else if ((torture || gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold)
+                   && gc_sweep_some(GC_INCR_SWEEP_BATCH)) {
+            gc_incr_start();
+        }
+    }
+    return gc_obj_alloc(user_size, type_tag, field_count);
+#endif
     // Test mode: single-threaded, no mutex needed
     if (gc_stack_bottom && !gc_collecting
         && (gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold
@@ -1400,6 +1480,26 @@ void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
         H->unreported = 0;
     }
 #endif
+#ifdef GC_INCREMENTAL
+    if (gc_stack_bottom) {
+        int torture = gc_torture_due();
+        if (gc_incr_marking) {
+            gc_incr_since_step += user_size + sizeof(GCHeader);
+            if (torture || gc_incr_since_step >= GC_INCR_STEP_BYTES) {
+                int stopped = gc_stw_stop_threads();
+                gc_incr_step();
+                gc_stw_resume_threads(stopped);
+            }
+        } else if ((torture || gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold)
+                   && gc_sweep_some(GC_INCR_SWEEP_BATCH)) {
+            // The previous cycle's leftover sweep runs first, in batches
+            // and without stopping anyone; the cycle starts once it is done.
+            int stopped = gc_stw_stop_threads();
+            gc_incr_start();
+            gc_stw_resume_threads(stopped);
+        }
+    }
+#else
     if (gc_stack_bottom
         && (gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold
             || gc_torture_due())) {
@@ -1411,6 +1511,7 @@ void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
         __pluto_gc_collect();
         gc_stw_resume_threads(stopped);
     }
+#endif
 #if defined(GC_TLAB)
     void *user = H ? gc_tlh_alloc_slow(H, user_size, type_tag, field_count)
                    : gc_obj_alloc(user_size, type_tag, field_count);
@@ -2090,6 +2191,52 @@ static void gc_pm_drain(void) {
 }
 #endif
 
+// Heap checkers (PLUTO_GC_VERIFY): call check(parent, word, where) for every
+// pointer-sized slot of h that can hold a reference, per its tag.
+static void gc_check_children(GCHeader *h, void (*check)(GCHeader *, long, const char *)) {
+    long *slots = (long *)(h + 1);
+    switch (h->type_tag) {
+    case GC_TAG_STRING:
+    case GC_TAG_BYTES:
+        return;
+    case GC_TAG_ARRAY: {
+        long len = slots[0], *data = (long *)slots[2];
+        for (long i = 0; data && i < len; i++) check(h, data[i], "array element");
+        return;
+    }
+    case GC_TAG_MAP: {
+        long cap = slots[1], *keys = (long *)slots[2], *vals = (long *)slots[3];
+        unsigned char *meta = (unsigned char *)slots[4];
+        for (long i = 0; meta && i < cap; i++) {
+            if (meta[i] < 0x80) continue;
+            check(h, keys[i], "map key");
+            check(h, vals[i], "map value");
+        }
+        return;
+    }
+    case GC_TAG_SET: {
+        long cap = slots[1], *keys = (long *)slots[2];
+        unsigned char *meta = (unsigned char *)slots[3];
+        for (long i = 0; meta && i < cap; i++) {
+            if (meta[i] >= 0x80) check(h, keys[i], "set element");
+        }
+        return;
+    }
+    case GC_TAG_TRAIT:
+    case GC_TAG_STRING_SLICE:
+        check(h, slots[0], "data pointer");
+        return;
+    case GC_TAG_CHANNEL: {
+        long *buf = (long *)slots[1], cap = slots[2], count = slots[3], head = slots[4];
+        for (long i = 0; buf && cap > 0 && i < count; i++) check(h, buf[(head + i) % cap], "channel buffer");
+        return;
+    }
+    default:
+        for (uint16_t i = 0; i < h->field_count; i++) check(h, slots[i], "field");
+        return;
+    }
+}
+
 // ── Promotion (--gc tlh) ─────────────────────────────────────────────────────
 #if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
 // Invariant I: no shared object holds a pointer to a private object.
@@ -2142,49 +2289,7 @@ static void gc_tlh_check_slot(GCHeader *parent, long word, const char *where) {
 }
 
 static void gc_tlh_check_object(GCHeader *h) {
-    long *slots = (long *)(h + 1);
-    switch (h->type_tag) {
-    case GC_TAG_STRING:
-    case GC_TAG_BYTES:
-        return;
-    case GC_TAG_ARRAY: {
-        long len = slots[0], *data = (long *)slots[2];
-        for (long i = 0; data && i < len; i++) gc_tlh_check_slot(h, data[i], "array element");
-        return;
-    }
-    case GC_TAG_MAP: {
-        long cap = slots[1], *keys = (long *)slots[2], *vals = (long *)slots[3];
-        unsigned char *meta = (unsigned char *)slots[4];
-        for (long i = 0; meta && i < cap; i++) {
-            if (meta[i] < 0x80) continue;
-            gc_tlh_check_slot(h, keys[i], "map key");
-            gc_tlh_check_slot(h, vals[i], "map value");
-        }
-        return;
-    }
-    case GC_TAG_SET: {
-        long cap = slots[1], *keys = (long *)slots[2];
-        unsigned char *meta = (unsigned char *)slots[3];
-        for (long i = 0; meta && i < cap; i++) {
-            if (meta[i] >= 0x80) gc_tlh_check_slot(h, keys[i], "set element");
-        }
-        return;
-    }
-    case GC_TAG_TRAIT:
-    case GC_TAG_STRING_SLICE:
-        gc_tlh_check_slot(h, slots[0], "data pointer");
-        return;
-    case GC_TAG_CHANNEL: {
-        long *buf = (long *)slots[1], cap = slots[2], count = slots[3], head = slots[4];
-        for (long i = 0; buf && cap > 0 && i < count; i++) {
-            gc_tlh_check_slot(h, buf[(head + i) % cap], "channel buffer");
-        }
-        return;
-    }
-    default:
-        for (uint16_t i = 0; i < h->field_count; i++) gc_tlh_check_slot(h, slots[i], "field");
-        return;
-    }
+    gc_check_children(h, gc_tlh_check_slot);
 }
 
 static void gc_tlh_check_invariant(void) {
@@ -2592,6 +2697,23 @@ static void gc_finish_lazy_sweep(void) {
         }
     }
 }
+
+// Sweep at most max_blocks queued blocks; returns 1 when none remain. Needs
+// gc_mutex but not a stopped world: mutators never touch mark bits or dead
+// slots.
+static int gc_sweep_some(size_t max_blocks) {
+    size_t done = 0;
+    for (size_t c = 0; c < GC_NUM_CLASSES; c++) {
+        GCBlock *b;
+        while ((b = gc_class_unswept[c]) != NULL) {
+            if (done == max_blocks) return 0;
+            gc_class_unswept[c] = b->next;
+            gc_sweep_block(b);
+            done++;
+        }
+    }
+    return 1;
+}
 #endif
 
 #ifdef GC_GENERATIONAL
@@ -2770,49 +2892,48 @@ static size_t gc_sweep(void) {
 
 // ── Garbage Collection ───────────────────────────────────────────────────────
 
-void __pluto_gc_collect(void) {
-    gc_collecting = 1;
-    gc_init_env();
-    struct timespec gc_t0;
-    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_t0);
-#if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
-    // Everyone is stopped: take over what each heap did without the lock.
-    for (size_t i = 0; i < gc_tlh_heap_count; i++) gc_tlh_report(gc_tlh_heaps[i]);
-#elif defined(GC_TLAB) && !defined(PLUTO_TEST_MODE)
-    for (size_t i = 0; i < gc_tlh_heap_count; i++) {
-        gc_bytes_allocated += gc_tlh_heaps[i]->unreported;
-        gc_tlh_heaps[i]->unreported = 0;
+// Account a collection's reclaimed bytes and set the next threshold.
+static void gc_after_sweep(size_t freed_bytes) {
+    gc_bytes_allocated -= freed_bytes;
+
+    // Survivor-aware threshold update (policy comment at gc_threshold's
+    // definition): grow the adaptive floor after a high-reclaim cycle, decay
+    // it after a retention-driven one; cap it by what this process's thread
+    // count justifies amortizing; then track the live set.
+    size_t live = gc_bytes_allocated;
+    size_t floor_cap = GC_FLOOR_BASE_CAP;
+    {
+        size_t nstacks = 0;
+#ifdef PLUTO_TEST_MODE
+        if (gc_fiber_stacks.enabled) {
+            for (int fi = 0; fi < gc_fiber_stacks.count; fi++) {
+                if (gc_fiber_stacks.stacks[fi].active) nstacks++;
+            }
+        }
+#else
+        nstacks = (size_t)gc_active_thread_count;
+#endif
+        floor_cap += nstacks * GC_FLOOR_PER_THREAD;
+        if (floor_cap > GC_FLOOR_MAX) floor_cap = GC_FLOOR_MAX;
     }
-#endif
-
-#if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
-    if (gc_verify_enabled > 0) gc_tlh_check_invariant();
-#endif
-    // Build the data-buffer interval table (objects need no per-cycle index:
-    // the page map resolves them directly).
-#ifdef GC_GENERATIONAL
-    gc_gen_major = gc_gen_barrier_off
-                   || gc_bytes_allocated > gc_gen_old_limit + GC_GEN_NURSERY;
-    if (gc_gen_major) {
-        gc_gen_protect_pass(0);   // unprotect everything
-        gc_gen_clear_marks();
+    if (freed_bytes * 2 >= gc_threshold) {
+        gc_adaptive_floor *= 2;
+    } else {
+        gc_adaptive_floor /= 2;
     }
-#endif
-#ifdef GC_LAZY_SWEEP
-    // Blocks still queued from the previous cycle carry its marks.
-    gc_finish_lazy_sweep();
-    gc_marked_bytes = 0;
-#endif
-    gc_build_data_intervals();
-    struct timespec gc_tb;
-    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_tb);
+    if (gc_adaptive_floor > floor_cap) gc_adaptive_floor = floor_cap;
+    if (gc_adaptive_floor < GC_MIN_THRESHOLD) gc_adaptive_floor = GC_MIN_THRESHOLD;
+    gc_threshold = live * 2;
+    if (gc_threshold < gc_adaptive_floor) gc_threshold = gc_adaptive_floor;
+}
 
-    // Reset worklist
-    gc_worklist_count = 0;
-#ifdef GC_GENERATIONAL
-    if (!gc_gen_major) gc_gen_scan_remembered();
+// Mark everything the roots reference: registers, this thread's stack, every
+// other registered thread's stack (parked), thread-locals, registered
+// globals and pending task handles. Callers have stopped the world.
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
 #endif
-
+static void gc_scan_roots(void) {
     // 1. Flush registers to stack via setjmp
     jmp_buf regs;
     setjmp(regs);
@@ -3012,6 +3133,247 @@ void __pluto_gc_collect(void) {
     }
 #endif
 
+}
+
+#ifdef GC_INCREMENTAL
+// ── Incremental marking (--gc incr) ──────────────────────────────────────────
+//
+// Targets pauses that do not grow with the heap. A cycle marks in short
+// stop-the-world steps interleaved with allocation, then sweeps lazily.
+//
+// Invariant S (snapshot at the beginning): every object reachable when the
+// cycle starts, and every object allocated during it, is marked when the
+// cycle ends. The start step scans all roots once — stacks are never
+// rescanned. Objects allocated while marking are allocated black. While
+// marking, __pluto_gc_barrier_mode is 2 and every reference that is
+// overwritten in, or removed from, a heap object is logged first
+// (PLUTO_GC_STORE / PLUTO_GC_DELETE and the codegen barrier); each step
+// shades the logged references. That is enough: a reference the mutator
+// holds was reachable at the snapshot (so it is marked, unless the last heap
+// path to it was cut before marking reached it — and a cut is logged), or it
+// was allocated during the cycle (black). Initializing stores into fresh
+// objects overwrite nothing and need no barrier, which is why this design
+// suits Pluto's codegen; stores into containers and objects that do
+// overwrite are all funneled through the runtime mutators and the field-store
+// barrier.
+//
+// Pacing is by allocation, never by time (deterministic under pluto test):
+// every GC_INCR_STEP_BYTES allocated while marking runs one step, which
+// traces GC_INCR_WORK_RATIO times as many bytes as were allocated. A step's
+// pause is O(logged references + its trace quantum); the start step adds the
+// root scan, and the final step finishes the trace and queues the sweep.
+// PLUTO_GC_TORTURE=N steps every N allocations with a one-object quantum,
+// stretching each cycle over as many mutator interleavings as possible.
+static long gc_incr_steps = 0;          // pauses in the current cycle
+static long gc_incr_cycle_us = 0;       // their total
+static long gc_incr_cycle_max_us = 0;
+
+void __pluto_gc_log_deleted(long old) {
+    uintptr_t a = (uintptr_t)old;
+    if (a < gc_heap_lo || a >= gc_heap_hi) return;   // not a heap reference
+    gc_satb_push(&gc_satb_local, old);
+}
+
+static void gc_incr_drain_one(GCSatbBuf *b) {
+    for (size_t i = 0; i < b->n; i++) gc_mark_candidate((void *)b->v[i]);
+    b->n = 0;
+}
+
+// Shade every logged reference. All threads are stopped, so no log grows.
+static void gc_incr_drain_logs(void) {
+#ifndef PLUTO_TEST_MODE
+    for (int i = 0; i < gc_thread_stack_count; i++) {
+        GCThreadStack *t = gc_thread_stacks[i];
+        if (t->active && t->satb) gc_incr_drain_one(t->satb);
+    }
+#endif
+    gc_incr_drain_one(&gc_satb_local);
+    gc_incr_drain_one(&gc_satb_global);
+}
+
+// Trace until `budget` bytes of objects have been scanned (0: no limit).
+// Returns 1 when the worklist is empty.
+static int gc_incr_trace(size_t budget) {
+    size_t done = 0;
+    while (gc_worklist_count > 0) {
+        void *o = gc_worklist[--gc_worklist_count];
+        gc_trace_object(o);
+        done += sizeof(GCHeader) + gc_get_header(o)->size;
+        if (budget && done >= budget) break;
+    }
+    return gc_worklist_count == 0;
+}
+
+// PLUTO_GC_VERIFY at the end of marking: no marked object may reference an
+// unmarked one. Under invariant S such an edge can only come from a missed
+// barrier. Slots resolve by exact start, so integers that fall inside an
+// object raise no false alarms.
+static void gc_incr_check_slot(GCHeader *parent, long word, const char *where) {
+    GCHeader *c = gc_lookup((void *)word, 0);
+    if (!c || c->mark) return;
+    fprintf(stderr, "pluto: PLUTO_GC_VERIFY: incremental marking missed an object: marked %p "
+            "(tag %d, size %u) %s holds unmarked %p (tag %d, size %u)\n",
+            (void *)(parent + 1), parent->type_tag, parent->size, where,
+            (void *)(c + 1), c->type_tag, c->size);
+    abort();
+}
+
+static void gc_incr_check(void) {
+    for (size_t k = 0; k < gc_small_block_count; k++) {
+        GCBlock *b = gc_small_blocks[k];
+        if (b->kind != GC_BLOCK_SMALL) continue;
+        for (uint32_t i = 0; i < b->bump; i++) {
+            GCHeader *h = (GCHeader *)(b->base + (size_t)i * b->obj_size);
+            if (h->type_tag != GC_TAG_FREE && h->mark) gc_check_children(h, gc_incr_check_slot);
+        }
+    }
+    for (size_t k = 0; k < gc_large_count; k++) {
+        GCHeader *h = (GCHeader *)gc_large_blocks[k]->base;
+        if (h->mark) gc_check_children(h, gc_incr_check_slot);
+    }
+}
+
+#define GC_US(a, b) (((b).tv_sec - (a).tv_sec) * 1000000L + ((b).tv_nsec - (a).tv_nsec) / 1000L)
+
+// Marking is complete (worklist and logs empty, world stopped): turn the
+// barrier off and queue the lazy sweep.
+static void gc_incr_finish(void) {
+    if (gc_verify_enabled > 0) gc_incr_check();
+    __pluto_gc_barrier_mode = 0;
+    gc_incr_marking = 0;
+    (void)gc_sweep();   // queues small blocks; large objects are swept now
+    size_t freed = gc_bytes_allocated - gc_marked_bytes;
+    gc_after_sweep(freed);
+    gc_data_interval_count = 0;
+    gc_worklist_count = 0;
+    gc_cycle_count++;
+}
+
+// One stop-the-world step: shade the logs, trace a quantum, and finish the
+// cycle if that empties the worklist. `kind` labels the log line.
+static void gc_incr_step_at(struct timespec t0, const char *kind) {
+    gc_incr_drain_logs();
+    size_t budget = gc_torture_every > 0 ? 1 : GC_INCR_WORK_RATIO * GC_INCR_STEP_BYTES;
+    int finished = 0;
+    if (gc_incr_trace(budget)) {
+        do {
+            gc_incr_drain_logs();
+            gc_incr_trace(0);
+        } while (gc_worklist_count > 0);
+        gc_incr_finish();
+        finished = 1;
+    }
+    gc_incr_since_step = 0;
+    gc_incr_steps++;
+    if (gc_log_enabled) {
+        struct timespec t1;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long us = GC_US(t0, t1);
+        gc_incr_cycle_us += us;
+        if (us > gc_incr_cycle_max_us) gc_incr_cycle_max_us = us;
+        if (finished) {
+            fprintf(stderr, "gc: #%ld live=%zu next_threshold=%zu pause_us=%ld steps=%ld"
+                    " cycle_pause_us=%ld cycle_max_us=%ld kind=finish\n",
+                    gc_cycle_count, gc_bytes_allocated, gc_threshold, us, gc_incr_steps,
+                    gc_incr_cycle_us, gc_incr_cycle_max_us);
+        } else {
+            fprintf(stderr, "gc: incr pause_us=%ld left=%zu kind=%s\n", us, gc_worklist_count, kind);
+        }
+    }
+    gc_collecting = 0;
+}
+
+// Start a cycle (world stopped): take the root snapshot, turn the barrier
+// on, and do a first step. The previous cycle's sweep has normally been
+// finished by the allocator already (gc_sweep_some); finishing it here is a
+// no-op then.
+static void gc_incr_start(void) {
+    gc_collecting = 1;
+    gc_init_env();
+    struct timespec t0;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &t0);
+    gc_finish_lazy_sweep();
+    gc_marked_bytes = 0;
+    gc_build_data_intervals();
+    gc_worklist_count = 0;
+    gc_scan_roots();
+    gc_incr_marking = 1;
+    __pluto_gc_barrier_mode = 2;
+    gc_incr_steps = 0;
+    gc_incr_cycle_us = 0;
+    gc_incr_cycle_max_us = 0;
+    gc_incr_step_at(t0, "start");
+}
+
+static void gc_incr_step(void) {
+    gc_collecting = 1;
+    struct timespec t0;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &t0);
+    gc_incr_step_at(t0, "step");
+}
+#undef GC_US
+#else
+void __pluto_gc_log_deleted(long old) { (void)old; }
+#endif
+
+void __pluto_gc_collect(void) {
+#ifdef GC_INCREMENTAL
+    if (gc_incr_marking) {
+        // An explicit collection during a cycle completes that cycle.
+        gc_collecting = 1;
+        do {
+            gc_incr_drain_logs();
+            gc_incr_trace(0);
+        } while (gc_worklist_count > 0);
+        gc_incr_finish();
+        gc_collecting = 0;
+        return;
+    }
+#endif
+    gc_collecting = 1;
+    gc_init_env();
+    struct timespec gc_t0;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_t0);
+#if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
+    // Everyone is stopped: take over what each heap did without the lock.
+    for (size_t i = 0; i < gc_tlh_heap_count; i++) gc_tlh_report(gc_tlh_heaps[i]);
+#elif defined(GC_TLAB) && !defined(PLUTO_TEST_MODE)
+    for (size_t i = 0; i < gc_tlh_heap_count; i++) {
+        gc_bytes_allocated += gc_tlh_heaps[i]->unreported;
+        gc_tlh_heaps[i]->unreported = 0;
+    }
+#endif
+
+#if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
+    if (gc_verify_enabled > 0) gc_tlh_check_invariant();
+#endif
+    // Build the data-buffer interval table (objects need no per-cycle index:
+    // the page map resolves them directly).
+#ifdef GC_GENERATIONAL
+    gc_gen_major = gc_gen_barrier_off
+                   || gc_bytes_allocated > gc_gen_old_limit + GC_GEN_NURSERY;
+    if (gc_gen_major) {
+        gc_gen_protect_pass(0);   // unprotect everything
+        gc_gen_clear_marks();
+    }
+#endif
+#ifdef GC_LAZY_SWEEP
+    // Blocks still queued from the previous cycle carry its marks.
+    gc_finish_lazy_sweep();
+    gc_marked_bytes = 0;
+#endif
+    gc_build_data_intervals();
+    struct timespec gc_tb;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_tb);
+
+    // Reset worklist
+    gc_worklist_count = 0;
+#ifdef GC_GENERATIONAL
+    if (!gc_gen_major) gc_gen_scan_remembered();
+#endif
+
+    gc_scan_roots();
+
     // 5. Drain worklist (breadth-first trace)
 #if defined(GC_PARALLEL_MARK) && !defined(PLUTO_TEST_MODE)
     gc_pm_drain();
@@ -3036,37 +3398,9 @@ void __pluto_gc_collect(void) {
     struct timespec gc_ts;
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_ts);
 
-    gc_bytes_allocated -= freed_bytes;
-
-    // Survivor-aware threshold update (policy comment at gc_threshold's
-    // definition): grow the adaptive floor after a high-reclaim cycle, decay
-    // it after a retention-driven one; cap it by what this process's thread
-    // count justifies amortizing; then track the live set.
+    gc_after_sweep(freed_bytes);
     size_t live = gc_bytes_allocated;
-    size_t floor_cap = GC_FLOOR_BASE_CAP;
-    {
-        size_t nstacks = 0;
-#ifdef PLUTO_TEST_MODE
-        if (gc_fiber_stacks.enabled) {
-            for (int fi = 0; fi < gc_fiber_stacks.count; fi++) {
-                if (gc_fiber_stacks.stacks[fi].active) nstacks++;
-            }
-        }
-#else
-        nstacks = (size_t)gc_active_thread_count;
-#endif
-        floor_cap += nstacks * GC_FLOOR_PER_THREAD;
-        if (floor_cap > GC_FLOOR_MAX) floor_cap = GC_FLOOR_MAX;
-    }
-    if (freed_bytes * 2 >= gc_threshold) {
-        gc_adaptive_floor *= 2;
-    } else {
-        gc_adaptive_floor /= 2;
-    }
-    if (gc_adaptive_floor > floor_cap) gc_adaptive_floor = floor_cap;
-    if (gc_adaptive_floor < GC_MIN_THRESHOLD) gc_adaptive_floor = GC_MIN_THRESHOLD;
-    gc_threshold = live * 2;
-    if (gc_threshold < gc_adaptive_floor) gc_threshold = gc_adaptive_floor;
+    (void)live;
 #if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
     // Next global collection once the shared heap has grown by as much as
     // survived this one; private garbage is left to local collections.
