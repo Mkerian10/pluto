@@ -951,113 +951,115 @@ static void gc_sort_intervals(GCSortInterval *a, size_t n,
     qsort(a, n, sizeof(GCSortInterval), cmp);
 }
 
+static inline void gc_data_interval_add(void *start, void *end, void *owner) {
+    if (gc_data_interval_count == gc_data_interval_cap) {
+        size_t cap = gc_data_interval_cap ? gc_data_interval_cap * 2 : 1024;
+        GCDataInterval *grown =
+            (GCDataInterval *)realloc(gc_data_intervals, cap * sizeof(GCDataInterval));
+        if (!grown) {
+            fprintf(stderr, "pluto: out of memory building GC lookup table\n");
+            exit(1);
+        }
+        gc_data_intervals = grown;
+        gc_data_interval_cap = cap;
+    }
+    GCDataInterval *d = &gc_data_intervals[gc_data_interval_count++];
+    d->start = start;
+    d->end = end;
+    d->array_handle = owner;
+}
+
+// One walk of the object list builds everything the mark phase consults:
+// the object interval table, the data-buffer interval table (array/bytes/
+// map/set backing stores), the coarse heap bounds, and the gathered list
+// prefix of objects not yet in the live table. Buffers are grow-only, so the
+// previous cycle's capacity usually covers this one without reallocating.
 static void gc_build_intervals(void) {
-    // Count objects. The same walk gathers the not-yet-hashed list prefix
-    // (objects allocated since the last flush/sweep), so every object is in
-    // the live table before marking consults it — without a second walk.
-    size_t count = 0;
-    size_t data_buf_count = 0;
+    gc_interval_count = 0;
+    gc_data_interval_count = 0;
     size_t fresh = 0;
     int in_fresh_prefix = 1;
+    void *lo = (void *)~(size_t)0;
+    void *hi = NULL;
+
     for (GCHeader *h = gc_head; h; h = h->next) {
+        void *user = (char *)h + sizeof(GCHeader);
         if (h == gc_hashed_upto) in_fresh_prefix = 0;
-        if (in_fresh_prefix) gc_flush_buf_push(fresh++, (char *)h + sizeof(GCHeader));
-        count++;
-        if (h->type_tag == GC_TAG_ARRAY) data_buf_count++;
-        else if (h->type_tag == GC_TAG_BYTES) data_buf_count++;
-        else if (h->type_tag == GC_TAG_MAP) data_buf_count += 3;  // keys, vals, meta
-        else if (h->type_tag == GC_TAG_SET) data_buf_count += 2;  // keys, meta
+        if (in_fresh_prefix) gc_flush_buf_push(fresh++, user);
+
+        if (gc_interval_count == gc_interval_cap) {
+            size_t cap = gc_interval_cap ? gc_interval_cap * 2 : 1024;
+            GCInterval *grown = (GCInterval *)realloc(gc_intervals, cap * sizeof(GCInterval));
+            if (!grown) {
+                fprintf(stderr, "pluto: out of memory building GC lookup table\n");
+                exit(1);
+            }
+            gc_intervals = grown;
+            gc_interval_cap = cap;
+        }
+        GCInterval *iv = &gc_intervals[gc_interval_count++];
+        iv->start = user;
+        iv->end = (char *)user + h->size;
+        iv->header = h;
+        if (iv->start < lo) lo = iv->start;
+        if (iv->end > hi) hi = iv->end;
+
+        switch (h->type_tag) {
+        case GC_TAG_ARRAY:   // handle [len][cap][data_ptr], 8 bytes per element
+        case GC_TAG_BYTES: { // handle [len][cap][data_ptr], 1 byte per element
+            if (h->size < 24) break;
+            long *handle = (long *)user;
+            long cap = handle[1];
+            char *data = (char *)handle[2];
+            if (data && cap > 0) {
+                long elem = h->type_tag == GC_TAG_ARRAY ? 8 : 1;
+                gc_data_interval_add(data, data + cap * elem, user);
+            }
+            break;
+        }
+        case GC_TAG_MAP: {   // [count][cap][keys_ptr][vals_ptr][meta_ptr]
+            if (h->size < 40) break;
+            long *mh = (long *)user;
+            long cap = mh[1];
+            if (cap <= 0) break;
+            char *keys = (char *)mh[2], *vals = (char *)mh[3], *meta = (char *)mh[4];
+            if (keys) gc_data_interval_add(keys, keys + cap * 8, user);
+            if (vals) gc_data_interval_add(vals, vals + cap * 8, user);
+            if (meta) gc_data_interval_add(meta, meta + cap, user);
+            break;
+        }
+        case GC_TAG_SET: {   // [count][cap][keys_ptr][meta_ptr]
+            if (h->size < 32) break;
+            long *sh = (long *)user;
+            long cap = sh[1];
+            if (cap <= 0) break;
+            char *keys = (char *)sh[2], *meta = (char *)sh[3];
+            if (keys) gc_data_interval_add(keys, keys + cap * 8, user);
+            if (meta) gc_data_interval_add(meta, meta + cap, user);
+            break;
+        }
+        default:
+            break;
+        }
     }
     gc_hashed_upto = gc_head;
     gc_live_insert_gathered(fresh);
 
-    if (count > gc_interval_cap) {
-        gc_intervals = (GCInterval *)realloc(gc_intervals, count * sizeof(GCInterval));
-        gc_interval_cap = count;
-    }
-    gc_interval_count = count;
-    if (data_buf_count > gc_data_interval_cap) {
-        gc_data_intervals =
-            (GCDataInterval *)realloc(gc_data_intervals, data_buf_count * sizeof(GCDataInterval));
-        gc_data_interval_cap = data_buf_count;
-    }
-    gc_data_interval_count = 0;
-
-
-    size_t i = 0;
-    for (GCHeader *h = gc_head; h; h = h->next) {
-        void *user = (char *)h + sizeof(GCHeader);
-        gc_intervals[i].start = user;
-        gc_intervals[i].end = (char *)user + h->size;
-        gc_intervals[i].header = h;
-        i++;
-
-        if (h->type_tag == GC_TAG_ARRAY && h->size >= 24) {
-            long *handle = (long *)user;
-            long cap = handle[1];
-            void *data_ptr = (void *)handle[2];
-            if (data_ptr && cap > 0) {
-                gc_data_intervals[gc_data_interval_count].start = data_ptr;
-                gc_data_intervals[gc_data_interval_count].end = (char *)data_ptr + cap * 8;
-                gc_data_intervals[gc_data_interval_count].array_handle = user;
-                gc_data_interval_count++;
-            }
-        }
-        // Bytes handle: [len][cap][data_ptr]
-        if (h->type_tag == GC_TAG_BYTES && h->size >= 24) {
-            long *handle = (long *)user;
-            long cap = handle[1];
-            void *data_ptr = (void *)handle[2];
-            if (data_ptr && cap > 0) {
-                gc_data_intervals[gc_data_interval_count].start = data_ptr;
-                gc_data_intervals[gc_data_interval_count].end = (char *)data_ptr + cap * 1;
-                gc_data_intervals[gc_data_interval_count].array_handle = user;
-                gc_data_interval_count++;
-            }
-        }
-        // Map handle: [count][cap][keys_ptr][vals_ptr][meta_ptr]
-        if (h->type_tag == GC_TAG_MAP && h->size >= 40) {
-            long *mh = (long *)user;
-            long cap = mh[1];
-            if (cap > 0) {
-                void *keys = (void *)mh[2]; void *vals = (void *)mh[3]; void *meta = (void *)mh[4];
-                if (keys) { gc_data_intervals[gc_data_interval_count].start = keys; gc_data_intervals[gc_data_interval_count].end = (char *)keys + cap * 8; gc_data_intervals[gc_data_interval_count].array_handle = user; gc_data_interval_count++; }
-                if (vals) { gc_data_intervals[gc_data_interval_count].start = vals; gc_data_intervals[gc_data_interval_count].end = (char *)vals + cap * 8; gc_data_intervals[gc_data_interval_count].array_handle = user; gc_data_interval_count++; }
-                if (meta) { gc_data_intervals[gc_data_interval_count].start = meta; gc_data_intervals[gc_data_interval_count].end = (char *)meta + cap; gc_data_intervals[gc_data_interval_count].array_handle = user; gc_data_interval_count++; }
-            }
-        }
-        // Set handle: [count][cap][keys_ptr][meta_ptr]
-        if (h->type_tag == GC_TAG_SET && h->size >= 32) {
-            long *sh = (long *)user;
-            long cap = sh[1];
-            if (cap > 0) {
-                void *keys = (void *)sh[2]; void *meta = (void *)sh[3];
-                if (keys) { gc_data_intervals[gc_data_interval_count].start = keys; gc_data_intervals[gc_data_interval_count].end = (char *)keys + cap * 8; gc_data_intervals[gc_data_interval_count].array_handle = user; gc_data_interval_count++; }
-                if (meta) { gc_data_intervals[gc_data_interval_count].start = meta; gc_data_intervals[gc_data_interval_count].end = (char *)meta + cap; gc_data_intervals[gc_data_interval_count].array_handle = user; gc_data_interval_count++; }
-            }
-        }
+    for (size_t k = 0; k < gc_data_interval_count; k++) {
+        if (gc_data_intervals[k].start < lo) lo = gc_data_intervals[k].start;
+        if (gc_data_intervals[k].end > hi) hi = gc_data_intervals[k].end;
     }
 
     gc_sort_intervals((GCSortInterval *)gc_intervals, gc_interval_count, gc_interval_cmp);
     gc_sort_intervals((GCSortInterval *)gc_data_intervals, gc_data_interval_count,
                       gc_data_interval_cmp);
 
-    // Coarse bounds over objects + data buffers for the fast-reject path in
-    // gc_find_object / gc_find_array_owner. One sequential O(n) pass.
+    // Coarse bounds for the fast-reject path in gc_find_object /
+    // gc_find_array_owner.
     if (gc_interval_count == 0 && gc_data_interval_count == 0) {
         gc_heap_min = NULL;
         gc_heap_max = NULL;
     } else {
-        void *lo = (void *)~(size_t)0;
-        void *hi = NULL;
-        for (size_t k = 0; k < gc_interval_count; k++) {
-            if (gc_intervals[k].start < lo) lo = gc_intervals[k].start;
-            if (gc_intervals[k].end > hi) hi = gc_intervals[k].end;
-        }
-        for (size_t k = 0; k < gc_data_interval_count; k++) {
-            if (gc_data_intervals[k].start < lo) lo = gc_data_intervals[k].start;
-            if (gc_data_intervals[k].end > hi) hi = gc_data_intervals[k].end;
-        }
         gc_heap_min = lo;
         gc_heap_max = hi;
     }
@@ -1225,9 +1227,9 @@ static void gc_trace_object(void *user_ptr) {
             void *candidate = (void *)slots[i];
             // Check GC objects
             GCHeader *child = gc_find_object(candidate);
-            if (child && !child->mark) {
-                void *child_user = (char *)child + sizeof(GCHeader);
-                gc_mark_object(child_user);
+            if (child) {
+                if (!child->mark) gc_mark_object((char *)child + sizeof(GCHeader));
+                continue;  // disjoint from data buffers (see gc_mark_candidate)
             }
             // Check array data buffers
             void *arr_owner = gc_find_array_owner(candidate);
@@ -1246,9 +1248,11 @@ static void gc_trace_object(void *user_ptr) {
 static void gc_mark_candidate(void *candidate) {
     // Check if candidate points into a GC object
     GCHeader *h = gc_find_object(candidate);
-    if (h && !h->mark) {
-        void *user = (char *)h + sizeof(GCHeader);
-        gc_mark_object(user);
+    if (h) {
+        if (!h->mark) gc_mark_object((char *)h + sizeof(GCHeader));
+        // Object user-regions and data buffers are disjoint allocations, so a
+        // candidate inside an object cannot also be inside a data buffer.
+        return;
     }
     // Check if candidate points into an array data buffer
     void *arr_owner = gc_find_array_owner(candidate);
