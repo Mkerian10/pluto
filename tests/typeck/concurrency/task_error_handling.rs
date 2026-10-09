@@ -93,8 +93,8 @@ let x=t.get()}}"#, "call to fallible method 'get' must be handled with ! or catc
 fn task_error_match() { compile_should_fail_with(r#"error E{}
 enum Opt{Some{v:int}None}
 fn task()int{raise E{}}
-fn main(){match Opt.Some{v:1}{Opt.Some{v}{let t=spawn task()
-let x=t.get()}Opt.None{}}}"#, "expected ., found :"); }
+fn main(){match (Opt.Some{v:1}){Opt.Some{v}{let t=spawn task()
+let x=t.get()}Opt.None{}}}"#, "must be handled"); }
 
 // Task with generic error
 #[test]

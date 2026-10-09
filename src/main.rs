@@ -336,7 +336,10 @@ fn main() {
                 }
             }
 
-            let tmp = std::env::temp_dir().join("pluto_run");
+            // Use a per-invocation name so concurrent `pluto run` processes
+            // don't clobber each other's binary (and derived `.o`) in the
+            // shared temp dir (issue #508).
+            let tmp = std::env::temp_dir().join(format!("pluto_run_{}", uuid::Uuid::new_v4()));
 
             let coverage_map = if coverage {
                 match pluto::compile_file_with_coverage(&file, &tmp, stdlib) {
