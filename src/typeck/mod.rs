@@ -13,6 +13,7 @@ pub(crate) mod builtins;
 pub(crate) mod errors;
 mod idempotency;
 mod linearity;
+pub(crate) mod blocking;
 pub(crate) mod shrink;
 pub(crate) mod requires;
 pub(crate) mod arith_fit;
@@ -219,6 +220,10 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // reach monomorphization, reflection, or marshaling.
     templates::sweep_skolems(&mut env);
     crate::concurrency::infer_synchronization(program, &mut env);
+    // Blocking-effect inference (#369 §6): compute which functions can block
+    // the OS thread, transitively. Compute-only for now — no green-task
+    // construct consumes it yet, so it cannot change compilation behavior.
+    blocking::infer_blocking_effects(program, &mut env);
     // Objects serialize their methods unconditionally (rfc-objects.md):
     // sharing an entity is safe BECAUSE it processes one message at a time,
     // not because an analysis proved no concurrent access.

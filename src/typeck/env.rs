@@ -214,6 +214,13 @@ pub struct TypeEnv {
     pub di_zero_closure: Vec<String>,
     /// DI singletons that need rwlock synchronization (accessed concurrently from spawn + main)
     pub synchronized_singletons: HashSet<String>,
+    /// Functions/methods (mangled names) that can block the OS thread,
+    /// transitively — they reach a blocking leaf (channel recv/send, task
+    /// join, or a blocking C intrinsic: fs/socket/stdin/sleep). Computed by
+    /// `crate::typeck::blocking::infer_blocking_effects`. The enabling
+    /// analysis for a green-task boundary check (#369) and a safe CPU-only
+    /// spawn pool. Currently computed but not yet enforced.
+    pub blocking_fns: HashSet<String>,
     /// Per-function error sets: maps function name to set of error type names it can raise.
     /// Populated by the error inference pass. Also holds per-closure nodes
     /// keyed as `<closure@span>` for closures bound to local variables.
@@ -572,6 +579,7 @@ impl TypeEnv {
             di_order: Vec::new(),
             di_zero_closure: Vec::new(),
             synchronized_singletons: HashSet::new(),
+            blocking_fns: HashSet::new(),
             fn_errors: HashMap::new(),
             closure_call_sites: HashMap::new(),
             fallible_value_calls: HashSet::new(),
