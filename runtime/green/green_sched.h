@@ -16,3 +16,13 @@ void green_run(void);
 // Number of green tasks created (for test assertions).
 long green_task_count(void);
 #endif
+
+// ── Park / wake (Phase 3): cooperative blocking ──────────────────────────────
+// green_park() suspends the running task WITHOUT re-queueing it (unlike
+// green_yield) and returns to the scheduler; the task resumes only when some
+// other task passes its handle to green_wake(). This is how a green task
+// blocks on a channel/event without consuming a scheduler slot while idle.
+void green_park(void);
+void green_wake(GTask *t);
+GTask *green_current(void);
+long green_live(void);   // tasks created but not yet finished (incl. parked)

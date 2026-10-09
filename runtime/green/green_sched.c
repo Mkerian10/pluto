@@ -99,3 +99,12 @@ void green_run(void) {
 }
 
 long green_task_count(void) { return g_sched.created; }
+
+void green_park(void) {
+    GTask *t = g_sched.current;
+    // NOT re-queued: the waker must green_wake(t) to make it runnable again.
+    pluto_ctx_swap(&t->sp, g_sched.sched_sp);
+}
+void green_wake(GTask *t) { rq_push(t); }
+GTask *green_current(void) { return g_sched.current; }
+long green_live(void) { return g_sched.live; }
