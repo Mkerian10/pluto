@@ -12,8 +12,16 @@
 //──────────────────────────────────────────────────────────────────────────────
 
 #include "builtins.h"
+#if defined(GC_HYBRID) && !defined(GC_TLH)
+#define GC_TLH 1
+#endif
 #if defined(GC_TLH) && !defined(GC_TLAB)
 #define GC_TLAB 1
+#endif
+// Snapshot-at-the-beginning machinery (deletion logs, budgeted tracing,
+// chunked container scans), shared by the incremental and hybrid backends.
+#if defined(GC_INCREMENTAL) || (defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE))
+#define GC_SATB 1
 #endif
 #include <sys/mman.h>
 
@@ -115,6 +123,17 @@ typedef struct GCMarkCtx {
 static GCMarkCtx gc_global_ctx;
 static __thread GCMarkCtx *gc_ctx = &gc_global_ctx;
 
+// The mark byte. Every collector marks with bit 0, except the hybrid
+// backend's global (shared-heap) cycle, which marks with bit 1 so it can run
+// while thread-local collections keep using bit 0; hybrid also keeps a
+// tenure age in bits 2-3. A trace sets and tests gc_mark_bit, the bit of the
+// collection the running thread is performing.
+#define GC_MARK_LOCAL  1
+#define GC_MARK_GLOBAL 2
+#define GC_MARK_ROOT   0x10   // hybrid: referenced straight from a root this local collection
+static __thread uint8_t gc_mark_bit = GC_MARK_LOCAL;
+#define GC_MARKED(h) ((h)->mark & gc_mark_bit)
+
 #if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
 // Shared-heap growth since the last global collection (promotions, shared
 // allocations, retired thread heaps), under gc_mutex. Global collections
@@ -146,7 +165,7 @@ int __pluto_gc_barrier_mode = 1;
 int __pluto_gc_barrier_mode = 0;
 #endif
 
-#ifdef GC_INCREMENTAL
+#ifdef GC_SATB
 // Snapshot-at-the-beginning log: references overwritten in or removed from
 // heap objects while a cycle is marking. Each thread appends to its own
 // buffer without locking; the collector drains every buffer at each step,
@@ -154,7 +173,16 @@ int __pluto_gc_barrier_mode = 0;
 typedef struct { long *v; size_t n, cap; } GCSatbBuf;
 static __thread GCSatbBuf gc_satb_local;
 static GCSatbBuf gc_satb_global;   // buffers of exited threads, under gc_mutex
-static int gc_incr_marking = 0;
+static int gc_incr_marking = 0;   // a snapshot-at-the-beginning cycle is marking
+#ifdef GC_HYBRID
+static size_t gc_hyb_marked_shared = 0;   // shared bytes the running global cycle marked
+#endif
+static __thread int gc_satb_tracing = 0;   // this thread is doing that cycle's tracing
+#ifdef GC_HYBRID
+#define GC_SATB_BIT GC_MARK_GLOBAL
+#else
+#define GC_SATB_BIT GC_MARK_LOCAL
+#endif
 #define GC_INCR_STEP_BYTES ((size_t)256 << 10)   // allocation between steps
 #define GC_INCR_WORK_RATIO 4                     // bytes traced per byte allocated
 #define GC_INCR_SWEEP_BATCH 64                   // leftover blocks swept per allocation
@@ -534,10 +562,12 @@ static void *gc_obj_alloc(size_t user_size, uint8_t type_tag, uint16_t field_cou
 #endif
     if (gc_is_container_tag(type_tag)) b->has_containers = 1;
     gc_bytes_allocated += slot_bytes;
-#ifdef GC_INCREMENTAL
+#ifdef GC_SATB
     if (gc_incr_marking) {   // allocated black: survives the cycle in progress
-        h->mark = 1;
+        h->mark |= GC_SATB_BIT;
+#ifdef GC_LAZY_SWEEP
         gc_marked_bytes += slot_bytes;
+#endif
     }
 #endif
     return (char *)h + sizeof(GCHeader);
@@ -576,6 +606,13 @@ typedef struct GCThreadHeap {
                                // under gc_mutex
     long torture_count;
     long local_count;
+#endif
+#if defined(GC_HYBRID)
+    int marks_valid;           // a global cycle started and this heap has not
+                               // yet applied its result (owner sweep pending)
+    int shared_sweep_pending;  // the cycle finished: free dead shared objects
+    GCHeader **tenure;         // survivors old enough to promote after a sweep
+    size_t ntenure, tenure_cap;
 #endif
 } GCThreadHeap;
 
@@ -862,7 +899,7 @@ typedef struct {
     void *stack_cur;
     jmp_buf park_regs;
     int active;
-#ifdef GC_INCREMENTAL
+#ifdef GC_SATB
     GCSatbBuf *satb;   // the thread's deletion log, drained at each step
 #endif
 } GCThreadStack;
@@ -1042,7 +1079,7 @@ void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
     slot->stack_hi = stack_hi;
     slot->stack_cur = NULL;   // no park record yet: scan full range if needed
     slot->active = 1;
-#ifdef GC_INCREMENTAL
+#ifdef GC_SATB
     slot->satb = &gc_satb_local;
 #endif
     gc_active_thread_count++;
@@ -1074,7 +1111,16 @@ void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
 
 #if defined(GC_TLAB)
 // Under gc_mutex: hand every block of H to the shared heap and drop H.
+#if defined(GC_HYBRID)
+static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked);
+#endif
 static void gc_tlh_retire(GCThreadHeap *H) {
+#if defined(GC_HYBRID)
+    // Blocks passing to the shared heap must not carry a finished cycle's
+    // marks into the next one (a stale mark would hide an object from it).
+    if (H->shared_sweep_pending) H->local_freed += gc_tlh_local_sweep(H, 0);
+    free(H->tenure);
+#endif
 #if defined(GC_TLH)
     gc_tlh_report(H);
 #else
@@ -1136,7 +1182,7 @@ void __pluto_gc_deregister_thread_stack(void) {
     }
 #endif
     if (gc_my_slot) {
-#ifdef GC_INCREMENTAL
+#ifdef GC_SATB
         gc_satb_move(&gc_satb_global, &gc_satb_local);   // nothing logged is lost
         gc_my_slot->satb = NULL;
 #endif
@@ -1195,7 +1241,7 @@ void __pluto_gc_after_fork(int is_child) {
         for (int i = 0; i < gc_thread_stack_count; i++) {
             if (gc_thread_stacks[i]->active
                 && !pthread_equal(gc_thread_stacks[i]->thread, self)) {
-#ifdef GC_INCREMENTAL
+#ifdef GC_SATB
                 if (gc_thread_stacks[i]->satb) gc_satb_move(&gc_satb_global, gc_thread_stacks[i]->satb);
                 gc_thread_stacks[i]->satb = NULL;
 #endif
@@ -1401,6 +1447,11 @@ static void gc_stw_resume_threads(int stopped_count) {
 
 #if defined(GC_TLH)
 static void gc_tlh_local_collect(GCThreadHeap *H);
+#if defined(GC_HYBRID)
+static void gc_hyb_start(int complete);
+static void gc_hyb_step(int complete);
+static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked);
+#endif
 
 // Under gc_mutex. A global collection is due when the shared heap has grown
 // past its threshold — or, as a backstop against accounting drift, when the
@@ -1430,13 +1481,30 @@ static void *gc_tlh_alloc(GCThreadHeap *H, size_t user_size, uint8_t type_tag,
         gc_tlh_local_collect(H);   // u (if any) stays rooted from this frame
         if (!u) u = gc_tlh_alloc_fast(H, user_size, type_tag, field_count);
     }
+#if defined(GC_HYBRID)
+    // Apply a finished global cycle's result to this heap (lock-free).
+    if (H->shared_sweep_pending) H->local_freed += gc_tlh_local_sweep(H, 0);
+#endif
     gc_heap_lock();
     gc_tlh_report(H);
+#if defined(GC_HYBRID)
+    // Every checkpoint while a global cycle marks pays for one step.
+    if (gc_stack_bottom && gc_incr_marking) {
+        int stopped = gc_stw_stop_threads();
+        gc_hyb_step(0);
+        gc_stw_resume_threads(stopped);
+    } else if (gc_stack_bottom && (global_due || gc_tlh_global_due())) {
+        int stopped = gc_stw_stop_threads();
+        gc_hyb_start(0);
+        gc_stw_resume_threads(stopped);
+    }
+#else
     if (gc_stack_bottom && (global_due || gc_tlh_global_due())) {
         int stopped = gc_stw_stop_threads();
         __pluto_gc_collect();
         gc_stw_resume_threads(stopped);
     }
+#endif
     if (!u) u = gc_tlh_alloc_slow(H, user_size, type_tag, field_count);
     pthread_mutex_unlock(&gc_mutex);
     return u;
@@ -1933,22 +2001,28 @@ static void gc_mark_object(void *user_ptr) {
         return;
     }
 #endif
-    if (h->mark) return;
+    if (GC_MARKED(h)) return;
 #if defined(GC_PARALLEL_MARK) && !defined(PLUTO_TEST_MODE)
     if (gc_pm_local) {
-        if (__atomic_exchange_n(&h->mark, 1, __ATOMIC_RELAXED)) return;   // lost the race
+        if (__atomic_fetch_or(&h->mark, gc_mark_bit, __ATOMIC_RELAXED) & gc_mark_bit) return;   // lost the race
         gc_pm_push(gc_pm_local, user_ptr);
         return;
     }
 #endif
-    h->mark = 1;
+    h->mark |= gc_mark_bit;
 #ifdef GC_LAZY_SWEEP
     gc_marked_bytes += gc_slot_bytes(h);
+#endif
+#if defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE)
+    if (gc_mark_bit == GC_MARK_GLOBAL && h->next == GC_SHARED_TAG) {
+        GCBlock *mb = gc_pagemap_get((uintptr_t)h);
+        if (mb) gc_hyb_marked_shared += mb->obj_size;
+    }
 #endif
     gc_worklist_push(user_ptr);
 }
 
-#ifdef GC_INCREMENTAL
+#ifdef GC_SATB
 // Large containers are scanned GC_INCR_CHUNK slots at a time while marking
 // incrementally, so no single step pays for a whole million-element array.
 // A continuation (container, next slot) waits on gc_conts; each chunk
@@ -2009,8 +2083,8 @@ static long gc_scan_container_chunk(void *user_ptr, long from) {
 
 static void gc_trace_object(void *user_ptr) {
     GCHeader *h = gc_get_header(user_ptr);
-#ifdef GC_INCREMENTAL
-    if (gc_incr_marking && (h->type_tag == GC_TAG_ARRAY || h->type_tag == GC_TAG_MAP
+#ifdef GC_SATB
+    if (gc_satb_tracing && (h->type_tag == GC_TAG_ARRAY || h->type_tag == GC_TAG_MAP
                             || h->type_tag == GC_TAG_SET)) {
         gc_scan_container_chunk(user_ptr, 0);
         return;
@@ -2030,7 +2104,7 @@ static void gc_trace_object(void *user_ptr) {
         for (long i = 0; i < len; i++) {
             void *candidate = (void *)data[i];
             GCHeader *child = gc_find_object(candidate);
-            if (child && !child->mark) {
+            if (child && !GC_MARKED(child)) {
                 void *child_user = (char *)child + sizeof(GCHeader);
                 gc_mark_object(child_user);
             }
@@ -2042,7 +2116,7 @@ static void gc_trace_object(void *user_ptr) {
         long *slots = (long *)user_ptr;
         void *data_ptr = (void *)slots[0];
         GCHeader *child = gc_find_object(data_ptr);
-        if (child && !child->mark) {
+        if (child && !GC_MARKED(child)) {
             void *child_user = (char *)child + sizeof(GCHeader);
             gc_mark_object(child_user);
         }
@@ -2058,9 +2132,9 @@ static void gc_trace_object(void *user_ptr) {
             if (meta[i] >= 0x80) {
                 void *k = (void *)keys[i]; void *v = (void *)vals[i];
                 GCHeader *kh = gc_find_object(k);
-                if (kh && !kh->mark) gc_mark_object((char *)kh + sizeof(GCHeader));
+                if (kh && !GC_MARKED(kh)) gc_mark_object((char *)kh + sizeof(GCHeader));
                 GCHeader *vh = gc_find_object(v);
-                if (vh && !vh->mark) gc_mark_object((char *)vh + sizeof(GCHeader));
+                if (vh && !GC_MARKED(vh)) gc_mark_object((char *)vh + sizeof(GCHeader));
             }
         }
         (void)count;
@@ -2076,7 +2150,7 @@ static void gc_trace_object(void *user_ptr) {
             if (meta[i] >= 0x80) {
                 void *k = (void *)keys[i];
                 GCHeader *kh = gc_find_object(k);
-                if (kh && !kh->mark) gc_mark_object((char *)kh + sizeof(GCHeader));
+                if (kh && !GC_MARKED(kh)) gc_mark_object((char *)kh + sizeof(GCHeader));
             }
         }
         (void)count;
@@ -2087,7 +2161,7 @@ static void gc_trace_object(void *user_ptr) {
         long *slice = (long *)user_ptr;
         void *backing = (void *)slice[0];
         GCHeader *child = gc_find_object(backing);
-        if (child && !child->mark) {
+        if (child && !GC_MARKED(child)) {
             gc_mark_object((char *)child + sizeof(GCHeader));
         }
         break;
@@ -2104,7 +2178,7 @@ static void gc_trace_object(void *user_ptr) {
             long idx = (head + i) % capacity;
             void *candidate = (void *)buf[idx];
             GCHeader *child = gc_find_object(candidate);
-            if (child && !child->mark) {
+            if (child && !GC_MARKED(child)) {
                 gc_mark_object((char *)child + sizeof(GCHeader));
             }
         }
@@ -2120,14 +2194,14 @@ static void gc_trace_object(void *user_ptr) {
             // Check GC objects
             GCHeader *child = gc_find_object(candidate);
             if (child) {
-                if (!child->mark) gc_mark_object((char *)child + sizeof(GCHeader));
+                if (!GC_MARKED(child)) gc_mark_object((char *)child + sizeof(GCHeader));
                 continue;  // disjoint from data buffers (see gc_mark_candidate)
             }
             // Check array data buffers
             void *arr_owner = gc_find_array_owner(candidate);
             if (arr_owner) {
                 GCHeader *arr_h = gc_get_header(arr_owner);
-                if (!arr_h->mark) {
+                if (!GC_MARKED(arr_h)) {
                     gc_mark_object(arr_owner);
                 }
             }
@@ -2318,6 +2392,14 @@ static void gc_tlh_promote_visit(GCHeader *h) {
     if (!b || b->owner != H || h->next == GC_SHARED_TAG) return;
     h->next = GC_SHARED_TAG;
     H->promoted_bytes += b->kind == GC_BLOCK_LARGE ? b->obj_size : b->obj_size;
+#if defined(GC_HYBRID)
+    // A global cycle judges shared objects. While one marks, a newly shared
+    // object is logged, so the next step traces it — marking it black here
+    // would skip the shared objects only it reaches. Once the cycle is done
+    // but this heap has not applied the result, it is simply live.
+    if (gc_incr_marking) gc_satb_push(&gc_satb_local, (long)(h + 1));
+    else if (H->marks_valid) h->mark |= GC_MARK_GLOBAL;
+#endif
     gc_worklist_push((char *)h + sizeof(GCHeader));
 }
 
@@ -2380,7 +2462,7 @@ static void gc_mark_candidate(void *candidate) {
     // Check if candidate points into a GC object
     GCHeader *h = gc_find_object(candidate);
     if (h) {
-        if (!h->mark) gc_mark_object((char *)h + sizeof(GCHeader));
+        if (!GC_MARKED(h)) gc_mark_object((char *)h + sizeof(GCHeader));
         // Object user-regions and data buffers are disjoint allocations, so a
         // candidate inside an object cannot also be inside a data buffer.
         return;
@@ -2389,7 +2471,7 @@ static void gc_mark_candidate(void *candidate) {
     void *arr_owner = gc_find_array_owner(candidate);
     if (arr_owner) {
         GCHeader *arr_h = gc_get_header(arr_owner);
-        if (!arr_h->mark) {
+        if (!GC_MARKED(arr_h)) {
             gc_mark_object(arr_owner);
         }
     }
@@ -2474,8 +2556,8 @@ static size_t gc_sweep_block(GCBlock *b) {
     for (uint32_t i = 0; i < b->bump; i++) {
         GCHeader *h = (GCHeader *)(b->base + (size_t)i * osz);
         if (h->type_tag != GC_TAG_FREE) {
-            if (h->mark) {
-                h->mark = 0;
+            if (h->mark & GC_MARK_LOCAL) {
+                h->mark &= (uint8_t)~GC_MARK_LOCAL;
                 live++;
                 if (gc_is_container_tag(h->type_tag)) containers = 1;
 #if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
@@ -2526,8 +2608,8 @@ static size_t gc_sweep_large(void) {
     for (size_t k = 0; k < gc_large_count;) {
         GCBlock *b = gc_large_blocks[k];
         GCHeader *h = (GCHeader *)b->base;
-        if (h->mark) {
-            h->mark = 0;
+        if (h->mark & GC_MARK_LOCAL) {
+            h->mark &= (uint8_t)~GC_MARK_LOCAL;
 #if defined(GC_TLAB) && !defined(PLUTO_TEST_MODE)
             if (b->owner) gc_tlh_own(b->owner, b);
 #endif
@@ -2589,24 +2671,83 @@ static void gc_tlh_build_local_intervals(GCThreadHeap *H) {
     gc_finish_data_intervals();
 }
 
-static size_t gc_tlh_local_sweep(GCThreadHeap *H) {
+#if defined(GC_HYBRID)
+#define GC_HYB_TENURE_AGE   2                    // local collections survived before promotion
+#define GC_HYB_PRIVATE_CAP  ((size_t)8 << 20)    // tenure everything past this private live size
+
+static void gc_hyb_tenure_push(GCThreadHeap *H, GCHeader *h) {
+    if (H->ntenure == H->tenure_cap) {
+        size_t cap = H->tenure_cap ? H->tenure_cap * 2 : 256;
+        GCHeader **grown = (GCHeader **)realloc(H->tenure, cap * sizeof(GCHeader *));
+        if (!grown) gc_oom("GC tenure list");
+        H->tenure = grown;
+        H->tenure_cap = cap;
+    }
+    H->tenure[H->ntenure++] = h;
+}
+#endif
+
+// Sweep verdict for one allocated object of H: 1 keeps it. With
+// private_marked, a local mark has just run and private objects without
+// the local mark are dead; without it (an owner sweep after a global cycle)
+// private objects are all kept. Under hybrid, shared objects are judged by
+// the last global cycle when its result is pending, a private object a
+// running global cycle has marked is kept (it may be on that cycle's
+// worklist), and locally marked survivors age toward tenure.
+#if defined(GC_HYBRID)
+static __thread int gc_hyb_tenure_all;   // this sweep promotes every unpinned survivor
+#endif
+
+static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, size_t osz,
+                              size_t *live_private) {
+    if (h->next == GC_SHARED_TAG) {
+#if defined(GC_HYBRID)
+        if (H->shared_sweep_pending) {
+            if (!(h->mark & GC_MARK_GLOBAL)) return 0;
+            h->mark &= (uint8_t)~GC_MARK_GLOBAL;
+        }
+#endif
+        return 1;
+    }
+    int local = !private_marked || (h->mark & GC_MARK_LOCAL);
+#if defined(GC_HYBRID)
+    int held = gc_incr_marking && (h->mark & GC_MARK_GLOBAL);
+    if (!local && !held) return 0;
+    if (private_marked && (h->mark & GC_MARK_LOCAL)) {
+        // An object referenced straight from a root may be half-built: code
+        // (generated or runtime) can allocate an object, run more code that
+        // allocates, and only then initialize its fields with plain stores.
+        // Promoting it then would let those stores break invariant I, so
+        // root-referenced objects are never tenured; their contents are.
+        unsigned age = (h->mark >> 2) & 3;
+        if (age < 3) age++;
+        int pinned = h->mark & GC_MARK_ROOT;
+        h->mark = (uint8_t)((h->mark & 3) | (age << 2));
+        if (!pinned && (age >= GC_HYB_TENURE_AGE || gc_hyb_tenure_all)) gc_hyb_tenure_push(H, h);
+    }
+    if (H->shared_sweep_pending) h->mark &= (uint8_t)~GC_MARK_GLOBAL;
+#else
+    if (!local) return 0;
+#endif
+    h->mark &= (uint8_t)~GC_MARK_LOCAL;
+    *live_private += osz;
+    return 1;
+}
+
+static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
     for (size_t c = 0; c < GC_NUM_CLASSES; c++) H->avail[c] = NULL;
     size_t freed = 0, live_private = 0, kept = 0;
     for (size_t k = 0; k < H->nblocks; k++) {
         GCBlock *b = H->blocks[k];
         if (b->kind == GC_BLOCK_LARGE) {
             GCHeader *h = (GCHeader *)b->base;
-            if (h->next != GC_SHARED_TAG) {
-                if (!h->mark) {
-                    gc_finalize(h);
-                    h->type_tag = GC_TAG_FREE;   // invisible to lookups from now on
-                    freed += b->obj_size;
-                    b->next = H->dead_large;
-                    H->dead_large = b;
-                    continue;
-                }
-                h->mark = 0;
-                live_private += b->obj_size;
+            if (!gc_tlh_keep(H, h, private_marked, b->obj_size, &live_private)) {
+                gc_finalize(h);
+                h->type_tag = GC_TAG_FREE;   // invisible to lookups from now on
+                freed += b->obj_size;
+                b->next = H->dead_large;
+                H->dead_large = b;
+                continue;
             }
             H->blocks[kept++] = b;
             continue;
@@ -2618,11 +2759,7 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H) {
         for (uint32_t i = 0; i < b->bump; i++) {
             GCHeader *h = (GCHeader *)(b->base + (size_t)i * osz);
             if (h->type_tag != GC_TAG_FREE) {
-                if (h->next == GC_SHARED_TAG || h->mark) {
-                    if (h->next != GC_SHARED_TAG) {
-                        h->mark = 0;
-                        live_private += osz;
-                    }
+                if (gc_tlh_keep(H, h, private_marked, osz, &live_private)) {
                     live++;
                     if (gc_is_container_tag(h->type_tag)) containers = 1;
                     continue;
@@ -2657,9 +2794,52 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H) {
         }
     }
     H->nblocks = kept;
-    H->private_live = live_private;
+    if (private_marked) H->private_live = live_private;
+#if defined(GC_HYBRID)
+    if (H->shared_sweep_pending) {   // the last cycle's result is applied
+        H->shared_sweep_pending = 0;
+        H->marks_valid = 0;
+    }
+#endif
     return freed;
 }
+
+#if defined(GC_HYBRID)
+// Promote what the sweep found old enough (or, when the heap's private live
+// size passed the cap at the previous collection, every survivor that no
+// root references): long-lived data moves to the shared heap, where
+// the incremental global collector bounds its pauses, and local collections
+// stay proportional to young data. Invariant I makes this a generational
+// scheme with no remembered set: no shared (old) object points at a
+// private (young) one, and the promotion barrier is the write barrier.
+static void gc_hyb_tenure(GCThreadHeap *H) {
+    size_t before = H->promoted_bytes;
+    for (size_t i = 0; i < H->ntenure; i++) {
+        GCHeader *h = H->tenure[i];
+        if (h->type_tag != GC_TAG_FREE && h->next != GC_SHARED_TAG) {
+            __pluto_gc_promote_store((long)(h + 1));
+        }
+    }
+    H->ntenure = 0;
+    size_t moved = H->promoted_bytes - before;
+    H->private_live = moved < H->private_live ? H->private_live - moved : 0;
+}
+#endif
+
+#if defined(GC_HYBRID)
+// A local root: mark it as usual, and pin what it references directly
+// (an object, or the container whose backing store it points into).
+static void gc_tlh_local_root(void *candidate) {
+    GCHeader *h = gc_find_object(candidate);
+    if (!h) {
+        void *owner = gc_find_array_owner(candidate);
+        if (!owner) return;
+        h = gc_get_header(owner);
+    }
+    if (!GC_MARKED(h)) gc_mark_object((char *)h + sizeof(GCHeader));
+    h->mark |= GC_MARK_ROOT;
+}
+#endif
 
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((noinline))
@@ -2674,11 +2854,17 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     gc_worklist_count = 0;
     gc_tlh_build_local_intervals(H);
 
+#if defined(GC_HYBRID)
+    gc_hyb_tenure_all = H->private_live > GC_HYB_PRIVATE_CAP;
+#define GC_LOCAL_ROOT(c) gc_tlh_local_root((void *)(c))
+#else
+#define GC_LOCAL_ROOT(c) gc_mark_candidate((void *)(c))
+#endif
     jmp_buf regs;
     setjmp(regs);
     {
         long *p = (long *)&regs;
-        for (size_t i = 0; i < sizeof(regs) / (sizeof(long)); i++) gc_mark_candidate((void *)p[i]);
+        for (size_t i = 0; i < sizeof(regs) / (sizeof(long)); i++) GC_LOCAL_ROOT(p[i]);
     }
     {
         volatile long anchor = 0;
@@ -2687,18 +2873,22 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
         void *hi = gc_my_slot ? gc_my_slot->stack_hi : gc_stack_bottom;
         if (lo > hi) { void *t = lo; lo = hi; hi = t; }
         lo = (void *)(((size_t)lo) & ~7UL);
-        for (long *p = (long *)lo; (void *)p < hi; p++) gc_mark_candidate((void *)*p);
+        for (long *p = (long *)lo; (void *)p < hi; p++) GC_LOCAL_ROOT(*p);
     }
-    if (__pluto_current_error) gc_mark_candidate(__pluto_current_error);
-    if (__pluto_current_error_type) gc_mark_candidate(__pluto_current_error_type);
+    if (__pluto_current_error) GC_LOCAL_ROOT(__pluto_current_error);
+    if (__pluto_current_error_type) GC_LOCAL_ROOT(__pluto_current_error_type);
+#undef GC_LOCAL_ROOT
     while (gc_worklist_count > 0) gc_trace_object(gc_worklist[--gc_worklist_count]);
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &tm);
 
-    size_t freed = gc_tlh_local_sweep(H);
+    size_t freed = gc_tlh_local_sweep(H, 1);
     gc_data_interval_count = 0;   // promotion must not see stale intervals
     gc_worklist_count = 0;
     gc_local_heap = NULL;
     gc_ctx = saved;
+#if defined(GC_HYBRID)
+    gc_hyb_tenure(H);
+#endif
 
     H->local_freed += freed;
     H->local_alloc = 0;
@@ -2728,7 +2918,7 @@ static void gc_tlh_exit_reclaim(GCThreadHeap *H) {
     gc_init_env();
     struct timespec t0, t1;
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &t0);
-    size_t freed = gc_tlh_local_sweep(H);   // all marks are clear: every private object dies
+    size_t freed = gc_tlh_local_sweep(H, 1);   // no local marks: every private object dies
     H->local_freed += freed;
     if (gc_log_enabled) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -3201,39 +3391,7 @@ static void gc_scan_roots(void) {
 
 }
 
-#ifdef GC_INCREMENTAL
-// ── Incremental marking (--gc incr) ──────────────────────────────────────────
-//
-// Targets pauses that do not grow with the heap. A cycle marks in short
-// stop-the-world steps interleaved with allocation, then sweeps lazily.
-//
-// Invariant S (snapshot at the beginning): every object reachable when the
-// cycle starts, and every object allocated during it, is marked when the
-// cycle ends. The start step scans all roots once — stacks are never
-// rescanned. Objects allocated while marking are allocated black. While
-// marking, __pluto_gc_barrier_mode is 2 and every reference that is
-// overwritten in, or removed from, a heap object is logged first
-// (PLUTO_GC_STORE / PLUTO_GC_DELETE and the codegen barrier); each step
-// shades the logged references. That is enough: a reference the mutator
-// holds was reachable at the snapshot (so it is marked, unless the last heap
-// path to it was cut before marking reached it — and a cut is logged), or it
-// was allocated during the cycle (black). Initializing stores into fresh
-// objects overwrite nothing and need no barrier, which is why this design
-// suits Pluto's codegen; stores into containers and objects that do
-// overwrite are all funneled through the runtime mutators and the field-store
-// barrier.
-//
-// Pacing is by allocation, never by time (deterministic under pluto test):
-// every GC_INCR_STEP_BYTES allocated while marking runs one step, which
-// traces GC_INCR_WORK_RATIO times as many bytes as were allocated. A step's
-// pause is O(logged references + its trace quantum); the start step adds the
-// root scan, and the final step finishes the trace and queues the sweep.
-// PLUTO_GC_TORTURE=N steps every N allocations with a one-object quantum,
-// stretching each cycle over as many mutator interleavings as possible.
-static long gc_incr_steps = 0;          // pauses in the current cycle
-static long gc_incr_cycle_us = 0;       // their total
-static long gc_incr_cycle_max_us = 0;
-
+#ifdef GC_SATB
 void __pluto_gc_log_deleted(long old) {
     uintptr_t a = (uintptr_t)old;
     if (a < gc_heap_lo || a >= gc_heap_hi) return;   // not a heap reference
@@ -3274,6 +3432,41 @@ static int gc_incr_trace(size_t budget) {
     }
     return gc_worklist_count == 0 && gc_cont_count == 0;
 }
+
+#endif
+
+#ifdef GC_INCREMENTAL
+// ── Incremental marking (--gc incr) ──────────────────────────────────────────
+//
+// Targets pauses that do not grow with the heap. A cycle marks in short
+// stop-the-world steps interleaved with allocation, then sweeps lazily.
+//
+// Invariant S (snapshot at the beginning): every object reachable when the
+// cycle starts, and every object allocated during it, is marked when the
+// cycle ends. The start step scans all roots once — stacks are never
+// rescanned. Objects allocated while marking are allocated black. While
+// marking, __pluto_gc_barrier_mode is 2 and every reference that is
+// overwritten in, or removed from, a heap object is logged first
+// (PLUTO_GC_STORE / PLUTO_GC_DELETE and the codegen barrier); each step
+// shades the logged references. That is enough: a reference the mutator
+// holds was reachable at the snapshot (so it is marked, unless the last heap
+// path to it was cut before marking reached it — and a cut is logged), or it
+// was allocated during the cycle (black). Initializing stores into fresh
+// objects overwrite nothing and need no barrier, which is why this design
+// suits Pluto's codegen; stores into containers and objects that do
+// overwrite are all funneled through the runtime mutators and the field-store
+// barrier.
+//
+// Pacing is by allocation, never by time (deterministic under pluto test):
+// every GC_INCR_STEP_BYTES allocated while marking runs one step, which
+// traces GC_INCR_WORK_RATIO times as many bytes as were allocated. A step's
+// pause is O(logged references + its trace quantum); the start step adds the
+// root scan, and the final step finishes the trace and queues the sweep.
+// PLUTO_GC_TORTURE=N steps every N allocations with a one-object quantum,
+// stretching each cycle over as many mutator interleavings as possible.
+static long gc_incr_steps = 0;          // pauses in the current cycle
+static long gc_incr_cycle_us = 0;       // their total
+static long gc_incr_cycle_max_us = 0;
 
 // PLUTO_GC_VERIFY at the end of marking: no marked object may reference an
 // unmarked one. Under invariant S such an edge can only come from a missed
@@ -3323,6 +3516,7 @@ static void gc_incr_finish(void) {
 // One stop-the-world step: shade the logs, trace a quantum, and finish the
 // cycle if that empties the worklist. `kind` labels the log line.
 static void gc_incr_step_at(struct timespec t0, const char *kind) {
+    gc_satb_tracing = 1;
     gc_incr_drain_logs();
     size_t budget = gc_torture_every > 0 ? 1 : GC_INCR_WORK_RATIO * GC_INCR_STEP_BYTES;
     int finished = 0;
@@ -3334,6 +3528,7 @@ static void gc_incr_step_at(struct timespec t0, const char *kind) {
         gc_incr_finish();
         finished = 1;
     }
+    gc_satb_tracing = 0;
     gc_incr_since_step = 0;
     gc_incr_steps++;
     if (gc_log_enabled) {
@@ -3383,19 +3578,244 @@ static void gc_incr_step(void) {
     gc_incr_step_at(t0, "step");
 }
 #undef GC_US
-#else
+#endif
+#ifndef GC_SATB
 void __pluto_gc_log_deleted(long old) { (void)old; }
 #endif
 
-void __pluto_gc_collect(void) {
-#ifdef GC_INCREMENTAL
-    if (gc_incr_marking) {
-        // An explicit collection during a cycle completes that cycle.
-        gc_collecting = 1;
+#if defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE)
+// ── Hybrid: generational shared-nothing heaps (--gc hybrid) ─────────────────
+//
+// D2's thread-local heaps with two additions. Tenuring: private objects
+// that survive GC_HYB_TENURE_AGE local collections are promoted, so a
+// thread's private heap holds young data and its local collections stay
+// short; invariant I means no remembered set is needed (shared = old never
+// points at private = young). And the shared heap is collected by D3's
+// snapshot-at-the-beginning machinery: short stop-the-world steps, paced by
+// allocation checkpoints, with the deletion log on (barrier mode 3 =
+// promotion + logging).
+//
+// The global cycle marks with GC_MARK_GLOBAL, leaving bit 0 to local
+// collections, which keep running between steps. It traces through private
+// objects too (they may be the only path to a shared object), but frees only
+// shared ones. Rules that make the two coexist:
+//   - a local sweep keeps any private object the running cycle has marked
+//     (it may be on the cycle's worklist);
+//   - an object promoted while the cycle marks is logged, not marked, so a
+//     step traces it;
+//   - when the cycle finishes, unowned (shared-heap) blocks are swept at
+//     once, and each thread heap applies the result itself at its next
+//     checkpoint (owner sweep, lock-free); until then promotions mark
+//     directly. A new cycle first finishes any owner sweep still pending, so
+//     no stale mark survives into it.
+static long gc_hyb_steps = 0, gc_hyb_cycle_us = 0, gc_hyb_cycle_max_us = 0;
+
+static void gc_hyb_check_slot(GCHeader *parent, long word, const char *where) {
+    GCHeader *c = gc_lookup((void *)word, 0);
+    if (!c || c->next != GC_SHARED_TAG || (c->mark & GC_MARK_GLOBAL)) return;
+    fprintf(stderr, "pluto: PLUTO_GC_VERIFY: global cycle missed a shared object: marked %p "
+            "(tag %d, size %u) %s holds unmarked shared %p (tag %d, size %u)\n",
+            (void *)(parent + 1), parent->type_tag, parent->size, where,
+            (void *)(c + 1), c->type_tag, c->size);
+    abort();
+}
+
+// PLUTO_GC_VERIFY at the end of a global cycle: every shared object that a
+// marked object references is marked (otherwise the sweep would free a
+// reachable object), and invariant I holds.
+static void gc_hyb_check(void) {
+    for (size_t k = 0; k < gc_small_block_count; k++) {
+        GCBlock *b = gc_small_blocks[k];
+        if (b->kind != GC_BLOCK_SMALL) continue;
+        for (uint32_t i = 0; i < b->bump; i++) {
+            GCHeader *h = (GCHeader *)(b->base + (size_t)i * b->obj_size);
+            if (h->type_tag != GC_TAG_FREE && (h->mark & GC_MARK_GLOBAL)) gc_check_children(h, gc_hyb_check_slot);
+        }
+    }
+    for (size_t k = 0; k < gc_large_count; k++) {
+        GCHeader *h = (GCHeader *)gc_large_blocks[k]->base;
+        if (h->type_tag != GC_TAG_FREE && (h->mark & GC_MARK_GLOBAL)) gc_check_children(h, gc_hyb_check_slot);
+    }
+    gc_tlh_check_invariant();
+}
+
+// Stop-the-world: sweep blocks no thread owns (the shared heap proper:
+// unregistered threads' allocations, retired heaps). Everything there is
+// shared; unmarked means dead.
+static size_t gc_hyb_sweep_unowned(void) {
+    size_t freed = 0;
+    for (size_t c = 0; c < GC_NUM_CLASSES; c++) gc_class_avail[c] = NULL;
+    for (size_t k = 0; k < gc_small_block_count; k++) {
+        GCBlock *b = gc_small_blocks[k];
+        if (b->kind != GC_BLOCK_SMALL || b->owner) continue;
+        size_t osz = b->obj_size, live = 0;
+        int containers = 0;
+        GCHeader *free_list = NULL;
+        for (uint32_t i = 0; i < b->bump; i++) {
+            GCHeader *h = (GCHeader *)(b->base + (size_t)i * osz);
+            if (h->type_tag != GC_TAG_FREE) {
+                if (h->mark & GC_MARK_GLOBAL) {
+                    h->mark &= (uint8_t)~GC_MARK_GLOBAL;
+                    live++;
+                    if (gc_is_container_tag(h->type_tag)) containers = 1;
+                    continue;
+                }
+                gc_finalize(h);
+                gc_poison(h);
+                h->type_tag = GC_TAG_FREE;
+                freed += osz;
+            }
+            h->next = free_list;
+            free_list = h;
+        }
+        if (live == 0) {
+            b->kind = GC_BLOCK_POOL;
+            b->bump = 0;
+            b->free_list = NULL;
+            b->has_containers = 0;
+            b->next = gc_block_pool;
+            gc_block_pool = b;
+            continue;
+        }
+        b->free_list = free_list;
+        b->has_containers = (uint8_t)containers;
+        if (free_list || b->bump < b->nobjs) {
+            b->next = gc_class_avail[b->cls];
+            gc_class_avail[b->cls] = b;
+        } else {
+            b->next = NULL;
+        }
+    }
+    for (size_t k = 0; k < gc_large_count;) {
+        GCBlock *b = gc_large_blocks[k];
+        GCHeader *h = (GCHeader *)b->base;
+        if (b->owner || h->type_tag == GC_TAG_FREE) { k++; continue; }
+        if (h->mark & GC_MARK_GLOBAL) {
+            h->mark &= (uint8_t)~GC_MARK_GLOBAL;
+            k++;
+            continue;
+        }
+        gc_finalize(h);
+        gc_pagemap_set(b->base, b->obj_size >> GC_PAGE_SHIFT, NULL);
+        free(b->base);
+        freed += b->obj_size;
+        b->next = gc_desc_free;
+        gc_desc_free = b;
+        gc_large_blocks[k] = gc_large_blocks[--gc_large_count];
+    }
+    return freed;
+}
+
+// Marking is complete (world stopped): barrier back to promotion only,
+// sweep the unowned blocks, and hand each thread heap its owner sweep.
+static void gc_hyb_finish(void) {
+    if (gc_verify_enabled > 0) gc_hyb_check();
+    __pluto_gc_barrier_mode = 1;
+    gc_incr_marking = 0;
+    size_t freed = gc_hyb_sweep_unowned();
+    gc_bytes_allocated = freed < gc_bytes_allocated ? gc_bytes_allocated - freed : 0;
+    for (size_t i = 0; i < gc_tlh_heap_count; i++) gc_tlh_heaps[i]->shared_sweep_pending = 1;
+    gc_shared_growth = 0;
+    gc_shared_threshold = gc_hyb_marked_shared > GC_TLH_SHARED_FLOOR ? gc_hyb_marked_shared
+                                                                     : GC_TLH_SHARED_FLOOR;
+    gc_threshold = gc_bytes_allocated * 2;
+    if (gc_threshold < GC_MIN_THRESHOLD) gc_threshold = GC_MIN_THRESHOLD;
+    gc_data_interval_count = 0;
+    gc_worklist_count = 0;
+    gc_cycle_count++;
+}
+
+#define GC_US(a, b) (((b).tv_sec - (a).tv_sec) * 1000000L + ((b).tv_nsec - (a).tv_nsec) / 1000L)
+// One stop-the-world step of the global cycle. complete: trace to the end.
+static void gc_hyb_step_at(struct timespec t0, const char *kind, int complete) {
+    gc_mark_bit = GC_MARK_GLOBAL;
+    gc_satb_tracing = 1;
+    gc_incr_drain_logs();
+    size_t budget = complete ? 0 : gc_torture_every > 0 ? 1 : GC_INCR_WORK_RATIO * GC_TLAB_BUDGET;
+    int finished = 0;
+    if (gc_incr_trace(budget)) {
         do {
             gc_incr_drain_logs();
             gc_incr_trace(0);
         } while (gc_worklist_count > 0 || gc_cont_count > 0);
+        finished = 1;
+    }
+    gc_satb_tracing = 0;
+    gc_mark_bit = GC_MARK_LOCAL;
+    if (finished) gc_hyb_finish();
+    gc_hyb_steps++;
+    if (gc_log_enabled) {
+        struct timespec t1;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long us = GC_US(t0, t1);
+        gc_hyb_cycle_us += us;
+        if (us > gc_hyb_cycle_max_us) gc_hyb_cycle_max_us = us;
+        if (finished) {
+            fprintf(stderr, "gc: #%ld live=%zu shared_live=%zu next_shared=%zu pause_us=%ld steps=%ld"
+                    " cycle_pause_us=%ld cycle_max_us=%ld kind=finish\n",
+                    gc_cycle_count, gc_bytes_allocated, gc_hyb_marked_shared, gc_shared_threshold,
+                    us, gc_hyb_steps, gc_hyb_cycle_us, gc_hyb_cycle_max_us);
+        } else {
+            fprintf(stderr, "gc: global pause_us=%ld left=%zu kind=%s\n", us, gc_worklist_count, kind);
+        }
+    }
+    gc_collecting = 0;
+}
+
+// Start a global cycle (world stopped, gc_mutex held).
+static void gc_hyb_start(int complete) {
+    gc_collecting = 1;
+    gc_init_env();
+    struct timespec t0;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (size_t i = 0; i < gc_tlh_heap_count; i++) {
+        GCThreadHeap *H = gc_tlh_heaps[i];
+        gc_tlh_report(H);
+        if (H->shared_sweep_pending) H->local_freed += gc_tlh_local_sweep(H, 0);
+        gc_tlh_report(H);
+    }
+    gc_build_data_intervals();
+    gc_worklist_count = 0;
+    gc_hyb_marked_shared = 0;
+    gc_mark_bit = GC_MARK_GLOBAL;
+    gc_scan_roots();
+    gc_mark_bit = GC_MARK_LOCAL;
+    gc_incr_marking = 1;
+    __pluto_gc_barrier_mode = 3;
+    for (size_t i = 0; i < gc_tlh_heap_count; i++) gc_tlh_heaps[i]->marks_valid = 1;
+    gc_hyb_steps = 0;
+    gc_hyb_cycle_us = 0;
+    gc_hyb_cycle_max_us = 0;
+    gc_hyb_step_at(t0, "start", complete);
+}
+
+static void gc_hyb_step(int complete) {
+    gc_collecting = 1;
+    struct timespec t0;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &t0);
+    gc_hyb_step_at(t0, "step", complete);
+}
+#undef GC_US
+#endif
+
+void __pluto_gc_collect(void) {
+#if defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE)
+    // A full collection is a complete global cycle (private garbage is the
+    // local collections' business). The world is stopped.
+    if (gc_incr_marking) gc_hyb_step(1);
+    else gc_hyb_start(1);
+    return;
+#endif
+#ifdef GC_INCREMENTAL
+    if (gc_incr_marking) {
+        // An explicit collection during a cycle completes that cycle.
+        gc_collecting = 1;
+        gc_satb_tracing = 1;
+        do {
+            gc_incr_drain_logs();
+            gc_incr_trace(0);
+        } while (gc_worklist_count > 0 || gc_cont_count > 0);
+        gc_satb_tracing = 0;
         gc_incr_finish();
         gc_collecting = 0;
         return;

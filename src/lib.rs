@@ -695,6 +695,11 @@ pub enum GcBackend {
     /// barrier, followed by lazy sweeping. Bounds pauses independently of
     /// heap size.
     Incr,
+    /// Generational shared-nothing heaps: thread-local heaps with tenuring
+    /// (survivors are promoted, so local collections stay proportional to
+    /// young data) and an incremental snapshot-at-the-beginning collector
+    /// for the shared heap.
+    Hybrid,
 }
 
 /// The default backend is mark-sweep; PLUTO_GC_BACKEND=<name> overrides it
@@ -710,7 +715,7 @@ impl Default for GcBackend {
 
 impl GcBackend {
     /// Every backend, in a stable order (index = position).
-    pub const ALL: [GcBackend; 9] = [
+    pub const ALL: [GcBackend; 10] = [
         GcBackend::MarkSweep,
         GcBackend::Noop,
         GcBackend::Legacy,
@@ -720,6 +725,7 @@ impl GcBackend {
         GcBackend::Tlab,
         GcBackend::Tlh,
         GcBackend::Incr,
+        GcBackend::Hybrid,
     ];
 
     fn index(&self) -> usize {
@@ -737,6 +743,7 @@ impl GcBackend {
             GcBackend::Tlab => "tlab",
             GcBackend::Tlh => "tlh",
             GcBackend::Incr => "incr",
+            GcBackend::Hybrid => "hybrid",
         }
     }
 
@@ -750,7 +757,7 @@ impl GcBackend {
             GcBackend::Noop => include_str!("../runtime/gc/noop.c"),
             GcBackend::Legacy => include_str!("../runtime/gc/legacy.c"),
             GcBackend::Lazy | GcBackend::Gen | GcBackend::ParMark | GcBackend::Tlab | GcBackend::Tlh
-            | GcBackend::Incr => {
+            | GcBackend::Incr | GcBackend::Hybrid => {
                 include_str!("../runtime/gc/marksweep.c")
             }
         }
@@ -767,6 +774,7 @@ impl GcBackend {
             GcBackend::Tlab => &["-DGC_TLAB"],
             GcBackend::Tlh => &["-DGC_TLH"],
             GcBackend::Incr => &["-DGC_INCREMENTAL", "-DGC_LAZY_SWEEP"],
+            GcBackend::Hybrid => &["-DGC_HYBRID"],
         }
     }
 }

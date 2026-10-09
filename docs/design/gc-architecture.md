@@ -128,29 +128,64 @@ by shared-heap growth (promotions and shared allocations), which R2 makes
 rare. Allocation is thread-local (per-thread size-class block lists), so it
 takes no global lock.
 
+**Task exit (region reclamation).** The exit path publishes the task's
+result and error through barriered stores before the thread deregisters,
+so by invariant I everything still private to it is dead. A sweep with no
+marking frees it in bulk; blocks still holding shared objects pass to the
+shared heap.
+
+**Lock freedom of local work.** A local collection takes no lock. Lookups
+are confined to the heap's own private objects through acquire loads of
+the page map and the block owner (a block owned by H is only changed by H
+or by a stop-the-world collection, which cannot overlap a local one).
+Anything needing `gc_mutex` — returning emptied blocks, unmapping large
+objects, global byte accounting — is queued on the heap and handed over
+at the next allocation report.
+
 **Costs.** A barrier on non-scalar field stores (one header check when the
 target is private). Workloads that funnel many values through entities or
-channels promote often and fall back to global collections.
+channels promote often and fall back to global collections. A thread whose
+own private heap is large still pauses itself for a full local mark.
 
 ### D3. Bounded-pause incremental collector (`incr`)
 
-Targets R3's tail latency independent of heap size (a 64 MB resident tree
-currently costs a 23 ms pause). Marking proceeds in small increments
-interleaved with allocation: every K bytes allocated during a cycle performs
-a fixed quantum of mark work. Determinism (R5) comes from pacing by
-allocation, not time.
+Targets R3's tail latency independent of heap size. Marking proceeds in
+short stop-the-world steps interleaved with allocation; sweeping is lazy.
+Determinism (R5) comes from pacing by allocation, never by time.
 
-**Invariant T (tri-colour, incremental update).** At the end of marking, no
-black object points to a white one. Stores into already-scanned objects are
-caught by the page-protection barrier (dirty blocks are re-scanned in the
-final, short stop-the-world step); objects allocated during marking are
-allocated black. Malloc'd backing stores are invisible to the barrier, so
-containers modified during a cycle are re-scanned at the final step (the
-cost measured in `gen`, bounded here because only containers touched during
-the cycle — tracked by the runtime mutators — need it).
+**Invariant S (snapshot at the beginning).** Every object reachable when a
+cycle starts, and every object allocated during it, is marked when the
+cycle ends. Roots are scanned once, at the start step; stacks are never
+rescanned. Objects allocated while marking are allocated black. While a
+cycle marks, a *deletion* barrier logs every reference that is overwritten
+in, or removed from, a heap object; each step shades the logs.
 
-Max pause becomes O(roots + dirty blocks + touched containers) instead of
-O(heap).
+Why deletion (Yuasa) rather than insertion (Dijkstra): an insertion barrier
+with black allocation must also cover initializing stores (struct literals,
+closure captures, enum payloads, trait boxes), and would depend on codegen
+never allocating between an object's allocation and its field stores;
+insertion barriers also force a final stack rescan. Initializing stores
+overwrite nothing, so the deletion barrier needs none of that, and the
+final pause is only the log drain. Every overwriting store already goes
+through the runtime mutators (array set, map overwrite, removals, clears,
+channel receives) or the codegen field-store barrier.
+
+**Large containers** are scanned 1024 slots per chunk through a
+continuation stack, so no step pays for a whole million-element array.
+Chunked scanning adds one obligation: an element that moves toward lower
+slots can slip behind the scan cursor, so while marking the runtime also
+logs elements moved by `remove_at`, `reverse`, map/set deletion shifts and
+rehashing (each already O(n) in what it touches).
+
+**Barrier selection.** `__pluto_gc_barrier_mode`, defined by every backend,
+is read by codegen before each non-scalar field store and by the runtime
+mutators: 0 none, 1 promotion (D2), 2 deletion logging (D3, only while a
+cycle marks). Outside a cycle the barrier costs one load and a branch.
+
+Max pause becomes O(logged references + one trace quantum); the start step
+adds the root scan. The previous cycle's leftover sweep runs in bounded
+batches from the allocator, without stopping the world, before the next
+cycle starts.
 
 ## 4. Evaluation
 

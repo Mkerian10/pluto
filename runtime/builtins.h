@@ -107,17 +107,18 @@ typedef struct GCHeader {
 
 // ── Write barriers ────────────────────────────────────────────────────────────
 //
-// __pluto_gc_barrier_mode, defined by every GC backend, selects which
-// barrier is live:
+// __pluto_gc_barrier_mode, defined by every GC backend, is a bit set
+// selecting which barriers are live:
 //
-//   0  none.
-//   1  promotion (--gc tlh). A live object whose header `next` word is
-//      GC_SHARED_TAG is shared between threads; storing a pointer into it
-//      must first promote the stored value (__pluto_gc_promote_store).
-//   2  snapshot-at-the-beginning (--gc incr, only while a marking cycle is
-//      in progress). A reference that is overwritten in, or removed from, a
-//      heap object is logged (__pluto_gc_log_deleted) so marking still finds
-//      everything that was reachable when the cycle began.
+//   bit 0 (1)  promotion (thread-local heaps). A live object whose header
+//              `next` word is GC_SHARED_TAG is shared between threads;
+//              storing a pointer into it must first promote the stored value
+//              (__pluto_gc_promote_store).
+//   bit 1 (2)  snapshot-at-the-beginning logging (incremental marking, only
+//              while a cycle is marking). A reference that is overwritten in,
+//              or removed from, a heap object is logged
+//              (__pluto_gc_log_deleted) so marking still finds everything
+//              that was reachable when the cycle began.
 //
 // PLUTO_GC_STORE(obj, old, value) guards a store of `value` into `obj` over
 // `old` (0 for a fresh slot); PLUTO_GC_DELETE(old) guards a removal. Codegen
@@ -131,18 +132,16 @@ void __pluto_gc_log_deleted(long old);
     do {                                                                          \
         int m_ = __pluto_gc_barrier_mode;                                         \
         if (__builtin_expect(m_ != 0, 0)) {                                       \
-            if (m_ == 1) {                                                        \
-                if (((GCHeader *)((char *)(obj) - sizeof(GCHeader)))->next        \
-                    == GC_SHARED_TAG)                                             \
-                    __pluto_gc_promote_store((long)(value));                      \
-            } else if ((old) != 0) {                                              \
-                __pluto_gc_log_deleted((long)(old));                              \
-            }                                                                     \
+            if ((m_ & 1)                                                          \
+                && ((GCHeader *)((char *)(obj) - sizeof(GCHeader)))->next         \
+                   == GC_SHARED_TAG)                                              \
+                __pluto_gc_promote_store((long)(value));                          \
+            if ((m_ & 2) && (old) != 0) __pluto_gc_log_deleted((long)(old));      \
         }                                                                         \
     } while (0)
 #define PLUTO_GC_DELETE(old)                                                      \
     do {                                                                          \
-        if (__builtin_expect(__pluto_gc_barrier_mode == 2, 0))                    \
+        if (__builtin_expect(__pluto_gc_barrier_mode & 2, 0))                     \
             __pluto_gc_log_deleted((long)(old));                                  \
     } while (0)
 

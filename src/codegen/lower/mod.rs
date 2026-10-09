@@ -114,39 +114,46 @@ impl<'a> LowerContext<'a> {
 
     /// Write barrier before storing `val` into the pointer slot at
     /// `obj_ptr + offset` of an existing heap object (runtime/builtins.h,
-    /// PLUTO_GC_STORE). Inline cost when no barrier is live is one load of
-    /// `__pluto_gc_barrier_mode` and a branch. Mode 1 (tlh) promotes `val`
-    /// when the target's header carries the shared tag; mode 2 (incr, while
-    /// marking) logs the slot's current value, which the store is about to
-    /// overwrite. Must be emitted immediately before the store.
+    /// PLUTO_GC_STORE). `__pluto_gc_barrier_mode` is a bit set: bit 0
+    /// promotes `val` when the target's header carries the shared tag
+    /// (thread-local heaps); bit 1 logs the slot's current value, which the
+    /// store is about to overwrite (snapshot-at-the-beginning marking). With
+    /// no bit set the inline cost is one load and a branch. Must be emitted
+    /// immediately before the store.
     fn emit_gc_barrier(&mut self, obj_ptr: Value, offset: i32, val: Value) {
         let gv = self.module.declare_data_in_func(self.runtime.gc_barrier_mode(), self.builder.func);
         let mode_addr = self.builder.ins().global_value(types::I64, gv);
         let mode = self.builder.ins().load(types::I32, MemFlags::trusted(), mode_addr, 0);
-        let live_bb = self.builder.create_block();
         let promote_bb = self.builder.create_block();
         let promote_call_bb = self.builder.create_block();
+        let log_check_bb = self.builder.create_block();
         let log_bb = self.builder.create_block();
         let cont_bb = self.builder.create_block();
-        self.builder.ins().brif(mode, live_bb, &[], cont_bb, &[]);
+        let live = self.builder.ins().icmp_imm(IntCC::NotEqual, mode, 0);
+        self.builder.ins().brif(live, promote_bb, &[], cont_bb, &[]);
 
-        self.builder.switch_to_block(live_bb);
-        self.builder.seal_block(live_bb);
-        let is_promote = self.builder.ins().icmp_imm(IntCC::Equal, mode, 1);
-        self.builder.ins().brif(is_promote, promote_bb, &[], log_bb, &[]);
-
+        // Bit 0: promotion.
         self.builder.switch_to_block(promote_bb);
         self.builder.seal_block(promote_bb);
+        let promote_bit = self.builder.ins().band_imm(mode, 1);
+        let promote_check_bb = self.builder.create_block();
+        self.builder.ins().brif(promote_bit, promote_check_bb, &[], log_check_bb, &[]);
+        self.builder.switch_to_block(promote_check_bb);
+        self.builder.seal_block(promote_check_bb);
         let hdr_next = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(-16));
         let is_shared = self.builder.ins().icmp_imm(IntCC::Equal, hdr_next, 1);
-        self.builder.ins().brif(is_shared, promote_call_bb, &[], cont_bb, &[]);
-
+        self.builder.ins().brif(is_shared, promote_call_bb, &[], log_check_bb, &[]);
         self.builder.switch_to_block(promote_call_bb);
         self.builder.seal_block(promote_call_bb);
         self.builder.set_cold_block(promote_call_bb);
         self.call_runtime_void("__pluto_gc_promote_store", &[val]);
-        self.builder.ins().jump(cont_bb, &[]);
+        self.builder.ins().jump(log_check_bb, &[]);
 
+        // Bit 1: deletion logging.
+        self.builder.switch_to_block(log_check_bb);
+        self.builder.seal_block(log_check_bb);
+        let log_bit = self.builder.ins().band_imm(mode, 2);
+        self.builder.ins().brif(log_bit, log_bb, &[], cont_bb, &[]);
         self.builder.switch_to_block(log_bb);
         self.builder.seal_block(log_bb);
         self.builder.set_cold_block(log_bb);
