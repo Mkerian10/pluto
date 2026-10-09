@@ -220,3 +220,6 @@ int __pluto_gc_check_safepoint(void) {
 }
 
 #endif
+
+// Heaps are not private in this backend: nothing ever needs promotion.
+void __pluto_gc_promote_store(long value) { (void)value; }

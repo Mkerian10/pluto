@@ -1,0 +1,46 @@
+//! Differential tests across GC backends. Each program runs under every
+//! backend with the heap verifier on and torture collections, and must print
+//! exactly what the reference mark-sweep backend prints. Under `tlh` the
+//! verifier also checks invariant I (no shared object points at a private
+//! one) at every global collection, so a missing promotion barrier aborts.
+
+use pluto::GcBackend;
+use std::path::Path;
+use std::process::Command;
+
+fn run(program: &str, gc: GcBackend, env: &[(&str, &str)]) -> String {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/integration/gc_programs").join(program);
+    let dir = tempfile::tempdir().unwrap();
+    // Copy into its own directory: sibling .pt files would be merged.
+    let main = dir.path().join("main.pt");
+    std::fs::copy(&src, &main).unwrap();
+    let bin = dir.path().join("bin");
+    pluto::compile_file_with_options(&main, &bin, None, gc, true)
+        .unwrap_or_else(|e| panic!("compile {program} under {}: {e}", gc.name()));
+    let out = Command::new(&bin).envs(env.iter().copied()).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{program} under {} failed:\n{}",
+        gc.name(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn differential(program: &str) {
+    let expected = run(program, GcBackend::MarkSweep, &[]);
+    for gc in GcBackend::ALL {
+        if matches!(gc, GcBackend::Noop | GcBackend::Legacy) {
+            continue;
+        }
+        for torture in ["0", "50"] {
+            let got = run(program, gc, &[("PLUTO_GC_VERIFY", "1"), ("PLUTO_GC_TORTURE", torture)]);
+            assert_eq!(got, expected, "{program} under {} (torture={torture})", gc.name());
+        }
+    }
+}
+
+#[test]
+fn sharing_through_entities_tasks_and_channels() {
+    differential("sharing.pt");
+}

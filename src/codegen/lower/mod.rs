@@ -112,6 +112,27 @@ impl<'a> LowerContext<'a> {
         self.builder.ins().call(func_ref, args);
     }
 
+    /// Sharing barrier (GC_SHARED_TAG in runtime/builtins.h): before storing a
+    /// pointer into an existing heap object, promote the stored value if the
+    /// target is shared between threads. Inline cost is one load of the
+    /// target's header word and one compare; the call runs only for shared
+    /// targets — never, in backends without private per-thread heaps (no
+    /// live object carries the tag there).
+    fn emit_gc_barrier(&mut self, obj_ptr: Value, val: Value) {
+        let hdr_next = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(-16));
+        let is_shared = self.builder.ins().icmp_imm(IntCC::Equal, hdr_next, 1);
+        let call_bb = self.builder.create_block();
+        let cont_bb = self.builder.create_block();
+        self.builder.ins().brif(is_shared, call_bb, &[], cont_bb, &[]);
+        self.builder.switch_to_block(call_bb);
+        self.builder.seal_block(call_bb);
+        self.builder.set_cold_block(call_bb);
+        self.call_runtime_void("__pluto_gc_promote_store", &[val]);
+        self.builder.ins().jump(cont_bb, &[]);
+        self.builder.switch_to_block(cont_bb);
+        self.builder.seal_block(cont_bb);
+    }
+
     /// Branch to a cold block that reports a defect and aborts when `flag`
     /// is nonzero; otherwise fall through. Used by checked int arithmetic:
     /// overflow and division by zero are defects (process-fatal bugs), never
@@ -613,6 +634,9 @@ impl<'a> LowerContext<'a> {
                         .ok_or_else(|| CompileError::codegen(format!("unknown field '{}' on class '{class_name}'", field.node)))?;
                     let offset = pos as i32 * POINTER_SIZE;
                     let val = self.coerce_to_expected_type(val, &val_type, &field_type)?;
+                    if type_holds_pointer(&field_type) {
+                        self.emit_gc_barrier(ptr, val);
+                    }
                     self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                 }
 
@@ -2524,6 +2548,7 @@ impl<'a> LowerContext<'a> {
                         name, &resolution.field_wirings, &seed_vals, &scoped_locals,
                     )?,
                 };
+                self.emit_gc_barrier(seed_ptr, dep_val);
                 self.builder.ins().store(MemFlags::new(), dep_val, seed_ptr, Offset32::new(offset));
             }
         }
@@ -6117,6 +6142,13 @@ pub fn lower_generator_next(
 }
 
 /// Lower a block of statements inside a generator, handling Yield specially.
+/// Whether a value of this type is (or may be) a heap pointer, so a store of
+/// it into an existing object needs the sharing barrier. Only plain scalars
+/// are exempt; nullable scalars are boxed.
+fn type_holds_pointer(ty: &PlutoType) -> bool {
+    !matches!(ty, PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::Byte)
+}
+
 fn lower_generator_block(
     stmts: &[crate::span::Spanned<Stmt>],
     ctx: &mut LowerContext<'_>,
@@ -6156,6 +6188,9 @@ fn lower_generator_block(
                 // 2. Store result at gen_ptr[24]
                 let slot_val = to_array_slot(val, &val_type, &mut ctx.builder);
                 let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                if type_holds_pointer(&val_type) {
+                    ctx.emit_gc_barrier(gen_ptr, slot_val);
+                }
                 ctx.builder.ins().store(MemFlags::new(), slot_val, gen_ptr, Offset32::new(24));
 
                 // 3. Save params to gen object (needed for resume across yield points)
@@ -6164,6 +6199,9 @@ fn lower_generator_block(
                     let slot = to_array_slot(param_val, ty, &mut ctx.builder);
                     let offset = (4 + i) as i32 * POINTER_SIZE;
                     let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                    if type_holds_pointer(ty) {
+                        ctx.emit_gc_barrier(gen_ptr, slot);
+                    }
                     ctx.builder.ins().store(MemFlags::new(), slot, gen_ptr, Offset32::new(offset));
                 }
 
@@ -6173,6 +6211,9 @@ fn lower_generator_block(
                     let slot = to_array_slot(local_val, ty, &mut ctx.builder);
                     let offset = (4 + num_params + i) as i32 * POINTER_SIZE;
                     let gen_ptr = ctx.builder.use_var(gen_ptr_var);
+                    if type_holds_pointer(ty) {
+                        ctx.emit_gc_barrier(gen_ptr, slot);
+                    }
                     ctx.builder.ins().store(MemFlags::new(), slot, gen_ptr, Offset32::new(offset));
                 }
 

@@ -686,6 +686,10 @@ pub enum GcBackend {
     /// Mark-sweep with thread-local allocation: each thread allocates from
     /// blocks it owns without taking the global lock.
     Tlab,
+    /// Shared-nothing heaps: private per-thread heaps, objects promoted to
+    /// shared when they cross a thread boundary or are stored into a shared
+    /// object.
+    Tlh,
 }
 
 /// The default backend is mark-sweep; PLUTO_GC_BACKEND=<name> overrides it
@@ -701,7 +705,7 @@ impl Default for GcBackend {
 
 impl GcBackend {
     /// Every backend, in a stable order (index = position).
-    pub const ALL: [GcBackend; 7] = [
+    pub const ALL: [GcBackend; 8] = [
         GcBackend::MarkSweep,
         GcBackend::Noop,
         GcBackend::Legacy,
@@ -709,6 +713,7 @@ impl GcBackend {
         GcBackend::Gen,
         GcBackend::ParMark,
         GcBackend::Tlab,
+        GcBackend::Tlh,
     ];
 
     fn index(&self) -> usize {
@@ -724,6 +729,7 @@ impl GcBackend {
             GcBackend::Gen => "gen",
             GcBackend::ParMark => "parmark",
             GcBackend::Tlab => "tlab",
+            GcBackend::Tlh => "tlh",
         }
     }
 
@@ -736,7 +742,7 @@ impl GcBackend {
             GcBackend::MarkSweep => include_str!("../runtime/gc/marksweep.c"),
             GcBackend::Noop => include_str!("../runtime/gc/noop.c"),
             GcBackend::Legacy => include_str!("../runtime/gc/legacy.c"),
-            GcBackend::Lazy | GcBackend::Gen | GcBackend::ParMark | GcBackend::Tlab => {
+            GcBackend::Lazy | GcBackend::Gen | GcBackend::ParMark | GcBackend::Tlab | GcBackend::Tlh => {
                 include_str!("../runtime/gc/marksweep.c")
             }
         }
@@ -751,6 +757,7 @@ impl GcBackend {
             GcBackend::Gen => &["-DGC_GENERATIONAL"],
             GcBackend::ParMark => &["-DGC_PARALLEL_MARK"],
             GcBackend::Tlab => &["-DGC_TLAB"],
+            GcBackend::Tlh => &["-DGC_TLH"],
         }
     }
 }
