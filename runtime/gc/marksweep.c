@@ -115,6 +115,7 @@ static GCMarkCtx gc_global_ctx;
 #define GC_MARK_GLOBAL 2
 #define GC_MARK_ROOT   0x10   // hybrid: referenced straight from a root this local collection
 #define GC_MARK_PROMOTE 0x40  // hybrid: reached from an object this local collection promotes
+#define GC_MARK_TOSHARED 0x80 // hybrid: reached from an object this local collection makes shared
 // Every thread-local the trace consults lives in one struct reached through
 // a pointer (T) that the hot functions take as a parameter: on macOS each
 // access to a __thread variable is a call into the dynamic linker's TLV
@@ -135,12 +136,13 @@ typedef struct GCTrace {
     int promoting, saw_private, satb_tracing;
     int tenure_all;               // hybrid local mark: every unpinned survivor is promoted
     int minor;                    // hybrid local mark: the old generation is not traced
+    int tenure_shared;            // hybrid local mark: survivors promote to the shared heap
     int saw_young;                // hybrid minor mark: a lookup resolved to a young object
     unsigned tenure_age;          // hybrid local mark: local survivals before promotion
     size_t trace_work;
     struct GCMarkStack *pm_local;   // parallel marking: this worker's stack
 } GCTrace;
-static __thread GCTrace gc_tr_tls = { &gc_global_ctx, GC_MARK_LOCAL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, NULL };
+static __thread GCTrace gc_tr_tls = { &gc_global_ctx, GC_MARK_LOCAL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL };
 #define GC_TR() (&gc_tr_tls)
 #define GC_MARKED(h) ((h)->mark & T->mark_bit)
 #if defined(GC_HYBRID)
@@ -702,6 +704,11 @@ typedef struct GCThreadHeap {
     size_t old_growth;         // bytes tenured into the old generation since then
     size_t sweep_young_live;   // young bytes the running sweep kept young
     int major;                 // this collection traces and sweeps the old generation
+    size_t old_stores;         // barrier slow-path stores into old objects since the last major
+    int direct_shared;         // tenure straight into the shared heap (gc_hyb_choose_target)
+    int force_major;           // the next local collection is a major one
+    size_t mode_tenured;       // bytes tenured since the target last changed
+    size_t mode_barrier;       // bytes the barrier promoted to shared since then
     int tenure_shared;         // this collection promotes to the shared heap, not old
     size_t barrier_promoted;   // bytes promoted by stores and transfers (PLUTO_GC_LOG)
     int verify_now;            // PLUTO_GC_VERIFY: run the heap-wide local checks this time
@@ -2128,22 +2135,39 @@ static long gc_scan_container_chunk(GCTrace *T, void *user_ptr, long from) {
 // child it finds. A child that gains the bit after it was traced is traced
 // again so its own children inherit it, so each object is traced at most
 // twice and the sweep can promote in place with no second trace.
+// Promotion level of h in the running local collection: 0 it stays where
+// it is, 1 at least old (a young object tenures into the old generation),
+// 2 shared. The trace hands a parent's level to its children (1 as
+// GC_MARK_PROMOTE, 2 as GC_MARK_TOSHARED), so the shared set is closed
+// under references (invariant I) and the old set holds no young object.
+//   young: a tenure candidate (unpinned, old enough) is 1, or 2 when this
+//          collection sends survivors to the shared heap;
+//   old (major collections only; minors do not trace it): stays old (1),
+//          or leaves for the shared heap (2) when this major spills.
+//          A minor collection leaves old objects' young children young and
+//          keeps their holders remembered instead: tenuring everything an
+//          old object happened to reference filled the old generation with
+//          short-lived values (3.2 GB tenured on one Kerberos file).
+//   backing stores never decide on their own: they share their handle's
+//          fate (a shared buffer under a private handle would break I).
+static inline int gc_hyb_level(const GCHeader *h, int minor, int tenure_all, unsigned tenure_age,
+                               int tenure_shared) {
+    if (h->mark & GC_MARK_TOSHARED) return 2;
+    int inherited = (h->mark & GC_MARK_PROMOTE) ? 1 : 0;
+    int own = 0;
+    if (h->next == GC_OLD_TAG || h->next == GC_OLD_REM_TAG) {
+        if (minor) return 0;
+        own = 1;
+        if (tenure_shared && !(h->mark & GC_MARK_ROOT) && h->type_tag != GC_TAG_BUFFER) own = 2;
+    } else if (!(h->mark & GC_MARK_ROOT) && h->type_tag != GC_TAG_BUFFER) {
+        unsigned age = ((h->mark >> 2) & 3) + 1;
+        if (tenure_all || age >= tenure_age) own = tenure_shared ? 2 : 1;
+    }
+    return own > inherited ? own : inherited;
+}
+
 static inline int gc_hyb_promotes(const GCTrace *T, const GCHeader *h) {
-    if (h->mark & GC_MARK_PROMOTE) return 1;
-    // In a major collection an old object's young children are tenured
-    // with it, so no old-to-young reference survives and the remembered set
-    // restarts empty. A minor collection leaves them young (they age like
-    // any other) and keeps their holders remembered instead: tenuring
-    // everything an old object happened to reference at a minor collection
-    // filled the old generation with short-lived values (3.2 GB tenured on
-    // one Kerberos file).
-    if (h->next == GC_OLD_TAG || h->next == GC_OLD_REM_TAG) return !T->minor;
-    if (h->mark & GC_MARK_ROOT) return 0;
-    // A backing store shares its handle's fate: never tenured on its own,
-    // only by the PROMOTE its handle's trace hands it.
-    if (h->type_tag == GC_TAG_BUFFER) return 0;
-    unsigned age = ((h->mark >> 2) & 3) + 1;
-    return T->tenure_all || age >= T->tenure_age;
+    return gc_hyb_level(h, T->minor, T->tenure_all, T->tenure_age, T->tenure_shared);
 }
 #endif
 
@@ -2151,9 +2175,10 @@ static inline int gc_hyb_promotes(const GCTrace *T, const GCHeader *h) {
 // parent's promotion).
 static inline void gc_edge(GCTrace *T, GCHeader *child, int promo) {
 #if defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE)
-    if (promo && !(child->mark & GC_MARK_PROMOTE)) {
-        child->mark |= GC_MARK_PROMOTE;
-        if (GC_MARKED(child)) {   // traced (or queued) without the bit: again
+    uint8_t bits = promo == 2 ? (GC_MARK_PROMOTE | GC_MARK_TOSHARED) : promo ? GC_MARK_PROMOTE : 0;
+    if (bits && (child->mark & bits) != bits) {
+        child->mark |= bits;
+        if (GC_MARKED(child)) {   // traced (or queued) with a lower level: again
             gc_worklist_push(T, (char *)child + sizeof(GCHeader));
             return;
         }
@@ -2578,6 +2603,7 @@ void __pluto_gc_store_slow(long obj, long value) {
     // The fast path clears a private container's "all elements shared"
     // flag; old containers come here instead.
     h->mark &= (uint8_t)~GC_MARK_CLEAN;
+    H->old_stores++;
     if (gc_is_container_tag(h->type_tag)) {
         GCHeader *v = gc_tlh_find_own((void *)value, H);
         if (v && v->next == NULL) gc_hyb_log_young(H, (long)(v + 1));   // the object's start
@@ -2858,13 +2884,16 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
         // root-referenced objects are never tenured; their contents are.
         // The promotion verdict must be gc_hyb_promotes', which the trace
         // used to hand the promotion on to this object's children.
-        unsigned age = (h->mark >> 2) & 3;
-        if (age < 3) age++;
-        int promote = (h->mark & GC_MARK_PROMOTE)
-                      || (!(h->mark & GC_MARK_ROOT) && h->type_tag != GC_TAG_BUFFER
-                          && (H->tenure_all || age >= H->tenure_age));
-        h->mark = (uint8_t)((h->mark & (3 | GC_MARK_CLEAN)) | (age << 2));
-        if (promote && H->tenure_shared) {
+        int level = gc_hyb_level(h, !H->major, H->tenure_all, H->tenure_age, H->tenure_shared);
+        int was_old = h->next == GC_OLD_TAG || h->next == GC_OLD_REM_TAG;
+        if (was_old || level == 1) {
+            h->mark = (uint8_t)(h->mark & (3 | GC_MARK_CLEAN));   // old objects carry no age
+        } else {
+            unsigned age = (h->mark >> 2) & 3;
+            if (age < 3) age++;
+            h->mark = (uint8_t)((h->mark & (3 | GC_MARK_CLEAN)) | (age << 2));
+        }
+        if (level == 2) {
             // Promote in place to the shared heap (the old generation is
             // full). While a global cycle marks, a newly shared object is
             // logged so a step traces it (marking it black here would skip
@@ -2877,7 +2906,7 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
             h->mark &= (uint8_t)~GC_MARK_LOCAL;
             return 1;
         }
-        if (promote && h->next == NULL) {   // tenure into the old generation
+        if (level == 1 && h->next == NULL) {   // tenure into the old generation
             h->next = GC_OLD_TAG;
             H->old_growth += osz;
             H->swept_promoted += osz;
@@ -3319,6 +3348,43 @@ static size_t gc_hyb_check_remembered(GCThreadHeap *H) {
     return visited + gc_hyb_check_slots * 8;
 }
 
+// Where survivors tenure to, chosen per heap from what the program does
+// with old objects. A private old generation pays off when old objects are
+// written with young values (stores are recorded, not promoted: Kerberos'
+// VM state); for data that is built once and then only read it is a detour
+// — every tenured byte is marked again by major collections before it
+// spills to the shared heap anyway. So:
+//   - old mode: a major collection that saw few barrier stores into old
+//     objects per byte tenured since the last one switches the heap to
+//     tenuring straight into the shared heap;
+//   - direct mode: once the store barrier has promoted more into the
+//     shared heap than tenuring has (stores into shared objects are what
+//     a private old generation absorbs), switch back.
+#define GC_HYB_STORES_PER_MB 64          // old-mode stores per MiB tenured worth keeping it
+#define GC_HYB_MODE_MIN      ((size_t)4 << 20)
+static void gc_hyb_choose_target(GCThreadHeap *H, int was_major, size_t tenured_before_major) {
+    if (!H->direct_shared) {
+        if (!was_major) return;
+        size_t mb = tenured_before_major >> 20;
+        if (mb && H->old_stores < (size_t)GC_HYB_STORES_PER_MB * mb) {
+            H->direct_shared = 1;
+            H->mode_tenured = H->mode_barrier = 0;
+            // Nothing tenures into the old generation from now on, so no
+            // major collection would come to reclaim it: one more, spilling
+            // whatever is still old to the shared heap, empties it.
+            H->force_major = 1;
+        }
+        H->old_stores = 0;
+        return;
+    }
+    H->mode_tenured += H->swept_promoted;
+    H->mode_barrier += H->barrier_promoted;
+    if (H->mode_barrier > GC_HYB_MODE_MIN && H->mode_barrier > H->mode_tenured) {
+        H->direct_shared = 0;
+        H->old_stores = 0;
+    }
+}
+
 // A local root: mark it as usual, and pin what it references directly.
 //
 // Pinning protects objects that may be half-built (see gc_tlh_keep):
@@ -3371,13 +3437,19 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     }
     // Minor (young generation only) or major (the whole private heap)?
     size_t old_due = H->old_live > GC_HYB_OLD_FLOOR ? H->old_live : GC_HYB_OLD_FLOOR;
-    H->major = H->old_growth >= old_due;
-    H->tenure_shared = H->major && H->old_live + H->old_growth > gc_hyb_old_cap;
+    H->major = H->old_growth >= old_due || H->force_major;
+    H->force_major = 0;
+    // Survivors go to the shared heap when the old generation is full (a
+    // spilling major), or always while this heap tenures straight to it.
+    H->tenure_shared = H->direct_shared
+                       || (H->major && H->old_live + H->old_growth > gc_hyb_old_cap);
+    size_t growth_at_start = H->old_growth;
     T->minor = !H->major;
     if (H->verify_now && T->minor) H->verify_cost += gc_hyb_check_remembered(H);
     H->tenure_all = H->young_live > GC_HYB_PRIVATE_CAP || H->tenure_shared;
     T->tenure_all = H->tenure_all;
     T->tenure_age = H->tenure_age;
+    T->tenure_shared = H->tenure_shared;
     H->swept_promoted = 0;
     H->sweep_young_live = 0;
     size_t allocated = H->local_alloc;   // since the last local collection
@@ -3437,6 +3509,7 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     T->ctx = saved;
 #if defined(GC_HYBRID)
     T->minor = 0;
+    T->tenure_shared = 0;
     // Logged values that are still young stay logged (their containers
     // still reference them, or did: an overwritten value just ages out).
     // Remembered holders stay remembered; the next minor collection drops
@@ -3452,6 +3525,7 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     }
     H->nremvals = kept_vals;
     int was_major = H->major;
+    gc_hyb_choose_target(H, was_major, growth_at_start);
     H->young_live = H->sweep_young_live;
     if (H->major) {
         H->old_live = H->private_live > H->young_live ? H->private_live - H->young_live : 0;
@@ -3495,7 +3569,6 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
 #define GC_US(a, b) (((b).tv_sec - (a).tv_sec) * 1000000L + ((b).tv_nsec - (a).tv_nsec) / 1000L)
 #if defined(GC_HYBRID)
         size_t tenured = H->swept_promoted, stored = H->barrier_promoted;
-        H->barrier_promoted = 0;
         int major_log = was_major;
 #else
         size_t tenured = 0, stored = 0;
@@ -3508,6 +3581,9 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
                 H->local_threshold, GC_US(t0, t1), GC_US(t0, tm), GC_US(tm, t1));
 #undef GC_US
     }
+#if defined(GC_HYBRID)
+    H->barrier_promoted = 0;
+#endif
 }
 
 // Task exit (D2's region reclamation). The exit path has already published
