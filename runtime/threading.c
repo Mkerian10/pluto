@@ -1215,6 +1215,8 @@ void __pluto_serve_handler_spawn(long svc, long conn, long handler_fn) {
     a->svc = svc;
     a->conn = conn;
     a->handler = (long (*)(long, long))handler_fn;
+    // The service instance is reachable from the handler thread from now on.
+    __pluto_gc_promote_store(svc);
     pthread_t tid;
     pthread_attr_t attr;
     pthread_attr_init(&attr);

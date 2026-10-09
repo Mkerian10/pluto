@@ -70,16 +70,39 @@ def run_once(binary, env=None):
 
 
 def gc_stats(stderr):
-    pauses = [int(x) for x in re.findall(r"^gc: .*?pause_us=(\d+)", stderr, re.M)]
-    if not pauses:
+    """Pause statistics from PLUTO_GC_LOG lines.
+
+    Stop-the-world pauses (kind full/minor/major/global) stall every thread;
+    thread-local ones (kind local/exit, --gc tlh) stall only the collecting
+    thread, so they are reported separately and never summed together.
+    """
+    stw, local = [], []
+    kinds = []
+    for m in re.finditer(r"^gc: .*?pause_us=(\d+).*?kind=(\w+)", stderr, re.M):
+        us, kind = int(m.group(1)), m.group(2)
+        kinds.append(kind)
+        (local if kind in ("local", "exit") else stw).append(us)
+    if not kinds:
         return None
-    kinds = re.findall(r"^gc: .*?kind=(\w+)", stderr, re.M)
+
+    def p99(xs):
+        if not xs:
+            return 0.0
+        xs = sorted(xs)
+        return xs[min(len(xs) - 1, int(round(0.99 * (len(xs) - 1))))] / 1000.0
+
     return {
         "minor": kinds.count("minor"),
         "major": kinds.count("major"),
-        "pause_ms": sum(pauses) / 1000.0,
-        "max_pause_ms": max(pauses) / 1000.0,
-        "cycles": len(pauses),
+        "local": kinds.count("local"),
+        "exit": kinds.count("exit"),
+        "pause_ms": sum(stw) / 1000.0,
+        "max_pause_ms": max(stw) / 1000.0 if stw else 0.0,
+        "p99_pause_ms": p99(stw),
+        "cycles": len(stw),
+        "local_pause_ms": sum(local) / 1000.0,
+        "local_max_ms": max(local) / 1000.0 if local else 0.0,
+        "local_p99_ms": p99(local),
     }
 
 
@@ -137,7 +160,10 @@ def main():
             print(f"{bench:14s} {backend:12s} wall={row['wall_s']:.3f}s "
                   f"pause={row.get('pause_ms', float('nan')):.1f}ms "
                   f"max={row.get('max_pause_ms', float('nan')):.2f}ms "
-                  f"cyc={row.get('cycles', '-')} rss={row['rss_mb'] or 0:.0f}MB "
+                  f"cyc={row.get('cycles', '-')} "
+                  + (f"local={row['local']}/{row['local_pause_ms']:.1f}ms/max{row['local_max_ms']:.2f} "
+                     if row.get('local') else "")
+                  + f"rss={row['rss_mb'] or 0:.0f}MB "
                   f"{'ok' if ok else 'MISMATCH ' + repr(out)}", flush=True)
 
     if args.out:
