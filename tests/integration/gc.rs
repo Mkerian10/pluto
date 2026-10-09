@@ -686,3 +686,36 @@ app MyApp {
 "#);
     assert_eq!(out.trim(), "written-before-churn");
 }
+
+#[test]
+fn noop_backend_structural_equality() {
+    // Structural == walks each object's field_count slots. The noop backend
+    // used to record field_count 0, so any two objects of the same class
+    // compared equal under --gc noop.
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("main.pt");
+    std::fs::write(
+        &src,
+        r#"
+class P {
+    x: int
+    y: int
+}
+
+fn main() {
+    let a = P { x: 1, y: 2 }
+    let b = P { x: 1, y: 3 }
+    let c = P { x: 1, y: 2 }
+    print(f"{a == b} {a == c}")
+}
+"#,
+    )
+    .unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_pluto"))
+        .args(["--gc", "noop", "run"])
+        .arg(&src)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "run failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "false true");
+}
