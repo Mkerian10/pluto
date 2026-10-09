@@ -11,6 +11,7 @@ extern void pluto_ctx_swap(void **from_sp, void *to_sp);
 struct GTask {
     void *sp;              // saved stack pointer (NULL once finished)
     char *stack;           // malloc'd stack base (freed when reaped)
+    size_t stack_size;
     void (*fn)(void *);
     void *arg;
     int done;
@@ -72,6 +73,7 @@ static void gtask_trampoline(void) {
 GTask *green_spawn(void (*fn)(void *), void *arg, size_t stack_size) {
     GTask *t = (GTask *)calloc(1, sizeof(GTask));
     t->stack = (char *)malloc(stack_size);
+    t->stack_size = stack_size;
     t->fn = fn;
     t->arg = arg;
     t->sp = prime_context(t->stack + stack_size, gtask_trampoline);
@@ -108,3 +110,12 @@ void green_park(void) {
 void green_wake(GTask *t) { rq_push(t); }
 GTask *green_current(void) { return g_sched.current; }
 long green_live(void) { return g_sched.live; }
+
+// GC support: the live portion of a non-running task's stack is [sp, top).
+// Everything the task had live at its last cooperative switch is here: locals
+// above sp, and the callee-saved registers pushed into this range by
+// pluto_ctx_swap. (For the RUNNING task, use the thread's current sp instead.)
+void green_task_live_range(GTask *t, void **lo, void **hi) {
+    *lo = t->sp;
+    *hi = t->stack + t->stack_size;
+}

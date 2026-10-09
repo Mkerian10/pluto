@@ -26,3 +26,4 @@ void green_park(void);
 void green_wake(GTask *t);
 GTask *green_current(void);
 long green_live(void);   // tasks created but not yet finished (incl. parked)
+void green_task_live_range(GTask *t, void **lo, void **hi); // [sp, top) to GC-scan
