@@ -207,7 +207,6 @@ void __pluto_gc_enable_fiber_scanning(void);
 void __pluto_gc_disable_fiber_scanning(void);
 // GC collection trigger API
 void __pluto_gc_maybe_collect(void);
-GCHeader *__pluto_gc_get_head(void);
 #else
 // Thread stack API for spawned tasks (production mode only)
 void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi);
@@ -218,7 +217,6 @@ void __pluto_gc_task_end(void);
 int __pluto_gc_check_safepoint(void);
 // GC collection trigger API
 void __pluto_gc_maybe_collect(void);
-GCHeader *__pluto_gc_get_head(void);
 #endif
 
 // ── Forward Declarations ─────────────────────────────────────────────────────

@@ -7,8 +7,8 @@
 // - Reference implementation of the GC API contract
 //
 // All allocations go through malloc. No collection, no safepoints,
-// no thread coordination. The GCHeader linked list is maintained for
-// compatibility with runtime code that walks it (e.g., __pluto_gc_get_head).
+// no thread coordination. A GCHeader linked list is kept so
+// __pluto_gc_find_object can answer pointer -> object queries.
 //──────────────────────────────────────────────────────────────────────────────
 
 #include "builtins.h"
@@ -88,9 +88,6 @@ void __pluto_gc_maybe_collect(void) {
     // No-op
 }
 
-GCHeader *__pluto_gc_get_head(void) {
-    return gc_head;
-}
 
 // The noop backend keeps no index; exact-start linear scan (benchmark-only).
 GCHeader *__pluto_gc_find_object(void *p) {
