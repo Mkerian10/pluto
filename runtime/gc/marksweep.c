@@ -168,7 +168,7 @@ static unsigned gc_hyb_tenure_force = 0;
 // major that would find more than gc_hyb_old_cap promotes its survivors to
 // the shared heap instead, which bounds a major's pause.
 #define GC_HYB_OLD_FLOOR ((size_t)4 << 20)
-static size_t gc_hyb_old_cap = (size_t)32 << 20;
+static size_t gc_hyb_old_cap = (size_t)8 << 20;
 #endif
 
 #define gc_worklist             (T->ctx->worklist)
@@ -268,6 +268,9 @@ typedef struct GCBlock {
     struct GCThreadHeap *owner; // tlab/tlh: owning thread heap (NULL: shared heap)
     uint32_t nprivate;        // hybrid: private objects in the block (exact after a
                               // sweep; allocation adds, promotion subtracts)
+    uint32_t nold;            // hybrid: old-generation objects in the block (exact
+                              // after a full walk; tenuring adds, promotion to
+                              // the shared heap subtracts)
     uint32_t nlive;           // hybrid: allocated objects in the block (exact after
                               // a sweep; allocation adds, local deaths subtract)
     uint64_t young[GC_BLOCK_SIZE / 32 / 64];   // hybrid: one bit per slot, set for
@@ -311,6 +314,32 @@ static uintptr_t gc_heap_lo = UINTPTR_MAX, gc_heap_hi = 0;
 // (PLUTO_GC_VERIFY re-checks every class once at startup.)
 static inline uint32_t gc_magic_for(uint32_t obj_size) {
     return (uint32_t)((((uint64_t)1) << 32) / obj_size + 1);
+}
+
+// Zero a fresh small object (header included). Up to 128 bytes this is a
+// run of word stores the compiler cannot turn back into a memset call; the
+// slot is a multiple of 16 bytes, so rounding total up to a word stays in it.
+static inline void gc_zero_object(void *p, size_t total) {
+    if (total > 128) { memset(p, 0, total); return; }
+    uint64_t *w = (uint64_t *)p;
+    switch ((total + 7) >> 3) {
+    case 16: w[15] = 0; /* fall through */
+    case 15: w[14] = 0; /* fall through */
+    case 14: w[13] = 0; /* fall through */
+    case 13: w[12] = 0; /* fall through */
+    case 12: w[11] = 0; /* fall through */
+    case 11: w[10] = 0; /* fall through */
+    case 10: w[9] = 0;  /* fall through */
+    case 9:  w[8] = 0;  /* fall through */
+    case 8:  w[7] = 0;  /* fall through */
+    case 7:  w[6] = 0;  /* fall through */
+    case 6:  w[5] = 0;  /* fall through */
+    case 5:  w[4] = 0;  /* fall through */
+    case 4:  w[3] = 0;  /* fall through */
+    case 3:  w[2] = 0;  /* fall through */
+    case 2:  w[1] = 0;  /* fall through */
+    default: w[0] = 0;
+    }
 }
 
 static inline void gc_heap_widen(char *base, size_t bytes) {
@@ -412,6 +441,7 @@ static GCBlock *gc_new_small_block(size_t cls) {
     b->dirty = 0;
     b->owner = NULL;
     b->nprivate = 0;
+    b->nold = 0;
     b->nlive = 0;
     memset(b->young, 0, sizeof b->young);
     b->next = NULL;
@@ -597,7 +627,7 @@ static void *gc_obj_alloc(size_t user_size, uint8_t type_tag, uint16_t field_cou
     } else {
         h = gc_large_alloc(total, &slot_bytes, &b);
     }
-    memset(h, 0, total);
+    gc_zero_object(h, total);
     h->size = (uint32_t)user_size;
     h->type_tag = type_tag;
     h->field_count = field_count;
@@ -741,7 +771,7 @@ static inline void *gc_tlh_alloc_fast(GCThreadHeap *H, size_t user_size, uint8_t
         h = (GCHeader *)(b->base + (size_t)b->bump * b->obj_size);
         b->bump++;
     }
-    memset(h, 0, total);
+    gc_zero_object(h, total);
     h->size = (uint32_t)user_size;
     h->type_tag = type_tag;
     h->field_count = field_count;
@@ -782,6 +812,7 @@ static void *gc_tlh_alloc_slow(GCThreadHeap *H, size_t user_size, uint8_t type_t
             b->free_list = NULL;
             b->has_containers = 0;
             b->nprivate = 0;
+            b->nold = 0;
             b->nlive = 0;
             memset(b->young, 0, sizeof b->young);
             b->next = NULL;
@@ -800,7 +831,7 @@ static void *gc_tlh_alloc_slow(GCThreadHeap *H, size_t user_size, uint8_t type_t
     GCBlock *b;
     GCHeader *h = gc_large_alloc(total, &bytes, &b);
     gc_tlh_own(H, b);
-    memset(h, 0, total);
+    gc_zero_object(h, total);
     h->size = (uint32_t)user_size;
     h->type_tag = type_tag;
     h->field_count = field_count;
@@ -2474,6 +2505,7 @@ static void gc_tlh_promote_visit(GCTrace *T, GCHeader *h) {
 #endif
 #if defined(GC_HYBRID)
     if (was_young && b->nprivate) b->nprivate--;
+    if (!was_young && b->nold) b->nold--;
     // A global cycle judges shared objects. While one marks, a newly shared
     // object is logged, so the next step traces it — marking it black here
     // would skip the shared objects only it reaches. Once the cycle is done
@@ -2604,7 +2636,7 @@ static void gc_mark_candidate(GCTrace *T, void *candidate) {
 // ── Sweep ────────────────────────────────────────────────────────────────────
 
 // Release the non-GC resources owned by a dead object.
-static void gc_finalize(GCHeader *h) {
+static void gc_finalize_slow(GCHeader *h) {
     long *slots = (long *)((char *)h + sizeof(GCHeader));
     switch (h->type_tag) {
     // Arrays, bytes, maps and sets own GC_TAG_BUFFER backing stores, which
@@ -2645,6 +2677,13 @@ static void gc_finalize(GCHeader *h) {
     default:
         break;
     }
+}
+
+// Most objects own nothing outside the heap: only tasks, channels and
+// entities need finalizing, so test the tag before paying for the call.
+static inline void gc_finalize(GCHeader *h) {
+    uint8_t t = h->type_tag;
+    if (t == GC_TAG_TASK || t == GC_TAG_CHANNEL || t == GC_TAG_ENTITY) gc_finalize_slow(h);
 }
 
 // Sweep one small block: finalize each unmarked object, tag it FREE and push
@@ -2855,10 +2894,11 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
 }
 
 #if defined(GC_HYBRID)
-static void gc_hyb_verify_no_private(GCBlock *b) {
+static void gc_hyb_verify_no_private(GCBlock *b, int no_old) {
     for (uint32_t i = 0; i < b->bump; i++) {
         GCHeader *h = (GCHeader *)(b->base + (size_t)i * b->obj_size);
-        if (h->type_tag != GC_TAG_FREE && h->next == NULL) {
+        if (h->type_tag != GC_TAG_FREE
+            && (h->next == NULL || (no_old && (h->next == GC_OLD_TAG || h->next == GC_OLD_REM_TAG)))) {
             fprintf(stderr, "pluto: PLUTO_GC_VERIFY: block %p counted no young objects but "
                     "holds young %p (tag %d)\n", (void *)b->base, (void *)(h + 1), h->type_tag);
             abort();
@@ -2913,7 +2953,7 @@ static int gc_tlh_sweep_one(GCThreadHeap *H, GCBlock *b, int private_marked,
 #if defined(GC_HYBRID)
     size_t before = *live_private;
 #endif
-    uint32_t nprivate = 0;
+    uint32_t nprivate = 0, nold = 0;
     int containers = 0;
     GCHeader *free_list = NULL;
 #if defined(GC_HYBRID)
@@ -2924,6 +2964,7 @@ static int gc_tlh_sweep_one(GCThreadHeap *H, GCBlock *b, int private_marked,
         if (h->type_tag != GC_TAG_FREE) {
             if (gc_tlh_keep(H, h, private_marked, osz, live_private)) {
                 live++;
+                if (h->next == GC_OLD_TAG || h->next == GC_OLD_REM_TAG) nold++;
                 if (h->next == NULL) {   // young (nprivate counts young objects)
                     nprivate++;
 #if defined(GC_HYBRID)
@@ -2958,6 +2999,7 @@ static int gc_tlh_sweep_one(GCThreadHeap *H, GCBlock *b, int private_marked,
     b->free_list = free_list;
     b->has_containers = (uint8_t)containers;
     b->nprivate = nprivate;
+    b->nold = nold;
     b->nlive = (uint32_t)live;
     if (free_list || b->bump < b->nobjs) {
         b->next = H->avail[b->cls];
@@ -2995,8 +3037,12 @@ static int gc_hyb_sweep_young(GCThreadHeap *H, GCBlock *b, size_t *freed, size_t
                 continue;
             }
             if (gc_tlh_keep(H, h, 1, osz, live_private)) {
-                if (h->next != NULL) b->young[w] &= ~bit;   // tenured now
-                else nprivate++;
+                if (h->next == NULL) {
+                    nprivate++;
+                } else {   // tenured now
+                    b->young[w] &= ~bit;
+                    if (h->next == GC_OLD_TAG) b->nold++;
+                }
                 continue;
             }
             gc_hyb_log_dying(h);
@@ -3067,14 +3113,14 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
     int full = H->major || H->shared_sweep_pending;
     GCBlock **unparked = NULL;
     size_t nunparked = 0;
-    if (full && H->nparked) {
+    if (H->shared_sweep_pending && H->nparked) {
         unparked = (GCBlock **)malloc(H->nparked * sizeof(GCBlock *));
         if (!unparked) gc_oom("GC parked blocks");
         size_t np = 0;
         for (size_t k = 0; k < H->nparked; k++) {
             GCBlock *b = H->parked[k];
             size_t dummy = 0;
-            int r = gc_tlh_sweep_one(H, b, H->major ? private_marked : 0, &freed, &dummy);
+            int r = gc_tlh_sweep_one(H, b, 0, &freed, &dummy);
             if (r == 2) H->parked[np++] = b;
             else if (r == 0) unparked[nunparked++] = b;
         }
@@ -3090,8 +3136,10 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
         // Exactness matters — a skipped private object would keep a stale
         // local mark and hide its children from the next local mark — so
         // PLUTO_GC_VERIFY checks every skipped block.
-        if (b->kind == GC_BLOCK_SMALL && b->nprivate == 0 && !full) {
-            if (H->verify_now) gc_hyb_verify_no_private(b);
+        // A major collection skips blocks with no old objects either.
+        if (b->kind == GC_BLOCK_SMALL && b->nprivate == 0 && !H->shared_sweep_pending
+            && (!H->major || b->nold == 0)) {
+            if (H->verify_now) gc_hyb_verify_no_private(b, H->major);
             if (b->free_list || b->bump < b->nobjs) {
                 b->next = H->avail[b->cls];
                 H->avail[b->cls] = b;
@@ -3225,6 +3273,11 @@ static int gc_hyb_cmp_long(const void *a, const void *b) {
 static void gc_hyb_check_rem_slot(GCHeader *parent, long word, const char *where) {
     gc_hyb_check_slots++;
     if (parent->next != GC_OLD_TAG) return;   // remembered holders are traced anyway
+    // An old object a global cycle has marked may be dead locally and kept
+    // only by the cycle (a held object): it is not traced locally, so its
+    // young children can die and their slots be reused, leaving stale
+    // pointers no live object can follow. Only judge objects no cycle holds.
+    if (parent->mark & GC_MARK_GLOBAL) return;
     GCHeader *c = gc_tlh_find_own((void *)word, gc_hyb_check_heap);
     if (!c || c->next != NULL || !gc_is_start(c, (void *)word)) return;
     if (gc_is_container_tag(parent->type_tag)
@@ -3383,27 +3436,21 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     T->local_heap = NULL;
     T->ctx = saved;
 #if defined(GC_HYBRID)
-    int was_minor = T->minor;
     T->minor = 0;
-    if (was_minor) {
-        // Logged values that are still young stay logged (their containers
-        // still reference them, or did: an overwritten value just ages out).
-        size_t kept_vals = 0;
-        for (size_t i = 0; i < H->nremvals; i++) {
-            GCHeader *v = gc_tlh_find_own((void *)H->remvals[i], H);
-            if (v && (long)(v + 1) == H->remvals[i] && v->next == NULL) H->remvals[kept_vals++] = H->remvals[i];
-        }
-        H->nremvals = kept_vals;
-    } else {
-        // A major collection tenured every young object an old one
-        // referenced: the remembered set starts over.
-        for (size_t i = 0; i < H->nremset; i++) {
-            GCHeader *o = gc_tlh_find_own(H->remset[i] + 1, H);
-            if (o == H->remset[i] && o->next == GC_OLD_REM_TAG) o->next = GC_OLD_TAG;
-        }
-        H->nremset = 0;
-        H->nremvals = 0;
+    // Logged values that are still young stay logged (their containers
+    // still reference them, or did: an overwritten value just ages out).
+    // Remembered holders stay remembered; the next minor collection drops
+    // the ones that no longer hold young objects. This holds after a major
+    // collection too: one tenures the young children of every old object
+    // it traces, but an old object the running global cycle keeps alive
+    // without the local mark reaching it (dead locally, held by the cycle)
+    // is not traced, and its young children must stay recorded.
+    size_t kept_vals = 0;
+    for (size_t i = 0; i < H->nremvals; i++) {
+        GCHeader *v = gc_tlh_find_own((void *)H->remvals[i], H);
+        if (v && (long)(v + 1) == H->remvals[i] && v->next == NULL) H->remvals[kept_vals++] = H->remvals[i];
     }
+    H->nremvals = kept_vals;
     int was_major = H->major;
     H->young_live = H->sweep_young_live;
     if (H->major) {
