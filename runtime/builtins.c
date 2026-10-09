@@ -342,6 +342,11 @@ long __pluto_array_remove_at(void *handle, long index) {
     long *data = (long *)h[2];
     long removed = data[index];
     PLUTO_GC_DELETE(removed);
+    // Elements moving to lower indices can cross an incremental collector's
+    // scan cursor: log them while it marks.
+    if (__pluto_gc_barrier_mode == 2) {
+        for (long i = index + 1; i < len; i++) PLUTO_GC_DELETE(data[i]);
+    }
     for (long i = index; i < len - 1; i++) {
         data[i] = data[i + 1];
     }
@@ -396,6 +401,9 @@ void __pluto_array_reverse(void *handle) {
     long *h = (long *)handle;
     long len = h[0];
     long *data = (long *)h[2];
+    if (__pluto_gc_barrier_mode == 2) {   // every element moves (see remove_at)
+        for (long i = 0; i < len; i++) PLUTO_GC_DELETE(data[i]);
+    }
     for (long i = 0; i < len / 2; i++) {
         long tmp = data[i];
         data[i] = data[len - 1 - i];
@@ -2403,6 +2411,8 @@ void __pluto_map_remove(void *handle, long key_type, long key) {
                 if (empty <= j) displaced = (natural <= empty || natural > j);
                 else             displaced = (natural <= empty && natural > j);
                 if (displaced) {
+                    PLUTO_GC_DELETE(keys[j]);   // moves (see __pluto_array_remove_at)
+                    PLUTO_GC_DELETE(((long *)h[3])[j]);
                     keys[empty] = keys[j];
                     ((long *)h[3])[empty] = ((long *)h[3])[j];
                     meta[empty] = meta[j];
@@ -2460,6 +2470,8 @@ static void map_grow(long *h, long key_type) {
     unsigned char *new_meta = (unsigned char *)calloc(new_cap, 1);
     for (long i = 0; i < old_cap; i++) {
         if (old_meta[i] >= 0x80) {
+            PLUTO_GC_DELETE(old_keys[i]);   // every entry moves (see __pluto_array_remove_at)
+            PLUTO_GC_DELETE(old_vals[i]);
             unsigned long idx = ht_hash(old_keys[i], key_type) & (unsigned long)(new_cap - 1);
             while (new_meta[idx] >= 0x80) idx = (idx + 1) & (unsigned long)(new_cap - 1);
             new_keys[idx] = old_keys[i]; new_vals[idx] = old_vals[i]; new_meta[idx] = 0x80;
@@ -2538,6 +2550,7 @@ void __pluto_set_remove(void *handle, long key_type, long elem) {
                 if (empty <= j) displaced = (natural <= empty || natural > j);
                 else             displaced = (natural <= empty && natural > j);
                 if (displaced) {
+                    PLUTO_GC_DELETE(keys[j]);   // moves (see __pluto_array_remove_at)
                     keys[empty] = keys[j]; meta[empty] = meta[j]; meta[j] = 0; empty = j;
                 }
                 j = (j + 1) & (unsigned long)(cap - 1);
@@ -2580,6 +2593,7 @@ static void set_grow(long *h, long key_type) {
         if (old_meta[i] >= 0x80) {
             unsigned long idx = ht_hash(old_keys[i], key_type) & (unsigned long)(new_cap - 1);
             while (new_meta[idx] >= 0x80) idx = (idx + 1) & (unsigned long)(new_cap - 1);
+            PLUTO_GC_DELETE(old_keys[i]);   // every entry moves
             new_keys[idx] = old_keys[i]; new_meta[idx] = 0x80;
         }
     }
