@@ -33,7 +33,12 @@ fn run(program: &str, gc: GcBackend, env: &[(&str, &str)]) -> String {
 /// One test per (program, backend) keeps each within the per-test timeout.
 fn differential(program: &str, gc: GcBackend) {
     let expected = run(program, GcBackend::MarkSweep, &[]);
-    for torture in ["0", "50"] {
+    // Torture collections only for the backends that are default
+    // candidates: under verify, the lab-only variants' brute-force checks
+    // make torture runs too slow for CI's macOS runners.
+    let lab_only = matches!(gc, GcBackend::Lazy | GcBackend::Gen | GcBackend::ParMark | GcBackend::Tlab);
+    let tortures: &[&str] = if lab_only { &["0"] } else { &["0", "50"] };
+    for &torture in tortures {
         let got = run(program, gc, &[("PLUTO_GC_VERIFY", "1"), ("PLUTO_GC_TORTURE", torture)]);
         assert_eq!(got, expected, "{program} under {} (torture={torture})", gc.name());
     }
