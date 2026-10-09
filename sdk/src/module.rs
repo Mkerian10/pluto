@@ -785,7 +785,7 @@ fn find_expr_recursive<'a>(expr: &'a Expr, span: Span, target: Span) -> Option<&
             find_expr_recursive(&start.node, start.span, target)
                 .or_else(|| find_expr_recursive(&end.node, end.span, target))
         }
-        Expr::Spawn { call } => {
+        Expr::Spawn { call, .. } => {
             find_expr_recursive(&call.node, call.span, target)
         }
         // Leaf expressions

@@ -798,7 +798,7 @@ fn collect_dangling_in_expr(expr: &Expr, span: Span, target: Uuid, out: &mut Vec
                 collect_dangling_in_expr(&v.node, v.span, target, out);
             }
         }
-        Expr::Propagate { expr } | Expr::Spawn { call: expr } | Expr::NullPropagate { expr } => {
+        Expr::Propagate { expr } | Expr::Spawn { call: expr, .. } | Expr::NullPropagate { expr } => {
             collect_dangling_in_expr(&expr.node, expr.span, target, out);
         }
         Expr::Catch { expr: inner, handlers } => {
@@ -1134,7 +1134,7 @@ fn rename_in_expr(expr: &mut Expr, id: Uuid, kind: DeclKindSimple, old_name: &st
                 rename_in_expr(&mut v.node, id, kind, old_name, new_name);
             }
         }
-        Expr::Propagate { expr } | Expr::Spawn { call: expr } | Expr::NullPropagate { expr } => {
+        Expr::Propagate { expr } | Expr::Spawn { call: expr, .. } | Expr::NullPropagate { expr } => {
             rename_in_expr(&mut expr.node, id, kind, old_name, new_name);
         }
         Expr::Catch { expr: inner, handlers } => {

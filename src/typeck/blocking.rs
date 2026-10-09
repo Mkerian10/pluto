@@ -230,7 +230,7 @@ impl Visitor for BlockingCollector<'_> {
                     }
                 }
             }
-            Expr::Spawn { call } => {
+            Expr::Spawn { call, .. } => {
                 // A spawned body runs on its OWN unit of execution — whether it
                 // blocks is a property of that unit, not of the spawner. Do not
                 // propagate the spawned closure's blocking into this node.

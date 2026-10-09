@@ -459,7 +459,7 @@ fn collect_expr_xrefs(
             collect_expr_xrefs(&start.node, start.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
             collect_expr_xrefs(&end.node, end.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
         }
-        Expr::Spawn { call } => {
+        Expr::Spawn { call, .. } => {
             collect_expr_xrefs(&call.node, call.span, caller_id, fn_name, callers, callees, constructors, enum_usages, raise_sites);
         }
         // Leaf expressions and unresolved xrefs
