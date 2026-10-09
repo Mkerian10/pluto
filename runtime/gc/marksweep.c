@@ -163,6 +163,7 @@ typedef struct GCBlock {
     uint8_t has_containers;   // holds (or held) array/bytes/map/set handles
     uint8_t prot;             // gen: mprotect'ed read-only (holds old objects)
     uint8_t dirty;            // gen: written or allocated into since last GC
+    struct GCThreadHeap *owner; // tlab/tlh: owning thread heap (NULL: shared heap)
     GCHeader *free_list;      // free slots below bump, via GCHeader.next
     struct GCBlock *next;     // class available-list / pool / descriptor freelist
 } GCBlock;
@@ -273,6 +274,7 @@ static GCBlock *gc_new_small_block(size_t cls) {
     b->has_containers = 0;
     b->prot = 0;
     b->dirty = 0;
+    b->owner = NULL;
     b->next = NULL;
     return b;
 }
@@ -457,6 +459,102 @@ static void *gc_obj_alloc(size_t user_size, uint8_t type_tag, uint16_t field_cou
     gc_bytes_allocated += slot_bytes;
     return (char *)h + sizeof(GCHeader);
 }
+
+#if defined(GC_TLAB) && !defined(PLUTO_TEST_MODE)
+// ── Thread heaps (--gc tlab and up) ──────────────────────────────────────────
+//
+// Every registered thread owns a heap: per-size-class available lists over
+// blocks it owns, plus an allocation counter. The fast path pops a slot from
+// the thread's own lists without any lock; the thread reports its allocation
+// to the global counter only every GC_TLAB_BUDGET bytes, so gc_mutex is taken
+// once per budget instead of once per object. New blocks and large objects
+// take the slow path under gc_mutex. A global collection (all threads
+// stopped) folds every heap's unreported bytes into the global count and
+// sweeps each block back onto its owner's lists. When a thread exits, its
+// blocks pass to the shared heap. Threads that never registered (and test
+// mode) allocate from the shared heap under gc_mutex as before.
+#define GC_TLAB_BUDGET ((size_t)256 << 10)
+
+typedef struct GCThreadHeap {
+    GCBlock *avail[GC_NUM_CLASSES];
+    GCBlock **blocks;          // every block this heap owns (small and large)
+    size_t nblocks, cap;
+    size_t unreported;         // slot bytes allocated since the last report
+} GCThreadHeap;
+
+static GCThreadHeap **gc_tlh_heaps = NULL;   // registry, under gc_mutex
+static size_t gc_tlh_heap_count = 0, gc_tlh_heap_cap = 0;
+static __thread GCThreadHeap *gc_my_heap = NULL;
+
+static void gc_tlh_own(GCThreadHeap *H, GCBlock *b) {   // under gc_mutex or STW
+    b->owner = H;
+    if (H->nblocks == H->cap) {
+        size_t cap = H->cap ? H->cap * 2 : 64;
+        GCBlock **grown = (GCBlock **)realloc(H->blocks, cap * sizeof(GCBlock *));
+        if (!grown) gc_oom("GC thread heap");
+        H->blocks = grown;
+        H->cap = cap;
+    }
+    H->blocks[H->nblocks++] = b;
+}
+
+// Lock-free private allocation; NULL when the size class has no room (or
+// the object is large), meaning the caller must take the slow path.
+static inline void *gc_tlh_alloc_fast(GCThreadHeap *H, size_t user_size, uint8_t type_tag,
+                                      uint16_t field_count) {
+    size_t total = sizeof(GCHeader) + user_size;
+    if (total > GC_SMALL_MAX) return NULL;
+    if (!gc_classes_ready) return NULL;
+    size_t cls = gc_size_class[(total + 15) >> 4];
+    GCBlock *b = H->avail[cls];
+    while (b && !b->free_list && b->bump == b->nobjs) b = H->avail[cls] = b->next;
+    if (!b) return NULL;
+    GCHeader *h;
+    if (b->free_list) {
+        h = b->free_list;
+        b->free_list = h->next;
+    } else {
+        h = (GCHeader *)(b->base + (size_t)b->bump * b->obj_size);
+        b->bump++;
+    }
+    memset(h, 0, total);
+    h->size = (uint32_t)user_size;
+    h->type_tag = type_tag;
+    h->field_count = field_count;
+    if (gc_is_container_tag(type_tag)) b->has_containers = 1;
+    H->unreported += gc_class_sizes[cls];
+    return (char *)h + sizeof(GCHeader);
+}
+
+// Slow path, under gc_mutex: a fresh block for H's size class, or a large
+// object owned by H.
+static void *gc_tlh_alloc_slow(GCThreadHeap *H, size_t user_size, uint8_t type_tag,
+                               uint16_t field_count) {
+    if (!gc_classes_ready) gc_init_classes();
+    size_t total = sizeof(GCHeader) + user_size;
+    if (total <= GC_SMALL_MAX) {
+        void *u = gc_tlh_alloc_fast(H, user_size, type_tag, field_count);  // a sweep may have refilled
+        if (u) return u;
+        size_t cls = gc_size_class[(total + 15) >> 4];
+        GCBlock *b = gc_new_small_block(cls);
+        gc_tlh_own(H, b);
+        b->next = H->avail[cls];
+        H->avail[cls] = b;
+        return gc_tlh_alloc_fast(H, user_size, type_tag, field_count);
+    }
+    size_t bytes;
+    GCBlock *b;
+    GCHeader *h = gc_large_alloc(total, &bytes, &b);
+    gc_tlh_own(H, b);
+    memset(h, 0, total);
+    h->size = (uint32_t)user_size;
+    h->type_tag = type_tag;
+    h->field_count = field_count;
+    if (gc_is_container_tag(type_tag)) b->has_containers = 1;
+    gc_bytes_allocated += bytes;
+    return (char *)h + sizeof(GCHeader);
+}
+#endif
 
 // Resolve p to the object whose user data starts at p, or (when interior is
 // set) also any object whose user data contains p. NULL for anything else:
@@ -783,11 +881,56 @@ void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
     // Flag and slot flip together under gc_mutex: the collector (which also
     // holds gc_mutex to count) can never see one without the other
     gc_thread_registered = 1;
+#if defined(GC_TLAB)
+    {
+        GCThreadHeap *H = (GCThreadHeap *)calloc(1, sizeof(GCThreadHeap));
+        if (!H) gc_oom("GC thread heap");
+        if (gc_tlh_heap_count == gc_tlh_heap_cap) {
+            size_t cap = gc_tlh_heap_cap ? gc_tlh_heap_cap * 2 : 16;
+            GCThreadHeap **grown =
+                (GCThreadHeap **)realloc(gc_tlh_heaps, cap * sizeof(GCThreadHeap *));
+            if (!grown) gc_oom("GC thread heap");
+            gc_tlh_heaps = grown;
+            gc_tlh_heap_cap = cap;
+        }
+        gc_tlh_heaps[gc_tlh_heap_count++] = H;
+        gc_my_heap = H;
+    }
+#endif
     pthread_mutex_unlock(&gc_mutex);
 }
 
+#if defined(GC_TLAB)
+// Under gc_mutex: hand every block of H to the shared heap and drop H.
+static void gc_tlh_retire(GCThreadHeap *H) {
+    gc_bytes_allocated += H->unreported;
+    for (size_t k = 0; k < H->nblocks; k++) {
+        GCBlock *b = H->blocks[k];
+        b->owner = NULL;
+        if (b->kind == GC_BLOCK_SMALL && (b->free_list || b->bump < b->nobjs)) {
+            b->next = gc_class_avail[b->cls];
+            gc_class_avail[b->cls] = b;
+        }
+    }
+    for (size_t i = 0; i < gc_tlh_heap_count; i++) {
+        if (gc_tlh_heaps[i] == H) {
+            gc_tlh_heaps[i] = gc_tlh_heaps[--gc_tlh_heap_count];
+            break;
+        }
+    }
+    free(H->blocks);
+    free(H);
+}
+#endif
+
 void __pluto_gc_deregister_thread_stack(void) {
     gc_heap_lock();
+#if defined(GC_TLAB)
+    if (gc_my_heap) {
+        gc_tlh_retire(gc_my_heap);
+        gc_my_heap = NULL;
+    }
+#endif
     if (gc_my_slot) {
         gc_my_slot->active = 0;
         gc_active_thread_count--;
@@ -856,6 +999,12 @@ void __pluto_gc_after_fork(int is_child) {
         atomic_store(&__pluto_active_tasks, 0);
         // Parent's in-flight spawns will never register here; drop their roots.
         gc_pending_root_count = 0;
+#if defined(GC_TLAB)
+        // Heaps of threads that did not survive the fork pass to the shared heap.
+        for (size_t i = gc_tlh_heap_count; i-- > 0;) {
+            if (gc_tlh_heaps[i] != gc_my_heap) gc_tlh_retire(gc_tlh_heaps[i]);
+        }
+#endif
     }
     pthread_mutex_unlock(&gc_mutex);
 }
@@ -1004,10 +1153,39 @@ static void gc_stw_resume_threads(int stopped_count) {
 }
 
 void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
+#if defined(GC_TLAB)
+    // Thread-local fast path (no lock). Torture mode routes every allocation
+    // through the slow path so it can count them.
+    GCThreadHeap *H = gc_my_heap;
+    if (H && gc_torture_every <= 0) {
+        void *u = gc_tlh_alloc_fast(H, user_size, type_tag, field_count);
+        if (u && H->unreported < GC_TLAB_BUDGET) return u;
+        if (u) {
+            // Budget spent: report it, and collect if the heap is due. u
+            // stays rooted through the collection from this frame.
+            gc_heap_lock();
+            gc_bytes_allocated += H->unreported;
+            H->unreported = 0;
+            if (gc_stack_bottom && gc_bytes_allocated > gc_threshold) {
+                int stopped = gc_stw_stop_threads();
+                __pluto_gc_collect();
+                gc_stw_resume_threads(stopped);
+            }
+            pthread_mutex_unlock(&gc_mutex);
+            return u;
+        }
+    }
+#endif
     // The wait for gc_mutex counts as a safe region: the collector holds it
     // for the whole collection, and a thread parked here must count as
     // stopped or stop-the-world would deadlock.
     gc_heap_lock();
+#if defined(GC_TLAB)
+    if (H) {
+        gc_bytes_allocated += H->unreported;
+        H->unreported = 0;
+    }
+#endif
     if (gc_stack_bottom
         && (gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold
             || gc_torture_due())) {
@@ -1019,7 +1197,12 @@ void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
         __pluto_gc_collect();
         gc_stw_resume_threads(stopped);
     }
+#if defined(GC_TLAB)
+    void *user = H ? gc_tlh_alloc_slow(H, user_size, type_tag, field_count)
+                   : gc_obj_alloc(user_size, type_tag, field_count);
+#else
     void *user = gc_obj_alloc(user_size, type_tag, field_count);
+#endif
     pthread_mutex_unlock(&gc_mutex);
     return user;
 }
@@ -1709,15 +1892,23 @@ static size_t gc_sweep_block(GCBlock *b) {
         b->bump = 0;
         b->free_list = NULL;
         b->has_containers = 0;
+        b->owner = NULL;
         b->next = gc_block_pool;
         gc_block_pool = b;
         return freed;
     }
     b->free_list = free_list;
     b->has_containers = (uint8_t)containers;
+    GCBlock **list = &gc_class_avail[b->cls];
+#if defined(GC_TLAB) && !defined(PLUTO_TEST_MODE)
+    if (b->owner) {
+        gc_tlh_own(b->owner, b);   // re-register in its owner's block set
+        list = &b->owner->avail[b->cls];
+    }
+#endif
     if (free_list || b->bump < b->nobjs) {
-        b->next = gc_class_avail[b->cls];
-        gc_class_avail[b->cls] = b;
+        b->next = *list;
+        *list = b;
     } else {
         b->next = NULL;
     }
@@ -1732,6 +1923,9 @@ static size_t gc_sweep_large(void) {
         GCHeader *h = (GCHeader *)b->base;
         if (h->mark) {
             h->mark = 0;
+#if defined(GC_TLAB) && !defined(PLUTO_TEST_MODE)
+            if (b->owner) gc_tlh_own(b->owner, b);
+#endif
             k++;
             continue;
         }
@@ -1889,6 +2083,14 @@ static size_t gc_gen_sweep_block(GCBlock *b) {
 // mode: queue the small blocks instead). Returns the bytes reclaimed now.
 static size_t gc_sweep(void) {
     for (size_t c = 0; c < GC_NUM_CLASSES; c++) gc_class_avail[c] = NULL;
+#if defined(GC_TLAB) && !defined(PLUTO_TEST_MODE)
+    // Every heap's lists and block set are rebuilt by the sweep below.
+    for (size_t i = 0; i < gc_tlh_heap_count; i++) {
+        GCThreadHeap *H = gc_tlh_heaps[i];
+        for (size_t c = 0; c < GC_NUM_CLASSES; c++) H->avail[c] = NULL;
+        H->nblocks = 0;
+    }
+#endif
     size_t freed = 0;
 #ifdef GC_GENERATIONAL
     // Protected blocks hold only old objects (always live in a minor
@@ -1943,6 +2145,12 @@ void __pluto_gc_collect(void) {
     }
     struct timespec gc_t0;
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_t0);
+#if defined(GC_TLAB) && !defined(PLUTO_TEST_MODE)
+    for (size_t i = 0; i < gc_tlh_heap_count; i++) {
+        gc_bytes_allocated += gc_tlh_heaps[i]->unreported;
+        gc_tlh_heaps[i]->unreported = 0;
+    }
+#endif
 
     // Build the data-buffer interval table (objects need no per-cycle index:
     // the page map resolves them directly).
@@ -2342,6 +2550,15 @@ GCHeader *__pluto_gc_find_object(void *p) {
 }
 
 size_t __pluto_gc_bytes_allocated(void) {
+#if defined(GC_TLAB)
+    // Include allocation the thread heaps have not reported yet.
+    gc_heap_lock();
+    size_t total = gc_bytes_allocated;
+    for (size_t i = 0; i < gc_tlh_heap_count; i++) total += gc_tlh_heaps[i]->unreported;
+    pthread_mutex_unlock(&gc_mutex);
+    return total;
+#else
     return gc_bytes_allocated;
+#endif
 }
 #endif
