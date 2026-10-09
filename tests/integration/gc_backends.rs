@@ -28,43 +28,45 @@ fn run(program: &str, gc: GcBackend, env: &[(&str, &str)]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-fn differential(program: &str) {
+/// `program` under `gc`, with the verifier on, with and without torture
+/// collections, must print what the reference mark-sweep backend prints.
+/// One test per (program, backend) keeps each within the per-test timeout.
+fn differential(program: &str, gc: GcBackend) {
     let expected = run(program, GcBackend::MarkSweep, &[]);
-    for gc in GcBackend::ALL {
-        if matches!(gc, GcBackend::Noop | GcBackend::Legacy) {
-            continue;
-        }
-        for torture in ["0", "50"] {
-            let got = run(program, gc, &[("PLUTO_GC_VERIFY", "1"), ("PLUTO_GC_TORTURE", torture)]);
-            assert_eq!(got, expected, "{program} under {} (torture={torture})", gc.name());
-        }
+    for torture in ["0", "50"] {
+        let got = run(program, gc, &[("PLUTO_GC_VERIFY", "1"), ("PLUTO_GC_TORTURE", torture)]);
+        assert_eq!(got, expected, "{program} under {} (torture={torture})", gc.name());
     }
 }
 
-#[test]
-fn sharing_through_entities_tasks_and_channels() {
-    differential("sharing.pt");
+macro_rules! differential_tests {
+    ($program:literal, $module:ident) => {
+        mod $module {
+            use super::*;
+            #[test] fn lazy() { differential($program, GcBackend::Lazy) }
+            #[test] fn generational() { differential($program, GcBackend::Gen) }
+            #[test] fn parmark() { differential($program, GcBackend::ParMark) }
+            #[test] fn tlab() { differential($program, GcBackend::Tlab) }
+            #[test] fn tlh() { differential($program, GcBackend::Tlh) }
+            #[test] fn incr() { differential($program, GcBackend::Incr) }
+            #[test] fn hybrid() { differential($program, GcBackend::Hybrid) }
+        }
+    };
 }
 
-/// Cuts snapshot-reachable objects out of not-yet-scanned containers and
-/// moves them into objects allocated mid-cycle: under `incr` every cut must
-/// reach the deletion log, which the verifier checks at the end of marking.
-#[test]
-fn references_moved_during_marking() {
-    differential("satb.pt");
-}
+// Values crossing threads through entities, tasks and channels.
+differential_tests!("sharing.pt", sharing_through_entities_tasks_and_channels);
 
-/// Large containers whose elements move (remove_at, map deletion shifts)
-/// while `incr` scans them in chunks: moved elements must be logged.
-#[test]
-fn elements_moved_behind_a_chunked_scan() {
-    differential("chunks.pt");
-}
+// Cuts snapshot-reachable objects out of not-yet-scanned containers and
+// moves them into objects allocated mid-cycle: under `incr` every cut must
+// reach the deletion log, which the verifier checks at the end of marking.
+differential_tests!("satb.pt", references_moved_during_marking);
 
-/// Containers the runtime fills with plain stores (array slices) while their
-/// elements are young: no collection may see a container before the call
-/// that allocates it returns (once broke hybrid's clean-container flag).
-#[test]
-fn runtime_filled_containers_with_young_elements() {
-    differential("slices.pt");
-}
+// Large containers whose elements move (remove_at, map deletion shifts)
+// while `incr` scans them in chunks: moved elements must be logged.
+differential_tests!("chunks.pt", elements_moved_behind_a_chunked_scan);
+
+// Containers the runtime fills with plain stores (array slices) while their
+// elements are young: no collection may see a container before the call
+// that allocates it returns (once broke hybrid's clean-container flag).
+differential_tests!("slices.pt", runtime_filled_containers_with_young_elements);
