@@ -30,10 +30,12 @@ threading.c ──calls──► gc.c::__pluto_gc_register_thread_stack()
 
 **Responsibility:** Memory management and garbage collection.
 
-**Algorithm:** Conservative mark-and-sweep with interval tables for pointer lookup.
+**Algorithm:** Conservative mark-and-sweep over a size-class block heap (`runtime/gc/marksweep.c`).
+
+**Heap layout:** Small objects (header + data <= 4 KiB) live in 16 KiB blocks, one size class per block (27 classes, 32 B to 4 KiB), carved from 4 MiB mmap'd chunks. Larger objects get their own page-aligned allocation. A two-level page map (4 KiB pages) resolves any address to its block in O(1), so finding the object behind a conservative candidate, whether a start or interior pointer, needs no per-cycle index. Freed slots are tagged FREE and kept on per-block free lists; empty blocks return to a shared pool. Container backing stores (array/bytes/map/set data) stay plain `malloc` and are tracked by a per-cycle data-interval table built from blocks flagged as holding container handles.
 
 **Key features:**
-- Generational collection threshold (starts at 256 KB, grows 2x after each GC)
+- Collection threshold `max(2 * live, adaptive floor)`, with the floor adapting to reclaim rate and thread count (see the policy comment at `gc_threshold`)
 - Stop-the-world coordination via safepoint polling (production mode)
 - Cooperative fiber scanning (test mode)
 - Thread stack registration for concurrent GC root scanning
@@ -45,6 +47,9 @@ threading.c ──calls──► gc.c::__pluto_gc_register_thread_stack()
 - `void __pluto_safepoint(void)` — Check for pending GC and yield if requested
 - `void *gc_alloc(size_t size, uint8_t tag, uint16_t field_count)` — Internal allocation (used by runtime modules)
 - `size_t __pluto_gc_bytes_allocated(void)` — Query current heap size
+- `GCHeader *__pluto_gc_find_object(void *p)` — O(1) exact-start pointer-to-object query (deep copy, structural equality)
+
+**Debugging:** `PLUTO_GC_LOG=1` logs each collection with a build/mark/sweep split; `PLUTO_GC_VERIFY=1` cross-checks pointer lookups against a brute-force heap scan.
 
 **Test mode API:**
 - `void __pluto_gc_register_fiber_stack(char *base, size_t size)` — Register fiber stack for scanning
@@ -62,9 +67,9 @@ threading.c ──calls──► gc.c::__pluto_gc_register_thread_stack()
 - `int __pluto_gc_check_safepoint(void)` — Check if GC is requesting STW
 
 **Internal data structures:**
-- `GCHeader` — 16-byte header on all GC objects (next ptr, size, mark bit, type tag, field count)
-- `gc_head` — Linked list of all live objects
-- `gc_intervals` — Sorted interval table for fast pointer-to-header lookup
+- `GCHeader` — 16-byte header immediately before every object's data (free-list link, size, mark bit, type tag, field count); runtime code reads it at `ptr - sizeof(GCHeader)`
+- `GCBlock` / `gc_pagemap` — block descriptors and the page map from address to block
+- `gc_data_intervals` — Sorted (radix) table of container backing stores, rebuilt each cycle
 - `gc_worklist` — Stack of objects to mark (DFS marking)
 - `gc_thread_stacks[]` — Thread stack bounds for root scanning (production mode)
 - `gc_fiber_stacks` — Fiber stack metadata (test mode)
