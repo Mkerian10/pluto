@@ -86,24 +86,42 @@ static int gc_collecting = 0;
 static atomic_int gc_collecting = 0;
 #endif
 
-// Mark worklist (raw malloc, not GC-tracked)
-static void **gc_worklist = NULL;
-static size_t gc_worklist_count = 0;
-static size_t gc_worklist_cap = 0;
+// Per-collection working state lives in a collector context, reached
+// through a thread-local pointer that defaults to the single global
+// context. Backends that let several threads collect at once (private-heap
+// collections) give each collector its own context; for everything else
+// this is exactly the old set of globals. All buffers are raw malloc,
+// grow-only, never GC-tracked.
+//   worklist      mark stack
+//   di            data-buffer interval table: the separately malloc'd
+//                 backing stores of array / bytes / map / set handles,
+//                 rebuilt each collection from blocks holding container
+//                 handles; lets a pointer into a backing store keep its
+//                 owning handle alive
+//   data_min/max  coarse bounds over those buffers (one-compare reject)
+//   sort_tmp      radix-sort scratch for the interval table
+typedef struct GCMarkCtx {
+    void **worklist;
+    size_t worklist_count, worklist_cap;
+    GCDataInterval *di;
+    size_t di_count, di_cap;
+    void *data_min, *data_max;
+    GCDataInterval *sort_tmp;
+    size_t sort_tmp_cap;
+} GCMarkCtx;
+static GCMarkCtx gc_global_ctx;
+static __thread GCMarkCtx *gc_ctx = &gc_global_ctx;
 
-// Data-buffer interval table: the separately malloc'd backing stores of
-// array / bytes / map / set handles, rebuilt each collection from the blocks
-// that hold container handles (buffers kept across cycles, grow-only). Lets
-// a pointer into a backing store keep its owning handle alive.
-static GCDataInterval *gc_data_intervals = NULL;
-static size_t gc_data_interval_count = 0;
-static size_t gc_data_interval_cap = 0;
-
-// Coarse bounds over every data buffer, recomputed with the table. A
-// candidate outside [gc_data_min, gc_data_max) cannot point into a data
-// buffer, so the owner lookup rejects it with one compare.
-static void *gc_data_min = NULL;
-static void *gc_data_max = NULL;
+#define gc_worklist             (gc_ctx->worklist)
+#define gc_worklist_count       (gc_ctx->worklist_count)
+#define gc_worklist_cap         (gc_ctx->worklist_cap)
+#define gc_data_intervals       (gc_ctx->di)
+#define gc_data_interval_count  (gc_ctx->di_count)
+#define gc_data_interval_cap    (gc_ctx->di_cap)
+#define gc_data_min             (gc_ctx->data_min)
+#define gc_data_max             (gc_ctx->data_max)
+#define gc_sort_tmp             (gc_ctx->sort_tmp)
+#define gc_sort_tmp_cap         (gc_ctx->sort_tmp_cap)
 
 // ── Heap: size-class blocks + page map ────────────────────────────────────────
 //
@@ -1053,8 +1071,6 @@ static int gc_data_interval_cmp(const void *a, const void *b) {
 #define GC_RADIX_BUCKETS (1u << GC_RADIX_BITS)
 #define GC_RADIX_MIN_N 256   // below this, qsort is already cheap
 
-static GCDataInterval *gc_sort_tmp = NULL;
-static size_t gc_sort_tmp_cap = 0;
 
 static void gc_sort_data_intervals(GCDataInterval *a, size_t n) {
     if (n < 2) return;
