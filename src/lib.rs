@@ -678,6 +678,9 @@ pub enum GcBackend {
     /// Mark-sweep with lazy sweeping: blocks are swept on demand by the
     /// allocator instead of in the pause.
     Lazy,
+    /// Generational non-moving mark-sweep: sticky mark bits, minor
+    /// collections over a remembered set, mprotect write barrier.
+    Gen,
 }
 
 /// The default backend is mark-sweep; PLUTO_GC_BACKEND=<name> overrides it
@@ -693,8 +696,13 @@ impl Default for GcBackend {
 
 impl GcBackend {
     /// Every backend, in a stable order (index = position).
-    pub const ALL: [GcBackend; 4] =
-        [GcBackend::MarkSweep, GcBackend::Noop, GcBackend::Legacy, GcBackend::Lazy];
+    pub const ALL: [GcBackend; 5] = [
+        GcBackend::MarkSweep,
+        GcBackend::Noop,
+        GcBackend::Legacy,
+        GcBackend::Lazy,
+        GcBackend::Gen,
+    ];
 
     fn index(&self) -> usize {
         GcBackend::ALL.iter().position(|b| b == self).unwrap()
@@ -706,6 +714,7 @@ impl GcBackend {
             GcBackend::Noop => "noop",
             GcBackend::Legacy => "legacy",
             GcBackend::Lazy => "lazy",
+            GcBackend::Gen => "gen",
         }
     }
 
@@ -718,7 +727,7 @@ impl GcBackend {
             GcBackend::MarkSweep => include_str!("../runtime/gc/marksweep.c"),
             GcBackend::Noop => include_str!("../runtime/gc/noop.c"),
             GcBackend::Legacy => include_str!("../runtime/gc/legacy.c"),
-            GcBackend::Lazy => include_str!("../runtime/gc/marksweep.c"),
+            GcBackend::Lazy | GcBackend::Gen => include_str!("../runtime/gc/marksweep.c"),
         }
     }
 
@@ -728,6 +737,7 @@ impl GcBackend {
         match self {
             GcBackend::MarkSweep | GcBackend::Noop | GcBackend::Legacy => &[],
             GcBackend::Lazy => &["-DGC_LAZY_SWEEP"],
+            GcBackend::Gen => &["-DGC_GENERATIONAL"],
         }
     }
 }

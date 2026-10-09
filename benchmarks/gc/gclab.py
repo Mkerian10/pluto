@@ -66,7 +66,10 @@ def gc_stats(stderr):
     pauses = [int(x) for x in re.findall(r"^gc: .*?pause_us=(\d+)", stderr, re.M)]
     if not pauses:
         return None
+    kinds = re.findall(r"^gc: .*?kind=(\w+)", stderr, re.M)
     return {
+        "minor": kinds.count("minor"),
+        "major": kinds.count("major"),
         "pause_ms": sum(pauses) / 1000.0,
         "max_pause_ms": max(pauses) / 1000.0,
         "cycles": len(pauses),
