@@ -2083,6 +2083,10 @@ long __pluto_chan_create(long capacity) {
 // so a thread blocked on the mutex must count as stopped too. The collector
 // itself never takes channel mutexes, so parking while holding one is fine.
 static void chan_lock(ChannelSync *sync) {
+    // Uncontended acquisition never parks, so skip the safe-region bookkeeping;
+    // only a blocking acquisition needs it (a holder may be parked for a whole
+    // collection, so a thread blocked on the mutex must count as stopped too).
+    if (pthread_mutex_trylock(&sync->mutex) == 0) return;
     __pluto_gc_enter_safe_region();
     pthread_mutex_lock(&sync->mutex);
     __pluto_gc_leave_safe_region();
@@ -2113,7 +2117,9 @@ long __pluto_chan_send(long handle, long value) {
 
     chan_lock(sync);
     while (ch[3] == ch[2] && !ch[6]) {
+        sync->send_waiters++;
         chan_cond_wait(&sync->not_full, sync);
+        sync->send_waiters--;
         // Check for task cancellation after waking from condvar
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
@@ -2130,7 +2136,7 @@ long __pluto_chan_send(long handle, long value) {
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
-    pthread_cond_signal(&sync->not_empty);
+    if (sync->recv_waiters > 0) pthread_cond_signal(&sync->not_empty);
     pthread_mutex_unlock(&sync->mutex);
     return value;
 }
@@ -2141,7 +2147,9 @@ long __pluto_chan_recv(long handle) {
 
     chan_lock(sync);
     while (ch[3] == 0 && !ch[6]) {
+        sync->recv_waiters++;
         chan_cond_wait(&sync->not_empty, sync);
+        sync->recv_waiters--;
         // Check for task cancellation after waking from condvar
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
@@ -2158,7 +2166,7 @@ long __pluto_chan_recv(long handle) {
     long val = buf[ch[4]];
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
-    pthread_cond_signal(&sync->not_full);
+    if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
     pthread_mutex_unlock(&sync->mutex);
     return val;
 }
@@ -2189,7 +2197,9 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
 
     chan_lock(sync);
     while (ch[3] == 0 && !ch[6]) {
+        sync->recv_waiters++;
         int rc = chan_cond_timedwait(&sync->not_empty, sync, &deadline);
+        sync->recv_waiters--;
         // Check for task cancellation after waking from condvar
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
@@ -2212,7 +2222,7 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
     long val = buf[ch[4]];
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
-    pthread_cond_signal(&sync->not_full);
+    if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
     pthread_mutex_unlock(&sync->mutex);
     return val;
 }
@@ -2236,7 +2246,7 @@ long __pluto_chan_try_send(long handle, long value) {
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
-    pthread_cond_signal(&sync->not_empty);
+    if (sync->recv_waiters > 0) pthread_cond_signal(&sync->not_empty);
     pthread_mutex_unlock(&sync->mutex);
     return value;
 }
@@ -2260,7 +2270,7 @@ long __pluto_chan_try_recv(long handle) {
     long val = buf[ch[4]];
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
-    pthread_cond_signal(&sync->not_full);
+    if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
     pthread_mutex_unlock(&sync->mutex);
     return val;
 }
@@ -2537,7 +2547,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                     long val = cbuf[ch[4]];
                     ch[4] = (ch[4] + 1) % ch[2];
                     ch[3]--;
-                    pthread_cond_signal(&sync->not_full);
+                    if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
                     pthread_mutex_unlock(&sync->mutex);
                     values[i] = val;
                     return (long)i;
@@ -2553,7 +2563,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                     cbuf[ch[5]] = values[i];
                     ch[5] = (ch[5] + 1) % ch[2];
                     ch[3]++;
-                    pthread_cond_signal(&sync->not_empty);
+                    if (sync->recv_waiters > 0) pthread_cond_signal(&sync->not_empty);
                     pthread_mutex_unlock(&sync->mutex);
                     return (long)i;
                 }

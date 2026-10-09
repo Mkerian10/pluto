@@ -112,6 +112,8 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t not_empty;
     pthread_cond_t not_full;
+    long recv_waiters;   // receivers parked on not_empty (guarded by mutex)
+    long send_waiters;   // senders parked on not_full  (guarded by mutex)
 } ChannelSync;
 #endif
 
