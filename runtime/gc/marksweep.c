@@ -88,11 +88,26 @@ static void **gc_worklist = NULL;
 static size_t gc_worklist_count = 0;
 static size_t gc_worklist_cap = 0;
 
-// Interval tables (rebuilt each collection)
+// Interval tables (rebuilt each collection; buffers kept across cycles,
+// grow-only, to avoid per-collection malloc/free churn — see end of
+// __pluto_gc_collect).
 static GCInterval *gc_intervals = NULL;
 static size_t gc_interval_count = 0;
+static size_t gc_interval_cap = 0;
 static GCDataInterval *gc_data_intervals = NULL;
 static size_t gc_data_interval_count = 0;
+static size_t gc_data_interval_cap = 0;
+
+// Coarse heap bounds over every live GC object AND every data buffer,
+// recomputed each collection in gc_build_intervals. A candidate word
+// outside [gc_heap_min, gc_heap_max) cannot point into the heap, so the
+// pointer-lookup binary searches reject it with a single compare instead
+// of an O(log n) search that finds nothing. Most scanned words are small
+// integers or unrelated addresses, so this is the common case. Sound:
+// every real pointer into a GC object or data buffer lies within these
+// bounds by construction, so the fast path never rejects a live pointer.
+static void *gc_heap_min = NULL;
+static void *gc_heap_max = NULL;
 
 // Thread-local storage definitions (referenced in header, defined here)
 __thread void *__pluto_current_error = NULL;
@@ -693,9 +708,16 @@ static void gc_build_intervals(void) {
         else if (h->type_tag == GC_TAG_SET) data_buf_count += 2;  // keys, meta
     }
 
-    gc_intervals = (GCInterval *)malloc(count * sizeof(GCInterval));
+    if (count > gc_interval_cap) {
+        gc_intervals = (GCInterval *)realloc(gc_intervals, count * sizeof(GCInterval));
+        gc_interval_cap = count;
+    }
     gc_interval_count = count;
-    gc_data_intervals = (GCDataInterval *)malloc(data_buf_count * sizeof(GCDataInterval));
+    if (data_buf_count > gc_data_interval_cap) {
+        gc_data_intervals =
+            (GCDataInterval *)realloc(gc_data_intervals, data_buf_count * sizeof(GCDataInterval));
+        gc_data_interval_cap = data_buf_count;
+    }
     gc_data_interval_count = 0;
 
     size_t i = 0;
@@ -756,11 +778,32 @@ static void gc_build_intervals(void) {
     if (gc_data_interval_count > 0) {
         qsort(gc_data_intervals, gc_data_interval_count, sizeof(GCDataInterval), gc_data_interval_cmp);
     }
+
+    // Coarse bounds over objects + data buffers for the fast-reject path in
+    // gc_find_object / gc_find_array_owner. O(n) but negligible beside qsort.
+    if (gc_interval_count == 0 && gc_data_interval_count == 0) {
+        gc_heap_min = NULL;
+        gc_heap_max = NULL;
+    } else {
+        void *lo = (void *)~(size_t)0;
+        void *hi = NULL;
+        for (size_t k = 0; k < gc_interval_count; k++) {
+            if (gc_intervals[k].start < lo) lo = gc_intervals[k].start;
+            if (gc_intervals[k].end > hi) hi = gc_intervals[k].end;
+        }
+        for (size_t k = 0; k < gc_data_interval_count; k++) {
+            if (gc_data_intervals[k].start < lo) lo = gc_data_intervals[k].start;
+            if (gc_data_intervals[k].end > hi) hi = gc_data_intervals[k].end;
+        }
+        gc_heap_min = lo;
+        gc_heap_max = hi;
+    }
 }
 
 // Binary search: find GC object containing candidate pointer
 static GCHeader *gc_find_object(void *candidate) {
     if (gc_interval_count == 0) return NULL;
+    if (candidate < gc_heap_min || candidate >= gc_heap_max) return NULL;
     size_t lo = 0, hi = gc_interval_count;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
@@ -778,6 +821,7 @@ static GCHeader *gc_find_object(void *candidate) {
 // Binary search: find array handle owning a data buffer containing candidate
 static void *gc_find_array_owner(void *candidate) {
     if (gc_data_interval_count == 0) return NULL;
+    if (candidate < gc_heap_min || candidate >= gc_heap_max) return NULL;
     size_t lo = 0, hi = gc_data_interval_count;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
@@ -1279,17 +1323,12 @@ void __pluto_gc_collect(void) {
     gc_threshold = live * 2;
     if (gc_threshold < gc_adaptive_floor) gc_threshold = gc_adaptive_floor;
 
-    // Free interval tables and worklist
-    free(gc_intervals);
-    gc_intervals = NULL;
+    // Keep the interval tables and worklist allocated across cycles
+    // (grow-only) to avoid per-collection malloc/free churn. Only the live
+    // counts are reset; the capacities and buffers persist for process life.
     gc_interval_count = 0;
-    free(gc_data_intervals);
-    gc_data_intervals = NULL;
     gc_data_interval_count = 0;
-    free(gc_worklist);
-    gc_worklist = NULL;
     gc_worklist_count = 0;
-    gc_worklist_cap = 0;
 
     gc_cycle_count++;
     if (gc_log_enabled) {
