@@ -1315,26 +1315,18 @@ long __pluto_task_get(long task_ptr) {
     long *task = (long *)task_ptr;
     TaskSync *sync = (TaskSync *)task[4];
 
+    // Block as a GC-safe region, like chan_cond_wait. This used to wait in
+    // 10 ms timed slices and poll the safepoint in between, so every
+    // stop-the-world while a thread sat in get() waited up to 10 ms for it
+    // (invisible in pause logs, which start once the world is stopped).
+    // Inside the region the thread only reads the task's done flag: a
+    // scalar of an object its own stack keeps alive, which the collector
+    // neither moves nor writes.
+    __pluto_gc_enter_safe_region();
     pthread_mutex_lock(&sync->mutex);
-    while (!task[3]) {
-        // Use timed wait with short timeout to allow safepoint checks
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_nsec += 10000000;  // 10ms timeout
-        if (ts.tv_nsec >= 1000000000) {
-            ts.tv_sec += 1;
-            ts.tv_nsec -= 1000000000;
-        }
-        pthread_cond_timedwait(&sync->cond, &sync->mutex, &ts);
-
-        // Check safepoint while holding mutex (safe because safepoint doesn't need mutex)
-        if (__pluto_gc_check_safepoint()) {
-            pthread_mutex_unlock(&sync->mutex);
-            __pluto_safepoint();
-            pthread_mutex_lock(&sync->mutex);
-        }
-    }
+    while (!task[3]) pthread_cond_wait(&sync->cond, &sync->mutex);
     pthread_mutex_unlock(&sync->mutex);
+    __pluto_gc_leave_safe_region();
 
     // If cancelled and no result, raise TaskCancelled
     if (task[6] && !task[1] && !task[2]) {
