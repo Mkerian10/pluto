@@ -213,6 +213,11 @@ void __pluto_gc_maybe_collect(void);
 // Thread stack API for spawned tasks (production mode only)
 void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi);
 void __pluto_gc_deregister_thread_stack(void);
+// Green-task context registry (#369): the green scheduler registers each
+// fiber/scheduler stack so the collector scans [live_sp, stack_top) for roots.
+void *__pluto_gc_register_green_context(void *stack_top, void *live_sp);
+void __pluto_gc_green_set_live_sp(void *handle, void *live_sp);
+void __pluto_gc_unregister_green_context(void *handle);
 int __pluto_gc_active_tasks(void);
 void __pluto_gc_task_start(void);
 void __pluto_gc_task_end(void);

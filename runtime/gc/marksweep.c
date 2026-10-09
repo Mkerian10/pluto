@@ -484,6 +484,29 @@ static int gc_active_thread_count = 0;  // currently active slots (under gc_mute
 // gc_mutex at (de)registration; read lock-free by the owning thread only.
 static __thread GCThreadStack *gc_my_slot = NULL;
 
+// ── Green-task context registry (#369, rfc-green-tasks / GC_INTEGRATION.md) ──
+// A scheduler thread multiplexes many fiber stacks, so the per-thread registry
+// above cannot describe them. Each live green context (a parked/ready fiber,
+// the running fiber, or a scheduler's own suspended C stack) registers its
+// stack span and current live stack pointer here; the collector scans
+// [live_sp, stack_top) for each. Mutated under gc_mutex by the scheduler
+// thread; read by the collector (which holds gc_mutex for the whole cycle).
+// INERT until a green scheduler populates it: an empty registry adds nothing
+// to the mark phase, so non-green programs are unaffected.
+//
+// Soundness (validated, green_gc_scan_test.c): green switch points are
+// cooperative, so every live root is on the stack above live_sp or in the
+// callee-saved registers pushed there by pluto_ctx_swap — no register snapshot
+// needed (unlike the preemptive thread park record above).
+typedef struct {
+    void *stack_top;   // high end of the fiber stack (exclusive scan bound)
+    void *live_sp;     // low end: saved sp (parked/ready) or current sp (running)
+    int active;
+} GCGreenContext;
+static GCGreenContext **gc_green_ctxs = NULL;
+static int gc_green_ctx_count = 0;   // high-water slot count
+static int gc_green_ctx_cap = 0;
+
 // Pending-task roots: a spawned task handle is only reachable from the new
 // thread's stack, and that stack isn't registered until the trampoline runs.
 // The spawner parks the handle here before pthread_create; the trampoline
@@ -668,6 +691,52 @@ void __pluto_gc_deregister_thread_stack(void) {
         gc_my_slot = NULL;
     }
     gc_thread_registered = 0;
+    pthread_mutex_unlock(&gc_mutex);
+}
+
+// ── Green-context registry API (called by the green scheduler) ──────────────
+// Register a fiber/scheduler stack; returns an opaque handle. The scheduler
+// updates live_sp on every switch-out and unregisters on finish. All three
+// take gc_heap_lock so they are serialized against a collection (which holds
+// gc_mutex for the whole cycle), exactly like the thread-stack registry.
+void *__pluto_gc_register_green_context(void *stack_top, void *live_sp) {
+    gc_heap_lock();
+    GCGreenContext *slot = NULL;
+    for (int i = 0; i < gc_green_ctx_count; i++) {
+        if (!gc_green_ctxs[i]->active) { slot = gc_green_ctxs[i]; break; }
+    }
+    if (!slot) {
+        if (gc_green_ctx_count == gc_green_ctx_cap) {
+            int new_cap = gc_green_ctx_cap ? gc_green_ctx_cap * 2 : 16;
+            GCGreenContext **grown =
+                (GCGreenContext **)realloc(gc_green_ctxs, new_cap * sizeof(GCGreenContext *));
+            if (!grown) { pthread_mutex_unlock(&gc_mutex); return NULL; }
+            gc_green_ctxs = grown;
+            gc_green_ctx_cap = new_cap;
+        }
+        slot = (GCGreenContext *)malloc(sizeof(GCGreenContext));
+        gc_green_ctxs[gc_green_ctx_count++] = slot;
+    }
+    slot->stack_top = stack_top;
+    slot->live_sp = live_sp;
+    slot->active = 1;
+    pthread_mutex_unlock(&gc_mutex);
+    return slot;
+}
+
+// Update the live stack pointer of a green context (called on switch-out, and
+// for the running context at a safepoint before STW scans it).
+void __pluto_gc_green_set_live_sp(void *handle, void *live_sp) {
+    if (!handle) return;
+    gc_heap_lock();
+    ((GCGreenContext *)handle)->live_sp = live_sp;
+    pthread_mutex_unlock(&gc_mutex);
+}
+
+void __pluto_gc_unregister_green_context(void *handle) {
+    if (!handle) return;
+    gc_heap_lock();
+    ((GCGreenContext *)handle)->active = 0;
     pthread_mutex_unlock(&gc_mutex);
 }
 
@@ -1621,6 +1690,21 @@ void __pluto_gc_collect(void) {
             for (long *p = (long *)tlo; (void *)p < thi; p++) {
                 gc_mark_candidate((void *)*p);
             }
+        }
+    }
+
+    // 3d. Scan green-task contexts (#369): each active fiber/scheduler context
+    // conservatively over [live_sp, stack_top). Empty until a green scheduler
+    // registers contexts, so this is a no-op for non-green programs. Roots are
+    // complete without a register snapshot — green switch points are
+    // cooperative (GC_INTEGRATION.md). The collector holds gc_mutex, so the
+    // registry is stable here.
+    for (int gi = 0; gi < gc_green_ctx_count; gi++) {
+        GCGreenContext *g = gc_green_ctxs[gi];
+        if (!g->active || !g->live_sp || !g->stack_top) continue;
+        void *glo = (void *)(((size_t)g->live_sp) & ~7UL);
+        for (long *p = (long *)glo; (void *)p < g->stack_top; p++) {
+            gc_mark_candidate((void *)*p);
         }
     }
 #endif
