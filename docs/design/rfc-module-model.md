@@ -68,6 +68,42 @@ invisible. There is **no nesting and no per-file boundary**, which is why
 hierarchy is inexpressible and why two files in one directory silently share a
 namespace (#401).
 
+### 2.1 Verified minimal reproduction
+
+The issues note that the silent-wrong-answer case (#502) needed ~25 modules to
+surface. It does not — it needs two, once you hit the mechanism directly. A
+local closure that shares a name with a module function is silently redirected
+to the function, because `ModuleRewriter` rewrites `Call { name }` whenever the
+module has a function of that name, *without checking that `name` is a local
+binding*:
+
+```pluto
+// m.pt
+pub fn run() int {
+    let greet = (x: int) => x + 100   // local closure
+    return greet(5)                   // should call the closure -> 105
+}
+fn greet(x: int) int { return x + 1 } // module function
+
+// main.pt
+import m
+fn main() { print(f"{m.run()}") }
+```
+
+```
+$ pluto run main.pt
+6                                     // WRONG: called m.greet, not the closure
+warning: unused variable 'greet'      // the compiler's own confirmation:
+                                      // the closure is "unused" because every
+                                      // call to it was rewritten to m.greet
+```
+
+Expected output is `105`. **Control:** renaming only the local
+(`greet` → `greeter`), with nothing else changed, restores `105`. The name
+collision is the sole variable — a silent wrong answer produced by name
+resolution alone, with no type error and no other difference. This is the whole
+cluster in miniature.
+
 The two layers:
 
 - **Model** (language design): what a module *is*.
