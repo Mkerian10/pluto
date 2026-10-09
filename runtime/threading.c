@@ -2666,12 +2666,19 @@ typedef struct {
     pthread_cond_t cv;    // signaled when the lock may have become available
     long readers;         // active shared (read) holds
     long write_depth;     // nested holds by the owning thread (0 = not write-held)
+    long waiters;         // threads parked on cv (guarded by mu) — lets unlock
+                          // skip cond_broadcast when nobody is waiting
     pthread_t owner;      // valid iff write_depth > 0
 } PlutoRwlock;
 
-// Acquire the metadata mutex, counting the wait as a GC-safe region (a
-// holder of mu can itself be parked in leave_safe_region for a collection).
+// Acquire the metadata mutex. The uncontended case (the overwhelming common
+// one for entity methods) never blocks, so try it lock-free first and skip
+// the GC safe-region bookkeeping entirely — a trylock that succeeds does not
+// park the thread. Only the genuinely contended acquisition, which can block,
+// is bracketed in a safe region (a holder of mu may then be parked in
+// leave_safe_region for a collection).
 static void rwlock_mu_lock(PlutoRwlock *l) {
+    if (pthread_mutex_trylock(&l->mu) == 0) return;
     __pluto_gc_enter_safe_region();
     pthread_mutex_lock(&l->mu);
     __pluto_gc_leave_safe_region();
@@ -2699,7 +2706,9 @@ void __pluto_rwlock_rdlock(long lock_ptr) {
         return;
     }
     while (l->write_depth > 0) {
+        l->waiters++;
         rwlock_cond_wait(l);
+        l->waiters--;
     }
     l->readers++;
     pthread_mutex_unlock(&l->mu);
@@ -2714,7 +2723,9 @@ void __pluto_rwlock_wrlock(long lock_ptr) {
         return;
     }
     while (l->write_depth > 0 || l->readers > 0) {
+        l->waiters++;
         rwlock_cond_wait(l);
+        l->waiters--;
     }
     l->owner = pthread_self();
     l->write_depth = 1;
@@ -2726,10 +2737,10 @@ void __pluto_rwlock_unlock(long lock_ptr) {
     rwlock_mu_lock(l);
     if (l->write_depth > 0 && pthread_equal(l->owner, pthread_self())) {
         l->write_depth--;
-        if (l->write_depth == 0) pthread_cond_broadcast(&l->cv);
+        if (l->write_depth == 0 && l->waiters > 0) pthread_cond_broadcast(&l->cv);
     } else if (l->readers > 0) {
         l->readers--;
-        if (l->readers == 0) pthread_cond_broadcast(&l->cv);
+        if (l->readers == 0 && l->waiters > 0) pthread_cond_broadcast(&l->cv);
     }
     pthread_mutex_unlock(&l->mu);
 }
