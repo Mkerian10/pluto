@@ -234,12 +234,32 @@ pub enum WarningKind {
     DegenerateCondition,
 }
 
+/// Whether a warning's span maps into the source string handed to ariadne.
+///
+/// Warnings raised on desugared or generated code (lifted closures,
+/// enum/match desugaring, etc.) carry a span that points outside the user's
+/// source. ariadne cannot attach a label to such a span, so the label — and
+/// the message, which lives on it — is silently dropped. We detect that case
+/// up front and render a plain readable line instead (issue #486).
+fn warning_in_source(source_len: usize, span: &Span) -> bool {
+    span.start <= span.end && span.end <= source_len
+}
+
 /// Render a CompileWarning with ariadne for nice terminal output (yellow).
 pub fn render_warning(source: &str, _filename: &str, warning: &CompileWarning) {
     use ariadne::{Label, Report, ReportKind, Source};
 
+    if !warning_in_source(source.len(), &warning.span) {
+        // Out-of-source span: ariadne would drop the label and emit a bodiless
+        // "Warning: warning". Fall back to a plain, readable line.
+        eprintln!("warning: {} (in generated code)", warning.msg);
+        return;
+    }
+
+    // Carry the message on the header as well as the label, so it stays
+    // readable even if the code frame can't be rendered.
     Report::build(ReportKind::Warning, (), warning.span.start)
-        .with_message("warning")
+        .with_message(&warning.msg)
         .with_label(
             Label::new(warning.span.start..warning.span.end)
                 .with_message(&warning.msg),
@@ -299,6 +319,20 @@ mod tests {
 
     fn dummy_span() -> Span {
         Span { start: 10, end: 20, file_id: 0 }
+    }
+
+    #[test]
+    fn test_warning_in_source_bounds() {
+        let src_len = 20;
+        // In-source spans.
+        assert!(warning_in_source(src_len, &Span { start: 0, end: 0, file_id: 0 }));
+        assert!(warning_in_source(src_len, &Span { start: 5, end: 10, file_id: 0 }));
+        assert!(warning_in_source(src_len, &Span { start: 0, end: 20, file_id: 0 }));
+        // Out-of-source spans (generated code): end past the source length.
+        assert!(!warning_in_source(src_len, &Span { start: 21, end: 25, file_id: 0 }));
+        assert!(!warning_in_source(src_len, &Span { start: 10, end: 21, file_id: 0 }));
+        // Degenerate (start > end) also treated as out-of-source.
+        assert!(!warning_in_source(src_len, &Span { start: 10, end: 5, file_id: 0 }));
     }
 
     #[test]
