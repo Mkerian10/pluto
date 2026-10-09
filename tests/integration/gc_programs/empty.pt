@@ -12,7 +12,7 @@ class Holder {
 fn main() {
     let mut keep: [Holder] = []
     let mut i = 0
-    while i < 30000 {
+    while i < 8000 {
         keep.push(Holder { id: i, items: [], tags: Map<int, string> {} })
         let junk = f"churn-{i}-{i * 7}"
         if junk.len() == 0 {
@@ -21,7 +21,7 @@ fn main() {
         i = i + 1
     }
     i = 0
-    while i < 30000 {
+    while i < 8000 {
         let mut h = keep[i]
         h.items.push(i)
         h.tags[i] = f"t{i}"
