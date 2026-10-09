@@ -155,6 +155,13 @@ static size_t gc_shared_growth = 0;
 static size_t gc_shared_threshold = GC_TLH_SHARED_FLOOR;
 #define GC_TLH_LOCAL_FLOOR  ((size_t)1 << 20)
 #endif
+#if defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE)
+// Experiment knobs (PLUTO_GC_YOUNG_MIN / _MAX bytes, PLUTO_GC_TENURE age
+// 1-3 or 0 = adaptive), read once by gc_init_env. Temporary: for choosing
+// the sizing policy from measurements.
+static size_t gc_hyb_young_min = (size_t)1 << 20, gc_hyb_young_max = (size_t)4 << 20;
+static unsigned gc_hyb_tenure_force = 0;
+#endif
 
 #define gc_worklist             (T->ctx->worklist)
 #define gc_worklist_count       (T->ctx->worklist_count)
@@ -642,6 +649,7 @@ typedef struct GCThreadHeap {
                                // yet applied its result (owner sweep pending)
     int shared_sweep_pending;  // the cycle finished: free dead shared objects
     size_t swept_promoted;     // bytes the running local sweep promoted
+    size_t barrier_promoted;   // bytes promoted by stores and transfers (PLUTO_GC_LOG)
     int verify_now;            // PLUTO_GC_VERIFY: run the heap-wide local checks this time
     size_t verify_alloc;       // ...allocated since they last ran
     size_t verify_cost;        // ...bytes their last run visited
@@ -1437,6 +1445,11 @@ static void gc_init_env(void) {
     gc_verify_enabled = (v && v[0] == '1') ? 1 : 0;
     const char *e = getenv("PLUTO_GC_LOG");
     gc_log_enabled = (e && e[0] == '1') ? 1 : 0;
+#if defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE)
+    if ((e = getenv("PLUTO_GC_YOUNG_MIN"))) gc_hyb_young_min = (size_t)atol(e);
+    if ((e = getenv("PLUTO_GC_YOUNG_MAX"))) gc_hyb_young_max = (size_t)atol(e);
+    if ((e = getenv("PLUTO_GC_TENURE"))) gc_hyb_tenure_force = (unsigned)atoi(e);
+#endif
     if (gc_verify_enabled > 0) {
         // The division-free slot index must agree with division everywhere.
         for (size_t c = 0; c < GC_NUM_CLASSES; c++) {
@@ -2408,7 +2421,10 @@ static void gc_tlh_promote_visit(GCTrace *T, GCHeader *h) {
     GCBlock *b = gc_pagemap_get((uintptr_t)h);
     if (!b || b->owner != H || h->next == GC_SHARED_TAG) return;
     h->next = GC_SHARED_TAG;
-    H->promoted_bytes += b->kind == GC_BLOCK_LARGE ? b->obj_size : b->obj_size;
+    H->promoted_bytes += b->obj_size;
+#if defined(GC_HYBRID)
+    H->barrier_promoted += b->obj_size;
+#endif
 #if defined(GC_HYBRID)
     if (b->nprivate) b->nprivate--;
     // A global cycle judges shared objects. While one marks, a newly shared
@@ -3161,6 +3177,7 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     // data, and keeping it for a second survival only marks it twice.
     // Promote on first survival until survival falls again.
     H->tenure_age = (H->private_live + H->swept_promoted) * 2 > allocated ? 1 : GC_HYB_TENURE_AGE;
+    if (gc_hyb_tenure_force) H->tenure_age = gc_hyb_tenure_force;
     if (H->verify_now) H->verify_cost += gc_hyb_check_local(H);
 #endif
 
@@ -3176,18 +3193,25 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
 #if defined(GC_HYBRID)
     // The young generation is bounded: what a local collection can find
     // live is at most this much plus whatever it could not yet tenure.
-    if (H->local_threshold > GC_HYB_YOUNG_CAP) H->local_threshold = GC_HYB_YOUNG_CAP;
+    if (H->local_threshold > gc_hyb_young_max) H->local_threshold = gc_hyb_young_max;
+    if (H->local_threshold < gc_hyb_young_min) H->local_threshold = gc_hyb_young_min;
 #endif
     if (H->local_threshold < GC_TLH_LOCAL_FLOOR) H->local_threshold = GC_TLH_LOCAL_FLOOR;
     H->local_count++;
     if (gc_log_enabled) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
 #define GC_US(a, b) (((b).tv_sec - (a).tv_sec) * 1000000L + ((b).tv_nsec - (a).tv_nsec) / 1000L)
+#if defined(GC_HYBRID)
+        size_t tenured = H->swept_promoted, stored = H->barrier_promoted;
+        H->barrier_promoted = 0;
+#else
+        size_t tenured = 0, stored = 0;
+#endif
         fprintf(stderr,
-                "gc: local #%ld heap=%p live=%zu freed=%zu next_threshold=%zu pause_us=%ld"
-                " mark_us=%ld sweep_us=%ld kind=local\n",
-                H->local_count, (void *)H, H->private_live, freed, H->local_threshold,
-                GC_US(t0, t1), GC_US(t0, tm), GC_US(tm, t1));
+                "gc: local #%ld heap=%p live=%zu freed=%zu tenured=%zu stored=%zu next_threshold=%zu"
+                " pause_us=%ld mark_us=%ld sweep_us=%ld kind=local\n",
+                H->local_count, (void *)H, H->private_live, freed, tenured, stored,
+                H->local_threshold, GC_US(t0, t1), GC_US(t0, tm), GC_US(tm, t1));
 #undef GC_US
     }
 }
