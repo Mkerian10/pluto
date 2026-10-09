@@ -187,6 +187,64 @@ adds the root scan. The previous cycle's leftover sweep runs in bounded
 batches from the allocator, without stopping the world, before the next
 cycle starts.
 
+### D4. Generational shared-nothing heaps (`hybrid`)
+
+D2 and D3 each leave one pause unbounded: D2's local collection of a
+thread whose own data is large, D3's stop-the-world steps on every thread.
+D4 combines them through an observation about invariant I: *no shared
+object points at a private one* is exactly *no old object points at a
+young one*. So:
+
+- **Tenuring.** A private object that survives two local collections (one,
+  when most of what was allocated since the last collection survived) is
+  promoted. A thread's private heap then holds young data, and a local
+  collection is a minor collection with **no remembered set**: the
+  promotion barrier already is the generational write barrier (a store
+  into an old object tenures what is stored). The young generation is
+  capped at 4 MiB of allocation between local collections, so a local
+  pause is bounded by young data, not by the thread's resident state.
+- **Incremental global cycle.** The shared (old) heap is collected by D3's
+  snapshot-at-the-beginning machinery (barrier mode 3: promote + log),
+  marking with bit 1 of the mark byte so local collections keep running
+  between steps with bit 0. Steps are paced by allocation checkpoints.
+- **Region reclamation at task exit** and lock-free allocation carry over
+  from D2.
+
+**Coexistence rules** (each one guards a failure that was observed):
+
+1. A local sweep keeps private objects the running global cycle has marked
+   (they may be on its worklist).
+2. An object promoted while the cycle marks is *logged*, not marked: marking
+   it black would skip the shared objects only it reaches.
+3. **Freeing is deleting.** While a cycle marks, a local sweep logs the
+   out-edges of every object it frees; otherwise a shared object reachable
+   at the snapshot only through a freed private object is missed.
+4. Dead shared objects are freed by each thread heap itself (owner sweep)
+   after the cycle; a new cycle first completes any pending owner sweep so
+   no stale mark leaks into it.
+5. **Objects are invisible to collections until their allocation returns.**
+   Every checkpoint runs before the object is allocated. Runtime code
+   initializes fresh objects with plain stores (array slices are filled
+   raw); a collection that ran inside the allocating call once flagged a
+   still-empty array as "clean", and the raw fill then hid a live element.
+   Found on the Kerberos SLT suite as silently wrong query results.
+6. **Root-referenced objects are never tenured.** Generated code and the
+   runtime allocate an object, run more allocating code (struct literals
+   evaluate their fields after allocating; deep copy fills copies with
+   copied children), and only then initialize it. A half-built object is
+   reachable only from a root, so excluding root-referenced objects from
+   tenuring keeps those plain stores from breaking invariant I.
+7. Every store into container storage goes through `PLUTO_GC_STORE`,
+   including runtime builders that span allocations (deep copy).
+
+**Making local collections proportional to young data.** Local marks skip
+*clean* containers (a private container whose elements were all shared at
+its last scan; any store clears the flag); local sweeps skip blocks with no
+private objects (an exact per-block count: allocation adds, promotion
+subtracts, sweeps recount) and park full blocks of shared objects outside
+the sweep set. Each optimization has a `PLUTO_GC_VERIFY` check: clean
+containers hold no private element; skipped blocks hold no private object.
+
 ## 4. Evaluation
 
 Every design is judged on: wall time; total, max and p99 pause; peak RSS;
