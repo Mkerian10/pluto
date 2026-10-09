@@ -70,3 +70,7 @@ differential_tests!("chunks.pt", elements_moved_behind_a_chunked_scan);
 // elements are young: no collection may see a container before the call
 // that allocates it returns (once broke hybrid's clean-container flag).
 differential_tests!("slices.pt", runtime_filled_containers_with_young_elements);
+
+// Empty containers inside objects that get tenured: their backing stores
+// must be promoted with them.
+differential_tests!("empty.pt", empty_containers_in_tenured_objects);

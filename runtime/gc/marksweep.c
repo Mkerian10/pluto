@@ -253,6 +253,12 @@ typedef struct GCBlock {
     struct GCThreadHeap *owner; // tlab/tlh: owning thread heap (NULL: shared heap)
     uint32_t nprivate;        // hybrid: private objects in the block (exact after a
                               // sweep; allocation adds, promotion subtracts)
+    uint32_t nlive;           // hybrid: allocated objects in the block (exact after
+                              // a sweep; allocation adds, local deaths subtract)
+    uint64_t young[GC_BLOCK_SIZE / 32 / 64];   // hybrid: one bit per slot, set for
+                              // every private object (and possibly stale for
+                              // slots since promoted or freed): a local sweep
+                              // visits only these
     GCHeader *free_list;      // free slots below bump, via GCHeader.next
     struct GCBlock *next;     // class available-list / pool / descriptor freelist
 } GCBlock;
@@ -391,6 +397,8 @@ static GCBlock *gc_new_small_block(size_t cls) {
     b->dirty = 0;
     b->owner = NULL;
     b->nprivate = 0;
+    b->nlive = 0;
+    memset(b->young, 0, sizeof b->young);
     b->next = NULL;
     return b;
 }
@@ -685,10 +693,19 @@ static inline void *gc_tlh_alloc_fast(GCThreadHeap *H, size_t user_size, uint8_t
     while (b && !b->free_list && b->bump == b->nobjs) b = H->avail[cls] = b->next;
     if (!b) return NULL;
     GCHeader *h;
+#if defined(GC_HYBRID)
+    size_t idx;
+#endif
     if (b->free_list) {
         h = b->free_list;
         b->free_list = h->next;
+#if defined(GC_HYBRID)
+        idx = gc_slot_index(b, (uintptr_t)h - (uintptr_t)b->base);
+#endif
     } else {
+#if defined(GC_HYBRID)
+        idx = b->bump;
+#endif
         h = (GCHeader *)(b->base + (size_t)b->bump * b->obj_size);
         b->bump++;
     }
@@ -703,6 +720,8 @@ static inline void *gc_tlh_alloc_fast(GCThreadHeap *H, size_t user_size, uint8_t
 #endif
 #if defined(GC_HYBRID)
     b->nprivate++;
+    b->nlive++;
+    b->young[idx >> 6] |= (uint64_t)1 << (idx & 63);
 #endif
     return (char *)h + sizeof(GCHeader);
 }
@@ -731,6 +750,8 @@ static void *gc_tlh_alloc_slow(GCThreadHeap *H, size_t user_size, uint8_t type_t
             b->free_list = NULL;
             b->has_containers = 0;
             b->nprivate = 0;
+            b->nlive = 0;
+            memset(b->young, 0, sizeof b->young);
             b->next = NULL;
         } else {
             b = gc_new_small_block(cls);
@@ -1683,8 +1704,14 @@ void *__pluto_alloc(long size) {
 // first word is the owning handle, followed by the zeroed payload. Payloads
 // are 8-byte aligned like every object body. Nothing is freed eagerly: a
 // replaced buffer is garbage once its handle no longer points at it.
+//
+// The payload is at least one word even for an empty container: a payload
+// pointer must land INSIDE its buffer object to resolve to it (a zero-size
+// payload would point one past the end, and the buffer of a promoted empty
+// array would be missed, left private, and freed under its shared handle —
+// caught by PLUTO_GC_VERIFY on Kerberos).
 void *__pluto_gc_buf_new(void *owner, long bytes) {
-    if (bytes < 0) bytes = 0;
+    if (bytes < 8) bytes = 8;
     long *b = (long *)gc_alloc(8 + (size_t)bytes, GC_TAG_BUFFER, 0);
     b[0] = (long)owner;
     return b + 1;
@@ -2755,12 +2782,20 @@ static int gc_tlh_sweep_one(GCThreadHeap *H, GCBlock *b, int private_marked,
     uint32_t nprivate = 0;
     int containers = 0;
     GCHeader *free_list = NULL;
+#if defined(GC_HYBRID)
+    memset(b->young, 0, sizeof b->young);   // rebuilt exactly below
+#endif
     for (uint32_t i = 0; i < b->bump; i++) {
         GCHeader *h = (GCHeader *)(b->base + (size_t)i * osz);
         if (h->type_tag != GC_TAG_FREE) {
             if (gc_tlh_keep(H, h, private_marked, osz, live_private)) {
                 live++;
-                if (h->next != GC_SHARED_TAG) nprivate++;
+                if (h->next != GC_SHARED_TAG) {
+                    nprivate++;
+#if defined(GC_HYBRID)
+                    b->young[i >> 6] |= (uint64_t)1 << (i & 63);
+#endif
+                }
                 if (gc_is_container_tag(h->type_tag)) containers = 1;
                 continue;
             }
@@ -2789,6 +2824,7 @@ static int gc_tlh_sweep_one(GCThreadHeap *H, GCBlock *b, int private_marked,
     b->free_list = free_list;
     b->has_containers = (uint8_t)containers;
     b->nprivate = nprivate;
+    b->nlive = (uint32_t)live;
     if (free_list || b->bump < b->nobjs) {
         b->next = H->avail[b->cls];
         H->avail[b->cls] = b;
@@ -2800,6 +2836,87 @@ static int gc_tlh_sweep_one(GCThreadHeap *H, GCBlock *b, int private_marked,
 #endif
     return 0;
 }
+
+#if defined(GC_HYBRID)
+// The local sweep of one small block when no global result is pending: only
+// the private objects can change, and every one of them has its young bit
+// set (allocation sets it, full walks rebuild it), so visit those slots and
+// nothing else. Tenuring in place leaves young objects scattered through
+// blocks of old (shared) ones; walking every slot of those blocks made a
+// local sweep cost the old generation instead of the young one. Freed slots
+// are pushed onto the block's free list, which is not rebuilt. Same verdicts
+// and return values as gc_tlh_sweep_one.
+static int gc_hyb_sweep_young(GCThreadHeap *H, GCBlock *b, size_t *freed, size_t *live_private) {
+    size_t osz = b->obj_size, before = *live_private;
+    uint32_t nprivate = 0, died = 0;
+    for (size_t w = 0; w < sizeof b->young / sizeof b->young[0]; w++) {
+        uint64_t bits = b->young[w];
+        while (bits) {
+            size_t i = w * 64 + (size_t)__builtin_ctzll(bits);
+            bits &= bits - 1;
+            uint64_t bit = (uint64_t)1 << (i & 63);
+            GCHeader *h = (GCHeader *)(b->base + i * osz);
+            if (h->type_tag == GC_TAG_FREE || h->next == GC_SHARED_TAG) {
+                b->young[w] &= ~bit;   // freed or promoted since it was set
+                continue;
+            }
+            if (gc_tlh_keep(H, h, 1, osz, live_private)) {
+                if (h->next == GC_SHARED_TAG) b->young[w] &= ~bit;   // promoted now
+                else nprivate++;
+                continue;
+            }
+            gc_hyb_log_dying(h);
+            gc_finalize(h);
+            gc_poison(h);
+            h->type_tag = GC_TAG_FREE;
+            h->next = b->free_list;
+            b->free_list = h;
+            b->young[w] &= ~bit;
+            *freed += osz;
+            died++;
+        }
+    }
+    b->nprivate = nprivate;
+    b->nlive -= died;
+    if (b->nlive == 0) {
+        b->kind = GC_BLOCK_POOL;   // as in gc_tlh_sweep_one
+        b->bump = 0;
+        b->free_list = NULL;
+        b->has_containers = 0;
+        b->next = H->empty;
+        H->empty = b;
+        return 1;
+    }
+    if (b->free_list || b->bump < b->nobjs) {
+        b->next = H->avail[b->cls];
+        H->avail[b->cls] = b;
+        return 0;
+    }
+    b->next = NULL;
+    return *live_private == before ? 2 : 0;
+}
+
+// PLUTO_GC_VERIFY: the young bits cover every private object of the block,
+// and nlive counts its allocated objects.
+static void gc_hyb_verify_young(GCBlock *b) {
+    uint32_t live = 0;
+    for (uint32_t i = 0; i < b->bump; i++) {
+        GCHeader *h = (GCHeader *)(b->base + (size_t)i * b->obj_size);
+        if (h->type_tag == GC_TAG_FREE) continue;
+        live++;
+        if (h->next != GC_SHARED_TAG && !(b->young[i >> 6] & ((uint64_t)1 << (i & 63)))) {
+            fprintf(stderr, "pluto: PLUTO_GC_VERIFY: private %p (tag %d) in block %p has no young bit\n",
+                    (void *)(h + 1), h->type_tag, (void *)b->base);
+            abort();
+        }
+    }
+    if (live != b->nlive) {
+        fprintf(stderr, "pluto: PLUTO_GC_VERIFY: block %p counts %u live objects, holds %u\n",
+                (void *)b->base, b->nlive, live);
+        abort();
+    }
+}
+#endif
 
 static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
     for (size_t c = 0; c < GC_NUM_CLASSES; c++) H->avail[c] = NULL;
@@ -2844,8 +2961,16 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
             H->blocks[kept++] = b;
             continue;
         }
-#endif
+        int r;
+        if (b->kind == GC_BLOCK_SMALL && private_marked && !H->shared_sweep_pending) {
+            if (H->verify_now) gc_hyb_verify_young(b);
+            r = gc_hyb_sweep_young(H, b, &freed, &live_private);
+        } else {
+            r = gc_tlh_sweep_one(H, b, private_marked, &freed, &live_private);
+        }
+#else
         int r = gc_tlh_sweep_one(H, b, private_marked, &freed, &live_private);
+#endif
         if (r == 0) H->blocks[kept++] = b;
 #if defined(GC_HYBRID)
         else if (r == 2) gc_hyb_park(H, b);
@@ -3845,6 +3970,9 @@ static size_t gc_hyb_sweep_unowned(void) {
         }
         b->free_list = free_list;
         b->has_containers = (uint8_t)containers;
+        b->nlive = (uint32_t)live;
+        b->nprivate = 0;
+        memset(b->young, 0, sizeof b->young);
         if (free_list || b->bump < b->nobjs) {
             b->next = gc_class_avail[b->cls];
             gc_class_avail[b->cls] = b;
