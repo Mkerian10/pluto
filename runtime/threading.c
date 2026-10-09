@@ -638,9 +638,11 @@ static void fiber_entry_fn(int fiber_id) {
 
     // Store result or error in task handle
     if (__pluto_current_error) {
+        PLUTO_GC_BARRIER(task, __pluto_current_error);
         task[2] = (long)__pluto_current_error;
         __pluto_current_error = NULL;
     } else {
+        PLUTO_GC_BARRIER(task, result);
         task[1] = result;
     }
     task[3] = 1;  // done
@@ -967,6 +969,9 @@ static long task_spawn_sequential(long closure_ptr) {
     // Phase A inline behavior (for sequential strategy or no scheduler)
     long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
     task[0] = closure_ptr;
+    // From here the task handle is reachable from two threads: share it (and,
+    // transitively, the closure and its captures).
+    __pluto_gc_promote_store((long)task);
     task[1] = 0;  task[2] = 0;  task[3] = 0;
     task[4] = 0;  task[5] = 0;  task[6] = 0;
 
@@ -979,9 +984,11 @@ static long task_spawn_sequential(long closure_ptr) {
     long result = ((long(*)(long))fn_ptr)(closure_ptr);
 
     if (__pluto_current_error) {
+        PLUTO_GC_BARRIER(task, __pluto_current_error);
         task[2] = (long)__pluto_current_error;
         __pluto_current_error = NULL;
     } else {
+        PLUTO_GC_BARRIER(task, result);
         task[1] = result;
     }
     task[3] = 1;
@@ -1005,6 +1012,9 @@ static long task_spawn_fiber(long closure_ptr) {
     // Create a new fiber for the spawned task
     long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
     task[0] = closure_ptr;
+    // From here the task handle is reachable from two threads: share it (and,
+    // transitively, the closure and its captures).
+    __pluto_gc_promote_store((long)task);
     task[1] = 0;  task[2] = 0;  task[3] = 0;
     task[4] = 0;  task[5] = 0;  task[6] = 0;
 
@@ -1224,9 +1234,11 @@ static void *__pluto_spawn_trampoline(void *arg) {
     TaskSync *sync = (TaskSync *)task[4];
     pthread_mutex_lock(&sync->mutex);
     if (__pluto_current_error) {
+        PLUTO_GC_BARRIER(task, __pluto_current_error);
         task[2] = (long)__pluto_current_error;
         __pluto_current_error = NULL;
     } else {
+        PLUTO_GC_BARRIER(task, result);
         task[1] = result;
     }
     task[3] = 1;  // done
@@ -1255,6 +1267,9 @@ static void *__pluto_spawn_trampoline(void *arg) {
 long __pluto_task_spawn(long closure_ptr) {
     long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
     task[0] = closure_ptr;
+    // From here the task handle is reachable from two threads: share it (and,
+    // transitively, the closure and its captures).
+    __pluto_gc_promote_store((long)task);
     task[1] = 0;  task[2] = 0;  task[3] = 0;
     task[5] = 0;  task[6] = 0;  // detached, cancelled
 
@@ -1813,6 +1828,7 @@ long __pluto_chan_send(long handle, long value) {
             if (ch[3] < ch[2]) {
                 // Space available — push value
                 long *buf = (long *)ch[1];
+                PLUTO_GC_BARRIER(ch, value);
                 buf[ch[5]] = value;
                 ch[5] = (ch[5] + 1) % ch[2];
                 ch[3]++;
@@ -1840,6 +1856,7 @@ long __pluto_chan_send(long handle, long value) {
         seq_test_blocked_abort("channel send on full buffer");
     }
     long *buf = (long *)ch[1];
+    PLUTO_GC_BARRIER(ch, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -1970,6 +1987,7 @@ long __pluto_chan_try_send(long handle, long value) {
         return 0;
     }
     long *buf = (long *)ch[1];
+    PLUTO_GC_BARRIER(ch, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -2107,6 +2125,7 @@ long __pluto_chan_send(long handle, long value) {
         return 0;
     }
     long *buf = (long *)ch[1];
+    PLUTO_GC_BARRIER(ch, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -2213,6 +2232,7 @@ long __pluto_chan_try_send(long handle, long value) {
         return 0;
     }
     long *buf = (long *)ch[1];
+    PLUTO_GC_BARRIER(ch, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -2327,6 +2347,7 @@ static long select_fire_arm(long *handles, long *ops, long *values, int i) {
         ch[4] = (ch[4] + 1) % ch[2];
         ch[3]--;
     } else {
+        PLUTO_GC_BARRIER(ch, values[i]);
         cbuf[ch[5]] = values[i];
         ch[5] = (ch[5] + 1) % ch[2];
         ch[3]++;
@@ -2530,6 +2551,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                 if (!ch[6] && ch[3] < ch[2]) {
                     /* space available */
                     long *cbuf = (long *)ch[1];
+                    PLUTO_GC_BARRIER(ch, values[i]);
                     cbuf[ch[5]] = values[i];
                     ch[5] = (ch[5] + 1) % ch[2];
                     ch[3]++;

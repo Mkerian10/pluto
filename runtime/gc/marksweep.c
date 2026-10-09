@@ -12,6 +12,9 @@
 //──────────────────────────────────────────────────────────────────────────────
 
 #include "builtins.h"
+#if defined(GC_TLH) && !defined(GC_TLAB)
+#define GC_TLAB 1
+#endif
 #include <sys/mman.h>
 
 // ── GC Infrastructure ─────────────────────────────────────────────────────────
@@ -327,9 +330,16 @@ static inline void gc_gen_unprotect(GCBlock *b) {
 
 static void gc_gen_fault(int sig, siginfo_t *info, void *ctx) {
     GCBlock *b = gc_pagemap_get((uintptr_t)info->si_addr);
-    if (b && b->prot && (b->kind == GC_BLOCK_SMALL || b->kind == GC_BLOCK_LARGE)) {
-        mprotect(b->base, gc_block_span(b), PROT_READ | PROT_WRITE);
-        b->prot = 0;
+    if (b && (b->kind == GC_BLOCK_SMALL || b->kind == GC_BLOCK_LARGE)) {
+        // Heap blocks are only ever read-only because of the barrier, so any
+        // fault inside one is a barrier fault. prot may already be clear:
+        // another thread faulted on the same block first and unprotected it
+        // while this fault was in flight. Then there is nothing to do but
+        // retry the store (which now succeeds).
+        if (b->prot) {
+            mprotect(b->base, gc_block_span(b), PROT_READ | PROT_WRITE);
+            b->prot = 0;
+        }
         b->dirty = 1;
         return;   // retry the store
     }
@@ -455,6 +465,9 @@ static void *gc_obj_alloc(size_t user_size, uint8_t type_tag, uint16_t field_cou
     h->size = (uint32_t)user_size;
     h->type_tag = type_tag;
     h->field_count = field_count;
+#if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
+    h->next = GC_SHARED_TAG;   // the shared heap's objects are shared
+#endif
     if (gc_is_container_tag(type_tag)) b->has_containers = 1;
     gc_bytes_allocated += slot_bytes;
     return (char *)h + sizeof(GCHeader);
@@ -480,6 +493,10 @@ typedef struct GCThreadHeap {
     GCBlock **blocks;          // every block this heap owns (small and large)
     size_t nblocks, cap;
     size_t unreported;         // slot bytes allocated since the last report
+#if defined(GC_TLH)
+    GCMarkCtx pctx;            // promotion worklist (mutator-time, per thread)
+    size_t promoted_bytes;     // bytes this heap has promoted to shared
+#endif
 } GCThreadHeap;
 
 static GCThreadHeap **gc_tlh_heaps = NULL;   // registry, under gc_mutex
@@ -907,6 +924,15 @@ static void gc_tlh_retire(GCThreadHeap *H) {
     for (size_t k = 0; k < H->nblocks; k++) {
         GCBlock *b = H->blocks[k];
         b->owner = NULL;
+#if defined(GC_TLH)
+        // The shared heap holds only shared objects.
+        uint32_t n = b->kind == GC_BLOCK_LARGE ? 1 : b->bump;
+        size_t osz = b->kind == GC_BLOCK_LARGE ? 0 : b->obj_size;
+        for (uint32_t i = 0; i < n; i++) {
+            GCHeader *h = (GCHeader *)(b->base + (size_t)i * osz);
+            if (h->type_tag != GC_TAG_FREE) h->next = GC_SHARED_TAG;
+        }
+#endif
         if (b->kind == GC_BLOCK_SMALL && (b->free_list || b->bump < b->nobjs)) {
             b->next = gc_class_avail[b->cls];
             gc_class_avail[b->cls] = b;
@@ -919,6 +945,9 @@ static void gc_tlh_retire(GCThreadHeap *H) {
         }
     }
     free(H->blocks);
+#if defined(GC_TLH)
+    free(H->pctx.worklist);
+#endif
     free(H);
 }
 #endif
@@ -1070,6 +1099,8 @@ void __pluto_gc_register_global_root(void *slot) {
         gc_global_root_cap = new_cap;
     }
     gc_global_roots[gc_global_root_count++] = slot;
+    // A global is reachable from every thread: share what it points to.
+    __pluto_gc_promote_store((long)*(void **)slot);
 #ifndef PLUTO_TEST_MODE
     pthread_mutex_unlock(&gc_mutex);
 #endif
@@ -1406,7 +1437,9 @@ static GCHeader *gc_find_object(void *candidate) {
     GCHeader *found = gc_lookup(candidate, 1);
     // Verify only candidates inside the heap that did not land on an object's
     // start (the common hit), so the brute force stays rare.
-    if (gc_verify_enabled > 0
+    // Only during collections: at mutator time (promotion tracing) other
+    // threads run, and a brute-force scan would race with them.
+    if (gc_verify_enabled > 0 && gc_collecting
         && (uintptr_t)candidate >= gc_heap_lo && (uintptr_t)candidate < gc_heap_hi
         && found != (GCHeader *)((char *)candidate - sizeof(GCHeader))) {
         // Brute force over every allocated object.
@@ -1520,8 +1553,19 @@ static void gc_pm_shared_push(void *p) {   // caller holds gc_pm_mu
 }
 #endif
 
+#if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
+static __thread int gc_promoting = 0;
+static void gc_tlh_promote_visit(GCHeader *h);
+#endif
+
 static void gc_mark_object(void *user_ptr) {
     GCHeader *h = gc_get_header(user_ptr);
+#if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
+    if (gc_promoting) {   // tracing for promotion, not for a collection
+        gc_tlh_promote_visit(h);
+        return;
+    }
+#endif
     if (h->mark) return;
 #if defined(GC_PARALLEL_MARK) && !defined(PLUTO_TEST_MODE)
     if (gc_pm_local) {
@@ -1778,6 +1822,119 @@ static void gc_pm_drain(void) {
     while (gc_pm_finished < gc_pm_nhelpers) pthread_cond_wait(&gc_pm_done_cv, &gc_pm_mu);
     pthread_mutex_unlock(&gc_pm_mu);
 }
+#endif
+
+// ── Promotion (--gc tlh) ─────────────────────────────────────────────────────
+#if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
+// Invariant I: no shared object holds a pointer to a private object.
+// Promotion keeps it: before a pointer is stored into a shared object (or
+// handed across a thread boundary) the stored value's transitive closure is
+// made shared — in place, by tagging headers; nothing moves. A thread only
+// ever promotes its own private objects (it cannot reach another thread's).
+// Tracing is conservative, so an integer that looks like a private pointer
+// may be over-promoted: safe, it only delays reclamation.
+static void gc_tlh_promote_visit(GCHeader *h) {
+    GCThreadHeap *H = gc_my_heap;
+    GCBlock *b = gc_pagemap_get((uintptr_t)h);
+    if (!b || b->owner != H || h->next == GC_SHARED_TAG) return;
+    h->next = GC_SHARED_TAG;
+    H->promoted_bytes += b->kind == GC_BLOCK_LARGE ? b->obj_size : b->obj_size;
+    gc_worklist_push((char *)h + sizeof(GCHeader));
+}
+
+void __pluto_gc_promote_store(long value) {
+    GCThreadHeap *H = gc_my_heap;
+    if (!H) return;   // unregistered threads allocate shared objects only
+    GCHeader *h = gc_lookup((void *)value, 1);
+    if (!h || h->next == GC_SHARED_TAG) return;
+    GCMarkCtx *saved = gc_ctx;
+    gc_ctx = &H->pctx;
+    gc_promoting = 1;
+    gc_worklist_count = 0;
+    gc_tlh_promote_visit(h);
+    while (gc_worklist_count > 0) gc_trace_object(gc_worklist[--gc_worklist_count]);
+    gc_promoting = 0;
+    gc_ctx = saved;
+}
+
+// PLUTO_GC_VERIFY: check invariant I at a global collection (all threads
+// stopped). Every pointer slot of every shared object is resolved by exact
+// start (to keep integers that fall inside an object from raising false
+// alarms); landing on a private object is a missed barrier.
+static void gc_tlh_check_slot(GCHeader *parent, long word, const char *where) {
+    GCHeader *c = gc_lookup((void *)word, 0);
+    if (!c || c->next == GC_SHARED_TAG) return;
+    GCBlock *cb = gc_pagemap_get((uintptr_t)c);
+    if (!cb || !cb->owner) return;
+    fprintf(stderr, "pluto: PLUTO_GC_VERIFY: invariant I violated: shared object %p "
+            "(tag %d, size %u) %s holds private object %p (tag %d, size %u)\n",
+            (void *)(parent + 1), parent->type_tag, parent->size, where,
+            (void *)(c + 1), c->type_tag, c->size);
+    abort();
+}
+
+static void gc_tlh_check_object(GCHeader *h) {
+    long *slots = (long *)(h + 1);
+    switch (h->type_tag) {
+    case GC_TAG_STRING:
+    case GC_TAG_BYTES:
+        return;
+    case GC_TAG_ARRAY: {
+        long len = slots[0], *data = (long *)slots[2];
+        for (long i = 0; data && i < len; i++) gc_tlh_check_slot(h, data[i], "array element");
+        return;
+    }
+    case GC_TAG_MAP: {
+        long cap = slots[1], *keys = (long *)slots[2], *vals = (long *)slots[3];
+        unsigned char *meta = (unsigned char *)slots[4];
+        for (long i = 0; meta && i < cap; i++) {
+            if (meta[i] < 0x80) continue;
+            gc_tlh_check_slot(h, keys[i], "map key");
+            gc_tlh_check_slot(h, vals[i], "map value");
+        }
+        return;
+    }
+    case GC_TAG_SET: {
+        long cap = slots[1], *keys = (long *)slots[2];
+        unsigned char *meta = (unsigned char *)slots[3];
+        for (long i = 0; meta && i < cap; i++) {
+            if (meta[i] >= 0x80) gc_tlh_check_slot(h, keys[i], "set element");
+        }
+        return;
+    }
+    case GC_TAG_TRAIT:
+    case GC_TAG_STRING_SLICE:
+        gc_tlh_check_slot(h, slots[0], "data pointer");
+        return;
+    case GC_TAG_CHANNEL: {
+        long *buf = (long *)slots[1], cap = slots[2], count = slots[3], head = slots[4];
+        for (long i = 0; buf && cap > 0 && i < count; i++) {
+            gc_tlh_check_slot(h, buf[(head + i) % cap], "channel buffer");
+        }
+        return;
+    }
+    default:
+        for (uint16_t i = 0; i < h->field_count; i++) gc_tlh_check_slot(h, slots[i], "field");
+        return;
+    }
+}
+
+static void gc_tlh_check_invariant(void) {
+    for (size_t k = 0; k < gc_small_block_count; k++) {
+        GCBlock *b = gc_small_blocks[k];
+        if (b->kind != GC_BLOCK_SMALL) continue;
+        for (uint32_t i = 0; i < b->bump; i++) {
+            GCHeader *h = (GCHeader *)(b->base + (size_t)i * b->obj_size);
+            if (h->type_tag != GC_TAG_FREE && h->next == GC_SHARED_TAG) gc_tlh_check_object(h);
+        }
+    }
+    for (size_t k = 0; k < gc_large_count; k++) {
+        GCHeader *h = (GCHeader *)gc_large_blocks[k]->base;
+        if (h->next == GC_SHARED_TAG) gc_tlh_check_object(h);
+    }
+}
+#else
+void __pluto_gc_promote_store(long value) { (void)value; }
 #endif
 
 static void gc_mark_candidate(void *candidate) {
@@ -2152,6 +2309,9 @@ void __pluto_gc_collect(void) {
     }
 #endif
 
+#if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
+    if (gc_verify_enabled > 0) gc_tlh_check_invariant();
+#endif
     // Build the data-buffer interval table (objects need no per-cycle index:
     // the page map resolves them directly).
 #ifdef GC_GENERATIONAL

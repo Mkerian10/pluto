@@ -176,6 +176,7 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_gc_register_global_root", &[types::I64], &[])?;
         reg.declare(module, "__pluto_gc_heap_size", &[], &[types::I64])?;
         reg.declare(module, "__pluto_safepoint", &[], &[])?;
+        reg.declare(module, "__pluto_gc_promote_store", &[types::I64], &[])?;
 
         // Concurrency
         reg.declare(module, "__pluto_task_spawn", &[types::I64], &[types::I64])?;

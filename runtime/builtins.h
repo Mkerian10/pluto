@@ -105,6 +105,24 @@ typedef struct GCHeader {
     uint16_t field_count;     // 2B: number of 8-byte slots to scan
 } GCHeader;
 
+// ── Sharing barrier ───────────────────────────────────────────────────────────
+//
+// A live object whose header `next` word is GC_SHARED_TAG is shared between
+// threads (backends with private per-thread heaps). Storing a pointer into a
+// shared object must first promote the stored value: PLUTO_GC_BARRIER checks
+// the target's header and calls __pluto_gc_promote_store only when the target
+// is shared. Every backend defines __pluto_gc_promote_store (a no-op where
+// heaps are not private); in those backends no live object carries the tag,
+// so the check never fires. Codegen emits the same inline check before
+// non-scalar field stores.
+#define GC_SHARED_TAG ((GCHeader *)(uintptr_t)1)
+void __pluto_gc_promote_store(long value);
+#define PLUTO_GC_BARRIER(obj, value)                                              \
+    do {                                                                          \
+        if (((GCHeader *)((char *)(obj) - sizeof(GCHeader)))->next == GC_SHARED_TAG) \
+            __pluto_gc_promote_store((long)(value));                              \
+    } while (0)
+
 // ── Channel Sync (Production Mode Only) ──────────────────────────────────────
 
 #ifndef PLUTO_TEST_MODE

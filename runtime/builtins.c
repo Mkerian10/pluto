@@ -256,6 +256,7 @@ void __pluto_array_push(void *handle, long value) {
         h[1] = cap;
         h[2] = (long)data;
     }
+    PLUTO_GC_BARRIER(h, value);
     data[len] = value;
     h[0] = len + 1;
 }
@@ -279,6 +280,7 @@ void __pluto_array_set(void *handle, long index, long value) {
         exit(1);
     }
     long *data = (long *)h[2];
+    PLUTO_GC_BARRIER(h, value);
     data[index] = value;
 }
 
@@ -360,6 +362,7 @@ void __pluto_array_insert_at(void *handle, long index, long value) {
     for (long i = len; i > index; i--) {
         data[i] = data[i - 1];
     }
+    PLUTO_GC_BARRIER(h, value);
     data[index] = value;
     h[0] = len + 1;
 }
@@ -2325,11 +2328,14 @@ void __pluto_map_insert(void *handle, long key_type, long key, long value) {
     unsigned long idx = ht_hash(key, key_type) & (unsigned long)(cap - 1);
     while (1) {
         if (meta[idx] == 0) { // empty
+            PLUTO_GC_BARRIER(h, key);
+            PLUTO_GC_BARRIER(h, value);
             keys[idx] = key; vals[idx] = value; meta[idx] = 0x80;
             h[0] = count + 1;
             return;
         }
         if (meta[idx] >= 0x80 && ht_eq(keys[idx], key, key_type)) { // overwrite
+            PLUTO_GC_BARRIER(h, value);
             vals[idx] = value;
             return;
         }
@@ -2481,6 +2487,7 @@ void __pluto_set_insert(void *handle, long key_type, long elem) {
     unsigned long idx = ht_hash(elem, key_type) & (unsigned long)(cap - 1);
     while (1) {
         if (meta[idx] == 0) {
+            PLUTO_GC_BARRIER(h, elem);
             keys[idx] = elem; meta[idx] = 0x80;
             h[0] = count + 1;
             return;

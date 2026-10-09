@@ -1388,3 +1388,6 @@ GCHeader *__pluto_gc_find_object(void *p) {
     }
     return NULL;
 }
+
+// Heaps are not private in this backend: nothing ever needs promotion.
+void __pluto_gc_promote_store(long value) { (void)value; }
