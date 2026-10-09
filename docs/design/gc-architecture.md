@@ -253,3 +253,30 @@ torture. New benchmarks target each claim: a spawn-per-request server loop
 and an entity-heavy sharing loop for D2 (its best and worst cases), and
 pause-distribution measurements on large resident heaps for D3, plus the
 real workloads (Kerberos SLT, Styx).
+
+## 5. Results (2026-10-09)
+
+14 benchmarks × 5 collectors, best-of-5 median, outputs identical across
+collectors; Kerberos SLT (5 heaviest files, interleaved) and Styx
+(8 TCP clients, spawn-per-connection, interleaved). Full report with
+charts: https://claude.ai/artifact/V5AZjXAhDcrUU5C6C2QpF8
+
+| | wall (geo-mean vs marksweep) | worst STW pause | worst thread-local pause | RSS (geo-mean) | Kerberos (5 files) |
+|---|---|---|---|---|---|
+| marksweep | 1.00× | 27 ms | — | 1.00× | 64.2 s, 22.5 s STW |
+| tlab | 0.78× | 26 ms | — | 1.01× | — |
+| tlh | **0.70×** | 23 ms | 45 ms | 1.49× | **57.0 s**, 0.05 s STW |
+| incr | 0.99× | 5.6 ms | — | 1.14× | 66.9 s, 10.9 s STW |
+| hybrid | 1.02× | **2.8 ms** | **7.6 ms** | **0.99×** | 91.8 s, 5.5 s STW |
+
+- Multi-threaded allocation (`threads`, 8 tasks): marksweep 0.36 s, tlh
+  0.061 s, hybrid 0.052 s.
+- Spawn-per-request with a resident cache: marksweep 0.25 s, tlh 0.11 s.
+- Large live heap (`resident_service`, 58 MB): max pause marksweep 27 ms,
+  incr 1.1 ms, hybrid 0.43 ms STW / 4 ms local.
+- Single-threaded structure building is hybrid's weak spot (1.6–3.3×
+  slower than tlh), as is Kerberos; its young generation should be paced
+  to a pause budget instead of a fixed 4 MiB.
+- Found and fixed on master along the way: task `get()` stalled every
+  stop-the-world collection by up to 10 ms (#526); noop field count (#518).
+
