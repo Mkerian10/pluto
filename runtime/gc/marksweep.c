@@ -109,6 +109,47 @@ static size_t gc_data_interval_cap = 0;
 static void *gc_heap_min = NULL;
 static void *gc_heap_max = NULL;
 
+// Exact-start hash set over every GC object's user pointer, rebuilt each
+// collection alongside the interval table. Heap slots and most roots hold
+// the START of an object (allocation returns the user pointer and that is
+// what gets stored), so gc_find_object answers those in O(1) here and only
+// falls back to the interval binary search for misses — interior pointers
+// and in-bounds non-pointers. Purely a lookup accelerator: every hit is an
+// object the binary search would also have returned, so collector
+// semantics (still fully conservative) are unchanged. Open addressing,
+// linear probing, power-of-two capacity >= 2x the object count (load
+// <= 0.5); NULL marks an empty slot. Grow-only like the interval buffers.
+static void **gc_start_tab = NULL;
+static size_t gc_start_cap = 0;
+
+static inline size_t gc_ptr_hash(void *p) {
+    // malloc results are 16-byte aligned, so drop the always-zero low bits
+    // before mixing (fmix64 finalizer).
+    uint64_t x = (uint64_t)(uintptr_t)p >> 4;
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33;
+    return (size_t)x;
+}
+
+static inline void gc_start_insert(void *user) {
+    size_t mask = gc_start_cap - 1;
+    size_t i = gc_ptr_hash(user) & mask;
+    while (gc_start_tab[i]) i = (i + 1) & mask;
+    gc_start_tab[i] = user;
+}
+
+static inline GCHeader *gc_find_start(void *candidate) {
+    size_t mask = gc_start_cap - 1;
+    size_t i = gc_ptr_hash(candidate) & mask;
+    for (;;) {
+        void *e = gc_start_tab[i];
+        if (!e) return NULL;
+        if (e == candidate) return (GCHeader *)((char *)e - sizeof(GCHeader));
+        i = (i + 1) & mask;
+    }
+}
+
 // Thread-local storage definitions (referenced in header, defined here)
 __thread void *__pluto_current_error = NULL;
 __thread void *__pluto_current_error_type = NULL;
@@ -720,12 +761,27 @@ static void gc_build_intervals(void) {
     }
     gc_data_interval_count = 0;
 
+    // Size the exact-start table to a power of two >= 2 * count, then clear.
+    size_t want = 16;
+    while (want < count * 2) want <<= 1;
+    if (want > gc_start_cap) {
+        free(gc_start_tab);
+        gc_start_tab = (void **)malloc(want * sizeof(void *));
+        if (!gc_start_tab) {
+            fprintf(stderr, "pluto: out of memory building GC lookup table\n");
+            exit(1);
+        }
+        gc_start_cap = want;
+    }
+    memset(gc_start_tab, 0, gc_start_cap * sizeof(void *));
+
     size_t i = 0;
     for (GCHeader *h = gc_head; h; h = h->next) {
         void *user = (char *)h + sizeof(GCHeader);
         gc_intervals[i].start = user;
         gc_intervals[i].end = (char *)user + h->size;
         gc_intervals[i].header = h;
+        gc_start_insert(user);
         i++;
 
         if (h->type_tag == GC_TAG_ARRAY && h->size >= 24) {
@@ -804,6 +860,9 @@ static void gc_build_intervals(void) {
 static GCHeader *gc_find_object(void *candidate) {
     if (gc_interval_count == 0) return NULL;
     if (candidate < gc_heap_min || candidate >= gc_heap_max) return NULL;
+    // Fast path: a pointer to an object's start (the common case).
+    GCHeader *exact = gc_find_start(candidate);
+    if (exact) return exact;
     size_t lo = 0, hi = gc_interval_count;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
