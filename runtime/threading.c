@@ -1393,15 +1393,10 @@ static void dc_visited_insert(DeepCopyVisited *v, void *original, void *copy) {
 }
 
 // Check if a value is a pointer to the start of a GC object's user data.
-// Linear scan of gc_head — acceptable because spawn is not a hot path.
+// Backs deep copy AND structural equality (__pluto_deep_eq), so it is on the
+// hot path of every class/enum `==`; the GC answers it in O(1).
 static GCHeader *dc_find_gc_object(void *candidate) {
-    GCHeader *h = __pluto_gc_get_head();
-    while (h) {
-        void *user = (char *)h + sizeof(GCHeader);
-        if (user == candidate) return h;
-        h = h->next;
-    }
-    return NULL;
+    return __pluto_gc_find_object(candidate);
 }
 
 static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited);

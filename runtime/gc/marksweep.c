@@ -109,18 +109,22 @@ static size_t gc_data_interval_cap = 0;
 static void *gc_heap_min = NULL;
 static void *gc_heap_max = NULL;
 
-// Exact-start hash set over every GC object's user pointer, rebuilt each
-// collection alongside the interval table. Heap slots and most roots hold
-// the START of an object (allocation returns the user pointer and that is
-// what gets stored), so gc_find_object answers those in O(1) here and only
-// falls back to the interval binary search for misses — interior pointers
-// and in-bounds non-pointers. Purely a lookup accelerator: every hit is an
-// object the binary search would also have returned, so collector
-// semantics (still fully conservative) are unchanged. Open addressing,
-// linear probing, power-of-two capacity >= 2x the object count (load
-// <= 0.5); NULL marks an empty slot. Grow-only like the interval buffers.
-static void **gc_start_tab = NULL;
-static size_t gc_start_cap = 0;
+// Exact-start hash set over every live GC object's user pointer, maintained
+// incrementally: gc_alloc inserts, the sweep removes dead entries (or rebuilds
+// from the survivors when most of the heap died). Two users:
+//  - the collector's gc_find_object, which answers pointers to an object's
+//    START in O(1) and only falls back to the interval binary search for
+//    misses (interior pointers, in-bounds non-pointers). Every hit is an
+//    object the search would also have returned, so the collector stays
+//    exactly as conservative as before.
+//  - __pluto_gc_find_object, the runtime's pointer -> object query behind
+//    deep copy and structural equality, which used to walk the whole heap.
+// Open addressing, linear probing with backward-shift deletion, power-of-two
+// capacity kept >= 2x the live count; NULL marks an empty slot. Production
+// mode: read and written only under gc_mutex.
+static void **gc_live_tab = NULL;
+static size_t gc_live_cap = 0;
+static size_t gc_live_count = 0;
 
 static inline size_t gc_ptr_hash(void *p) {
     // malloc results are 16-byte aligned, so drop the always-zero low bits
@@ -132,23 +136,151 @@ static inline size_t gc_ptr_hash(void *p) {
     return (size_t)x;
 }
 
-static inline void gc_start_insert(void *user) {
-    size_t mask = gc_start_cap - 1;
+static void gc_live_reset(size_t cap) {
+    if (cap != gc_live_cap) {
+        free(gc_live_tab);
+        gc_live_tab = (void **)calloc(cap, sizeof(void *));
+        if (!gc_live_tab) {
+            fprintf(stderr, "pluto: out of memory (GC object table)\n");
+            exit(1);
+        }
+        gc_live_cap = cap;
+    } else {
+        memset(gc_live_tab, 0, cap * sizeof(void *));
+    }
+    gc_live_count = 0;
+}
+
+static void gc_live_rehash(size_t new_cap) {
+    void **old = gc_live_tab;
+    size_t old_cap = gc_live_cap;
+    void **t = (void **)calloc(new_cap, sizeof(void *));
+    if (!t) {
+        fprintf(stderr, "pluto: out of memory (GC object table)\n");
+        exit(1);
+    }
+    size_t mask = new_cap - 1;
+    for (size_t k = 0; k < old_cap; k++) {
+        void *e = old[k];
+        if (!e) continue;
+        size_t i = gc_ptr_hash(e) & mask;
+        while (t[i]) i = (i + 1) & mask;
+        t[i] = e;
+    }
+    free(old);
+    gc_live_tab = t;
+    gc_live_cap = new_cap;
+}
+
+static inline void gc_live_insert(void *user) {
+    if ((gc_live_count + 1) * 2 > gc_live_cap) {
+        gc_live_rehash(gc_live_cap ? gc_live_cap * 2 : 1024);
+    }
+    size_t mask = gc_live_cap - 1;
     size_t i = gc_ptr_hash(user) & mask;
-    while (gc_start_tab[i]) i = (i + 1) & mask;
-    gc_start_tab[i] = user;
+    while (gc_live_tab[i]) i = (i + 1) & mask;
+    gc_live_tab[i] = user;
+    gc_live_count++;
+}
+
+// Backward-shift deletion: after emptying slot i, walk the probe run and pull
+// back any entry whose home slot is not cyclically in (i, j], so every
+// remaining entry stays reachable from its home without tombstones.
+static void gc_live_delete(void *user) {
+    if (!gc_live_cap) return;
+    size_t mask = gc_live_cap - 1;
+    size_t i = gc_ptr_hash(user) & mask;
+    while (gc_live_tab[i] != user) {
+        if (!gc_live_tab[i]) return;  // not present
+        i = (i + 1) & mask;
+    }
+    size_t j = i;
+    for (;;) {
+        j = (j + 1) & mask;
+        void *e = gc_live_tab[j];
+        if (!e) break;
+        size_t k = gc_ptr_hash(e) & mask;
+        int stays = (i <= j) ? (i < k && k <= j) : (i < k || k <= j);
+        if (stays) continue;
+        gc_live_tab[i] = e;
+        i = j;
+    }
+    gc_live_tab[i] = NULL;
+    gc_live_count--;
+}
+
+// New objects are not hashed at allocation time: a random write into a
+// multi-megabyte table on every allocation would cost a cache miss on the
+// hottest path in the runtime. gc_alloc only PREPENDS to gc_head, so the
+// objects not yet in the table are exactly the list prefix in front of
+// gc_hashed_upto (the head as of the last flush or sweep). The table is
+// brought up to date by walking that prefix only when it is about to be
+// consulted — at the start of each collection and by __pluto_gc_find_object.
+// Nothing between sweeps frees list nodes, so gc_hashed_upto stays valid.
+static GCHeader *gc_hashed_upto = NULL;
+
+// Scratch for a flush: the prefix is gathered first so the inserts can
+// prefetch their slots a fixed distance ahead (the table is usually
+// cache-cold here; keeping many misses in flight hides most of the latency).
+static void **gc_flush_buf = NULL;
+static size_t gc_flush_cap = 0;
+#define GC_FLUSH_PREFETCH 16
+
+static inline void gc_flush_buf_push(size_t n, void *user) {
+    if (n == gc_flush_cap) {
+        size_t cap = gc_flush_cap ? gc_flush_cap * 2 : 4096;
+        void **grown = (void **)realloc(gc_flush_buf, cap * sizeof(void *));
+        if (!grown) {
+            fprintf(stderr, "pluto: out of memory (GC object table)\n");
+            exit(1);
+        }
+        gc_flush_buf = grown;
+        gc_flush_cap = cap;
+    }
+    gc_flush_buf[n] = user;
+}
+
+// Insert the n gathered pointers in gc_flush_buf into the live table.
+static void gc_live_insert_gathered(size_t n) {
+    if (n == 0) return;
+    // Grow once up front so slot positions stay valid while prefetching.
+    while ((gc_live_count + n) * 2 > gc_live_cap) {
+        gc_live_rehash(gc_live_cap ? gc_live_cap * 2 : 1024);
+    }
+    size_t mask = gc_live_cap - 1;
+    for (size_t k = 0; k < n; k++) {
+        if (k + GC_FLUSH_PREFETCH < n) {
+            __builtin_prefetch(
+                &gc_live_tab[gc_ptr_hash(gc_flush_buf[k + GC_FLUSH_PREFETCH]) & mask], 1);
+        }
+        gc_live_insert(gc_flush_buf[k]);
+    }
+}
+
+static void gc_live_flush(void) {
+    size_t n = 0;
+    for (GCHeader *h = gc_head; h && h != gc_hashed_upto; h = h->next) {
+        gc_flush_buf_push(n++, (char *)h + sizeof(GCHeader));
+    }
+    gc_hashed_upto = gc_head;
+    gc_live_insert_gathered(n);
 }
 
 static inline GCHeader *gc_find_start(void *candidate) {
-    size_t mask = gc_start_cap - 1;
+    if (!gc_live_cap) return NULL;
+    size_t mask = gc_live_cap - 1;
     size_t i = gc_ptr_hash(candidate) & mask;
     for (;;) {
-        void *e = gc_start_tab[i];
+        void *e = gc_live_tab[i];
         if (!e) return NULL;
         if (e == candidate) return (GCHeader *)((char *)e - sizeof(GCHeader));
         i = (i + 1) & mask;
     }
 }
+
+// Objects marked in the current cycle (sweep uses it to choose between
+// deleting dead table entries and rebuilding from survivors).
+static size_t gc_marked_count = 0;
 
 // Thread-local storage definitions (referenced in header, defined here)
 __thread void *__pluto_current_error = NULL;
@@ -737,17 +869,107 @@ static int gc_data_interval_cmp(const void *a, const void *b) {
     return 0;
 }
 
+// ── Interval sorting ───────────────────────────────────────────────────────
+//
+// Both interval kinds share one layout, { start, end, owner }, and are sorted
+// by start for the binary-search fallback lookups. qsort through a comparator
+// function pointer dominated collection time on large heaps (it ran over
+// every object, every cycle), so sort with an LSD radix sort on the address
+// offset instead: key = (start - min) >> 4 (allocations are 16-byte aligned),
+// 11 bits per pass, so a few O(n) passes and no comparator calls.
+//
+// Correctness never depends on the radix sort: the result is verified with a
+// linear sortedness check and, if that ever fails (or the scratch buffer can't
+// be allocated), the table is re-sorted with qsort. A radix-sort bug can cost
+// time, not a missed mark.
+typedef struct { void *start; void *end; void *owner; } GCSortInterval;
+_Static_assert(sizeof(GCInterval) == sizeof(GCSortInterval), "interval layout");
+_Static_assert(sizeof(GCDataInterval) == sizeof(GCSortInterval), "data interval layout");
+
+#define GC_RADIX_BITS 11
+#define GC_RADIX_BUCKETS (1u << GC_RADIX_BITS)
+#define GC_RADIX_MIN_N 256   // below this, qsort is already cheap
+
+static GCSortInterval *gc_sort_tmp = NULL;
+static size_t gc_sort_tmp_cap = 0;
+
+static void gc_sort_intervals(GCSortInterval *a, size_t n,
+                              int (*cmp)(const void *, const void *)) {
+    if (n < 2) return;
+    if (n >= GC_RADIX_MIN_N) {
+        if (n > gc_sort_tmp_cap) {
+            GCSortInterval *grown =
+                (GCSortInterval *)realloc(gc_sort_tmp, n * sizeof(GCSortInterval));
+            if (grown) {
+                gc_sort_tmp = grown;
+                gc_sort_tmp_cap = n;
+            }
+        }
+        if (n <= gc_sort_tmp_cap) {
+            uintptr_t lo = UINTPTR_MAX, hi = 0;
+            for (size_t i = 0; i < n; i++) {
+                uintptr_t s = (uintptr_t)a[i].start;
+                if (s < lo) lo = s;
+                if (s > hi) hi = s;
+            }
+            uintptr_t span = (hi - lo) >> 4;
+            int bits = 0;
+            while (bits < 64 && (span >> bits) != 0) bits++;
+
+            GCSortInterval *src = a, *dst = gc_sort_tmp;
+            size_t cnt[GC_RADIX_BUCKETS];
+            for (int shift = 0; shift < bits; shift += GC_RADIX_BITS) {
+                memset(cnt, 0, sizeof cnt);
+                for (size_t i = 0; i < n; i++) {
+                    cnt[((((uintptr_t)src[i].start - lo) >> 4) >> shift)
+                        & (GC_RADIX_BUCKETS - 1)]++;
+                }
+                size_t sum = 0;
+                for (size_t b = 0; b < GC_RADIX_BUCKETS; b++) {
+                    size_t c = cnt[b];
+                    cnt[b] = sum;
+                    sum += c;
+                }
+                for (size_t i = 0; i < n; i++) {
+                    size_t k = ((((uintptr_t)src[i].start - lo) >> 4) >> shift)
+                               & (GC_RADIX_BUCKETS - 1);
+                    dst[cnt[k]++] = src[i];
+                }
+                GCSortInterval *t = src;
+                src = dst;
+                dst = t;
+            }
+            if (src != a) memcpy(a, src, n * sizeof(GCSortInterval));
+
+            int sorted = 1;
+            for (size_t i = 1; i < n; i++) {
+                if (a[i - 1].start > a[i].start) { sorted = 0; break; }
+            }
+            if (sorted) return;
+        }
+    }
+    qsort(a, n, sizeof(GCSortInterval), cmp);
+}
+
 static void gc_build_intervals(void) {
-    // Count objects
+    // Count objects. The same walk gathers the not-yet-hashed list prefix
+    // (objects allocated since the last flush/sweep), so every object is in
+    // the live table before marking consults it — without a second walk.
     size_t count = 0;
     size_t data_buf_count = 0;
+    size_t fresh = 0;
+    int in_fresh_prefix = 1;
     for (GCHeader *h = gc_head; h; h = h->next) {
+        if (h == gc_hashed_upto) in_fresh_prefix = 0;
+        if (in_fresh_prefix) gc_flush_buf_push(fresh++, (char *)h + sizeof(GCHeader));
         count++;
         if (h->type_tag == GC_TAG_ARRAY) data_buf_count++;
         else if (h->type_tag == GC_TAG_BYTES) data_buf_count++;
         else if (h->type_tag == GC_TAG_MAP) data_buf_count += 3;  // keys, vals, meta
         else if (h->type_tag == GC_TAG_SET) data_buf_count += 2;  // keys, meta
     }
+    gc_hashed_upto = gc_head;
+    gc_live_insert_gathered(fresh);
 
     if (count > gc_interval_cap) {
         gc_intervals = (GCInterval *)realloc(gc_intervals, count * sizeof(GCInterval));
@@ -761,19 +983,6 @@ static void gc_build_intervals(void) {
     }
     gc_data_interval_count = 0;
 
-    // Size the exact-start table to a power of two >= 2 * count, then clear.
-    size_t want = 16;
-    while (want < count * 2) want <<= 1;
-    if (want > gc_start_cap) {
-        free(gc_start_tab);
-        gc_start_tab = (void **)malloc(want * sizeof(void *));
-        if (!gc_start_tab) {
-            fprintf(stderr, "pluto: out of memory building GC lookup table\n");
-            exit(1);
-        }
-        gc_start_cap = want;
-    }
-    memset(gc_start_tab, 0, gc_start_cap * sizeof(void *));
 
     size_t i = 0;
     for (GCHeader *h = gc_head; h; h = h->next) {
@@ -781,7 +990,6 @@ static void gc_build_intervals(void) {
         gc_intervals[i].start = user;
         gc_intervals[i].end = (char *)user + h->size;
         gc_intervals[i].header = h;
-        gc_start_insert(user);
         i++;
 
         if (h->type_tag == GC_TAG_ARRAY && h->size >= 24) {
@@ -830,13 +1038,12 @@ static void gc_build_intervals(void) {
         }
     }
 
-    qsort(gc_intervals, gc_interval_count, sizeof(GCInterval), gc_interval_cmp);
-    if (gc_data_interval_count > 0) {
-        qsort(gc_data_intervals, gc_data_interval_count, sizeof(GCDataInterval), gc_data_interval_cmp);
-    }
+    gc_sort_intervals((GCSortInterval *)gc_intervals, gc_interval_count, gc_interval_cmp);
+    gc_sort_intervals((GCSortInterval *)gc_data_intervals, gc_data_interval_count,
+                      gc_data_interval_cmp);
 
     // Coarse bounds over objects + data buffers for the fast-reject path in
-    // gc_find_object / gc_find_array_owner. O(n) but negligible beside qsort.
+    // gc_find_object / gc_find_array_owner. One sequential O(n) pass.
     if (gc_interval_count == 0 && gc_data_interval_count == 0) {
         gc_heap_min = NULL;
         gc_heap_max = NULL;
@@ -909,6 +1116,7 @@ static void gc_mark_object(void *user_ptr) {
     GCHeader *h = gc_get_header(user_ptr);
     if (h->mark) return;
     h->mark = 1;
+    gc_marked_count++;
     gc_worklist_push(user_ptr);
 }
 
@@ -1065,9 +1273,12 @@ void __pluto_gc_collect(void) {
 
     // Build interval tables
     gc_build_intervals();
+    struct timespec gc_tb;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_tb);
 
     // Reset worklist
     gc_worklist_count = 0;
+    gc_marked_count = 0;
 
     // 1. Flush registers to stack via setjmp
     jmp_buf regs;
@@ -1273,7 +1484,24 @@ void __pluto_gc_collect(void) {
         gc_trace_object(obj);
     }
 
+    struct timespec gc_tm;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_tm);
+
     // ── Sweep phase ───────────────────────────────────────────────────────
+    // Keep the live-object table in sync. Rebuilding it from the survivors
+    // (clear, then insert each survivor as the sweep passes it) is
+    // cache-friendly and wins unless almost nothing died; individual
+    // backward-shift deletes are random, cache-cold writes, so they are used
+    // only when fewer than 1/8 as many objects died as survived.
+    // gc_interval_count is the object count as of gc_build_intervals —
+    // nothing allocates in between.
+    size_t dead_count = gc_interval_count - gc_marked_count;
+    int live_rebuild = dead_count * 8 >= gc_marked_count;
+    if (live_rebuild) {
+        size_t want = 1024;
+        while (want < gc_marked_count * 4) want <<= 1;
+        gc_live_reset(want);
+    }
     GCHeader **pp = &gc_head;
     size_t freed_bytes = 0;
     while (*pp) {
@@ -1342,13 +1570,21 @@ void __pluto_gc_collect(void) {
                 long *slots = (long *)((char *)h + sizeof(GCHeader));
                 __pluto_rwlock_destroy(slots[h->size / 8 - 1]);
             }
+            if (!live_rebuild) gc_live_delete((char *)h + sizeof(GCHeader));
             free(h);
             freed_bytes += total;
         } else {
             h->mark = 0;  // Clear for next cycle
+            if (live_rebuild) gc_live_insert((char *)h + sizeof(GCHeader));
             pp = &h->next;
         }
     }
+
+    // Every survivor is now in the live table.
+    gc_hashed_upto = gc_head;
+
+    struct timespec gc_ts;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_ts);
 
     gc_bytes_allocated -= freed_bytes;
 
@@ -1393,10 +1629,16 @@ void __pluto_gc_collect(void) {
     if (gc_log_enabled) {
         struct timespec gc_t1;
         clock_gettime(CLOCK_MONOTONIC, &gc_t1);
-        long us = (gc_t1.tv_sec - gc_t0.tv_sec) * 1000000L
-                + (gc_t1.tv_nsec - gc_t0.tv_nsec) / 1000L;
-        fprintf(stderr, "gc: #%ld live=%zu freed=%zu next_threshold=%zu pause_us=%ld\n",
-                gc_cycle_count, gc_bytes_allocated, freed_bytes, gc_threshold, us);
+#define GC_US(a, b) (((b).tv_sec - (a).tv_sec) * 1000000L + ((b).tv_nsec - (a).tv_nsec) / 1000L)
+        // Phase split: build = interval/lookup tables, mark = root scan +
+        // trace, sweep = free unmarked objects.
+        fprintf(stderr,
+                "gc: #%ld live=%zu freed=%zu next_threshold=%zu pause_us=%ld"
+                " build_us=%ld mark_us=%ld sweep_us=%ld\n",
+                gc_cycle_count, gc_bytes_allocated, freed_bytes, gc_threshold,
+                GC_US(gc_t0, gc_t1), GC_US(gc_t0, gc_tb), GC_US(gc_tb, gc_tm),
+                GC_US(gc_tm, gc_ts));
+#undef GC_US
     }
 
     gc_collecting = 0;
@@ -1451,6 +1693,11 @@ GCHeader *__pluto_gc_get_head(void) {
     return gc_head;
 }
 
+GCHeader *__pluto_gc_find_object(void *p) {
+    gc_live_flush();
+    return gc_find_start(p);
+}
+
 size_t __pluto_gc_bytes_allocated(void) {
     return gc_bytes_allocated;
 }
@@ -1466,6 +1713,16 @@ void __pluto_gc_maybe_collect(void) {
 
 GCHeader *__pluto_gc_get_head(void) {
     return gc_head;
+}
+
+// The live table is resized by allocating threads, so lookups take the heap
+// lock (counted as a safe region while waiting, like every gc_mutex wait).
+GCHeader *__pluto_gc_find_object(void *p) {
+    gc_heap_lock();
+    gc_live_flush();
+    GCHeader *h = gc_find_start(p);
+    pthread_mutex_unlock(&gc_mutex);
+    return h;
 }
 
 size_t __pluto_gc_bytes_allocated(void) {

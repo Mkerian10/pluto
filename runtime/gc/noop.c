@@ -92,6 +92,14 @@ GCHeader *__pluto_gc_get_head(void) {
     return gc_head;
 }
 
+// The noop backend keeps no index; exact-start linear scan (benchmark-only).
+GCHeader *__pluto_gc_find_object(void *p) {
+    for (GCHeader *h = gc_head; h; h = h->next) {
+        if ((void *)(h + 1) == p) return h;
+    }
+    return NULL;
+}
+
 // ── Thread/Fiber API Stubs ───────────────────────────────────────────────────
 
 #ifdef PLUTO_TEST_MODE

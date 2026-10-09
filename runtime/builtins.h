@@ -151,6 +151,10 @@ void __pluto_gc_after_fork(int is_child);
 // Internal GC allocation API (used by runtime, not by generated code)
 void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count);
 size_t __pluto_gc_bytes_allocated(void);
+// Resolve a pointer to the GC object whose user data STARTS at it, or NULL
+// (non-pointers, interior pointers, static data). O(1) in the mark-sweep
+// backend. Used by deep copy and structural equality.
+GCHeader *__pluto_gc_find_object(void *p);
 
 // ── Rwlocks & per-instance entity locks (threading.c) ────────────────────────
 

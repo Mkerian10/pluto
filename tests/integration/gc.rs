@@ -262,6 +262,59 @@ fn main() {
 }
 
 #[test]
+fn gc_structural_equality_across_collections() {
+    // Structural == resolves each operand (and every nested child) to its GC
+    // object through the collector's live-object table. If that table ever
+    // drifted out of sync with the heap across collections, a lookup would
+    // miss, the operand would be compared as a raw pointer, and structurally
+    // equal values would compare unequal. Compare values created before and
+    // after many collections, nested so child objects must resolve too.
+    let out = compile_and_run_stdout(r#"
+class Inner {
+    x: int
+    name: string
+}
+
+class Outer {
+    tag: string
+    inner: Inner
+}
+
+enum Shape {
+    Circle { r: int }
+    Square { s: int }
+}
+
+fn main() {
+    let a1 = Outer { tag: "t", inner: Inner { x: 7, name: "seven" } }
+    let s1 = Shape.Circle { r: 3 }
+    let mut eq_count = 0
+    let mut ne_count = 0
+    let mut iter = 0
+    while iter < 20 {
+        // Garbage to force collections between comparisons.
+        let mut i = 0
+        while i < 20000 {
+            let junk = Outer { tag: "junk", inner: Inner { x: i, name: "j" } }
+            i = i + 1
+        }
+        let a2 = Outer { tag: "t", inner: Inner { x: 7, name: "seven" } }
+        let b2 = Outer { tag: "t", inner: Inner { x: 8, name: "seven" } }
+        let s2 = Shape.Circle { r: 3 }
+        let s3 = Shape.Square { s: 3 }
+        if a1 == a2 { eq_count = eq_count + 1 } else { ne_count = ne_count + 1 }
+        if a1 == b2 { eq_count = eq_count + 1 } else { ne_count = ne_count + 1 }
+        if s1 == s2 { eq_count = eq_count + 1 } else { ne_count = ne_count + 1 }
+        if s1 == s3 { eq_count = eq_count + 1 } else { ne_count = ne_count + 1 }
+        iter = iter + 1
+    }
+    print(f"eq={eq_count} ne={ne_count}")
+}
+"#);
+    assert_eq!(out.trim(), "eq=40 ne=40");
+}
+
+#[test]
 fn gc_array_growth_under_pressure() {
     // Array that grows (realloc) while GC is active
     let out = compile_and_run_stdout(r#"
