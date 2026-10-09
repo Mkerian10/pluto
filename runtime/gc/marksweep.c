@@ -915,11 +915,28 @@ static inline GCHeader *gc_get_header(void *user_ptr) {
 
 // ── Allocation ────────────────────────────────────────────────────────────────
 
+// PLUTO_GC_TORTURE=N forces a collection every N allocations. Missing roots
+// and missing barriers are timing-dependent bugs a normal threshold rarely
+// hits; collecting constantly hits them. Verification aid (design R6) —
+// run whole test suites with it, ideally together with PLUTO_GC_VERIFY=1.
+static long gc_torture_every = -1;
+static long gc_torture_count = 0;
+
+static inline int gc_torture_due(void) {
+    if (gc_torture_every < 0) {
+        const char *e = getenv("PLUTO_GC_TORTURE");
+        gc_torture_every = e ? atol(e) : 0;
+        if (gc_torture_every < 0) gc_torture_every = 0;
+    }
+    return gc_torture_every > 0 && ++gc_torture_count % gc_torture_every == 0;
+}
+
 #ifdef PLUTO_TEST_MODE
 void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     // Test mode: single-threaded, no mutex needed
     if (gc_stack_bottom && !gc_collecting
-        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold) {
+        && (gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold
+            || gc_torture_due())) {
         __pluto_gc_collect();
     }
     return gc_obj_alloc(user_size, type_tag, field_count);
@@ -974,7 +991,8 @@ void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     // stopped or stop-the-world would deadlock.
     gc_heap_lock();
     if (gc_stack_bottom
-        && gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold) {
+        && (gc_bytes_allocated + user_size + sizeof(GCHeader) > gc_threshold
+            || gc_torture_due())) {
         // Initiation is serialized by gc_mutex: whoever holds it and sees the
         // threshold exceeded collects. A thread that was parked waiting on
         // gc_mutex during a collection re-checks the (now raised) threshold
