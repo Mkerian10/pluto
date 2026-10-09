@@ -85,6 +85,7 @@ int sendfile(int, int, off_t, off_t *, struct sf_hdtr *, int);
 #define GC_TAG_STRING_SLICE 10 // [backing_ptr][offset][len]; lightweight view into owned string
 #define GC_TAG_ENTITY 11  // object (entity) instance: identity semantics — never deep-copied, never structurally compared (rfc-objects.md)
 #define GC_TAG_HANDLE 12  // foreign-entity handle stub: [home_str][type_str][id] (rfc-objects.md phase 2)
+#define GC_TAG_BUFFER 13  // container backing store (marksweep family): [owner handle][payload...]
 
 // ── Thread-Local Storage ─────────────────────────────────────────────────────
 
@@ -151,6 +152,35 @@ void __pluto_gc_log_deleted(long old);
     do {                                                                          \
         if (__builtin_expect(__pluto_gc_barrier_mode & 2, 0))                     \
             __pluto_gc_log_deleted((long)(old));                                  \
+    } while (0)
+
+// ── Container backing stores ─────────────────────────────────────────────────
+//
+// The element storage of arrays, bytes, maps and sets comes from the GC
+// backend. __pluto_gc_buf_new(owner, bytes) returns a zeroed payload of
+// `bytes` bytes for the container handle `owner`; __pluto_gc_buf_drop(p)
+// says a payload has been replaced and is no longer used by its handle.
+//
+// The marksweep family allocates backing stores in the GC heap as
+// GC_TAG_BUFFER objects whose first word names their handle. An interior
+// pointer into a payload then resolves through the page map like any other
+// object and keeps the handle alive, so collections need no side table of
+// buffer extents; dropping is a no-op (the old buffer is garbage). noop and
+// legacy return malloc'd memory, free it in their finalizers, and free a
+// dropped payload at once.
+//
+// A payload is installed in its handle with PLUTO_GC_SET_BUF, never a plain
+// store: the allocation may have run a collection that made the handle
+// shared, and a shared handle must not point at a private backing store.
+// Like the other barriers, nothing that can reach a safepoint may separate
+// it from the allocation it installs.
+void *__pluto_gc_buf_new(void *owner, long bytes);
+void __pluto_gc_buf_own(void *payload, void *owner);   // name the owner of a buffer made with NULL
+void __pluto_gc_buf_drop(void *payload);
+#define PLUTO_GC_SET_BUF(handle, slot, payload)                                   \
+    do {                                                                          \
+        PLUTO_GC_STORE((handle), 0, (payload));                                   \
+        ((long *)(handle))[(slot)] = (long)(payload);                             \
     } while (0)
 
 // ── Channel Sync (Production Mode Only) ──────────────────────────────────────

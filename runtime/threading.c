@@ -1497,19 +1497,19 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
 
         long *copy = (long *)gc_alloc(24, GC_TAG_ARRAY, 3);
         dc_visited_insert(visited, orig, copy);
-        copy[0] = len;
+        long *new_data = (long *)__pluto_gc_buf_new(copy, cap * 8);
+        PLUTO_GC_SET_BUF(copy, 2, new_data);
         copy[1] = cap;
-        // Allocate new data buffer (raw malloc, like __pluto_array_new)
-        long *new_data = (long *)calloc((size_t)cap, sizeof(long));
-        copy[2] = (long)new_data;
         // Deep-copy each element. Copying an element allocates, so a
         // collection can see this array half-filled: every store goes
         // through the barrier like any other container store (it keeps a
-        // hybrid local collection's "all elements shared" verdict honest).
+        // hybrid local collection's "all elements shared" verdict honest),
+        // and the length grows with the elements actually stored.
         for (long i = 0; i < len; i++) {
             long v = dc_copy_slot(src_data[i], visited);
             PLUTO_GC_STORE(copy, 0, v);
             new_data[i] = v;
+            copy[0] = i + 1;
         }
         return (long)copy;
     }
@@ -1523,11 +1523,11 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
 
         long *copy = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
         dc_visited_insert(visited, orig, copy);
-        copy[0] = len;
-        copy[1] = cap;
-        unsigned char *new_data = (unsigned char *)calloc((size_t)cap, 1);
+        unsigned char *new_data = (unsigned char *)__pluto_gc_buf_new(copy, cap);
         memcpy(new_data, src_data, (size_t)len);
-        copy[2] = (long)new_data;
+        PLUTO_GC_SET_BUF(copy, 2, new_data);
+        copy[1] = cap;
+        copy[0] = len;
         return (long)copy;
     }
 
@@ -1552,16 +1552,15 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
 
         long *copy = (long *)gc_alloc(40, GC_TAG_MAP, 5);
         dc_visited_insert(visited, orig, copy);
-        copy[0] = count;
+        long *new_keys = (long *)__pluto_gc_buf_new(copy, cap * 8);
+        PLUTO_GC_SET_BUF(copy, 2, new_keys);
+        long *new_vals = (long *)__pluto_gc_buf_new(copy, cap * 8);
+        PLUTO_GC_SET_BUF(copy, 3, new_vals);
+        unsigned char *new_meta = (unsigned char *)__pluto_gc_buf_new(copy, cap);
+        memcpy(new_meta, src_meta, (size_t)cap);   // live slots read as null until filled
+        PLUTO_GC_SET_BUF(copy, 4, new_meta);
         copy[1] = cap;
-
-        long *new_keys = (long *)calloc((size_t)cap, sizeof(long));
-        long *new_vals = (long *)calloc((size_t)cap, sizeof(long));
-        unsigned char *new_meta = (unsigned char *)calloc((size_t)cap, 1);
-        memcpy(new_meta, src_meta, (size_t)cap);
-        copy[2] = (long)new_keys;
-        copy[3] = (long)new_vals;
-        copy[4] = (long)new_meta;
+        copy[0] = count;
 
         for (long i = 0; i < cap; i++) {
             if (src_meta[i] >= 0x80) {   // stores barriered: see the array case
@@ -1586,14 +1585,13 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
 
         long *copy = (long *)gc_alloc(32, GC_TAG_SET, 4);
         dc_visited_insert(visited, orig, copy);
-        copy[0] = count;
-        copy[1] = cap;
-
-        long *new_keys = (long *)calloc((size_t)cap, sizeof(long));
-        unsigned char *new_meta = (unsigned char *)calloc((size_t)cap, 1);
+        long *new_keys = (long *)__pluto_gc_buf_new(copy, cap * 8);
+        PLUTO_GC_SET_BUF(copy, 2, new_keys);
+        unsigned char *new_meta = (unsigned char *)__pluto_gc_buf_new(copy, cap);
         memcpy(new_meta, src_meta, (size_t)cap);
-        copy[2] = (long)new_keys;
-        copy[3] = (long)new_meta;
+        PLUTO_GC_SET_BUF(copy, 3, new_meta);
+        copy[1] = cap;
+        copy[0] = count;
 
         for (long i = 0; i < cap; i++) {
             if (src_meta[i] >= 0x80) {   // stores barriered: see the array case

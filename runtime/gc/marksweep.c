@@ -27,9 +27,6 @@
 
 // ── GC Infrastructure ─────────────────────────────────────────────────────────
 
-// Array data buffer interval
-typedef struct { void *start; void *end; void *array_handle; } GCDataInterval;
-
 // Global GC state
 static size_t gc_bytes_allocated = 0;
 
@@ -101,24 +98,11 @@ static atomic_int gc_collecting = 0;
 // through a thread-local pointer that defaults to the single global
 // context. Backends that let several threads collect at once (private-heap
 // collections) give each collector its own context; for everything else
-// this is exactly the old set of globals. All buffers are raw malloc,
-// grow-only, never GC-tracked.
-//   worklist      mark stack
-//   di            data-buffer interval table: the separately malloc'd
-//                 backing stores of array / bytes / map / set handles,
-//                 rebuilt each collection from blocks holding container
-//                 handles; lets a pointer into a backing store keep its
-//                 owning handle alive
-//   data_min/max  coarse bounds over those buffers (one-compare reject)
-//   sort_tmp      radix-sort scratch for the interval table
+// this is exactly the old set of globals. The worklist (mark stack) is raw
+// malloc, grow-only, never GC-tracked.
 typedef struct GCMarkCtx {
     void **worklist;
     size_t worklist_count, worklist_cap;
-    GCDataInterval *di;
-    size_t di_count, di_cap;
-    void *data_min, *data_max;
-    GCDataInterval *sort_tmp;
-    size_t sort_tmp_cap;
 } GCMarkCtx;
 static GCMarkCtx gc_global_ctx;
 
@@ -131,7 +115,6 @@ static GCMarkCtx gc_global_ctx;
 #define GC_MARK_GLOBAL 2
 #define GC_MARK_ROOT   0x10   // hybrid: referenced straight from a root this local collection
 #define GC_MARK_PROMOTE 0x40  // hybrid: reached from an object this local collection promotes
-#define GC_MARK_LISTED 0x80   // tlh: on its heap's private-container list (survives sweeps)
 // Every thread-local the trace consults lives in one struct reached through
 // a pointer (T) that the hot functions take as a parameter: on macOS each
 // access to a __thread variable is a call into the dynamic linker's TLV
@@ -176,13 +159,6 @@ static size_t gc_shared_threshold = GC_TLH_SHARED_FLOOR;
 #define gc_worklist             (T->ctx->worklist)
 #define gc_worklist_count       (T->ctx->worklist_count)
 #define gc_worklist_cap         (T->ctx->worklist_cap)
-#define gc_data_intervals       (T->ctx->di)
-#define gc_data_interval_count  (T->ctx->di_count)
-#define gc_data_interval_cap    (T->ctx->di_cap)
-#define gc_data_min             (T->ctx->data_min)
-#define gc_data_max             (T->ctx->data_max)
-#define gc_sort_tmp             (T->ctx->sort_tmp)
-#define gc_sort_tmp_cap         (T->ctx->sort_tmp_cap)
 
 // Which write barrier is live (runtime/builtins.h). tlh promotes on every
 // store into a shared object; incr turns its deletion barrier on only for
@@ -650,8 +626,6 @@ typedef struct GCThreadHeap {
                                // still owned here) until handed back under gc_mutex
     GCBlock *dead_large;       // large objects freed by local collections, unmapped
                                // under gc_mutex
-    GCHeader **conts;          // containers this heap allocated that may still be
-    size_t nconts, conts_cap;  // private (see gc_tlh_build_local_intervals)
     long torture_count;
     long local_count;
 #endif
@@ -699,21 +673,6 @@ static void gc_tlh_own(GCThreadHeap *H, GCBlock *b) {   // under gc_mutex or STW
     H->blocks[H->nblocks++] = b;
 }
 
-#if defined(GC_TLH)
-static void gc_oom(const char *what);
-static inline void gc_tlh_list_container(GCThreadHeap *H, GCHeader *h) {
-    if (H->nconts == H->conts_cap) {
-        size_t cap = H->conts_cap ? H->conts_cap * 2 : 256;
-        GCHeader **grown = (GCHeader **)realloc(H->conts, cap * sizeof(GCHeader *));
-        if (!grown) gc_oom("GC container list");
-        H->conts = grown;
-        H->conts_cap = cap;
-    }
-    H->conts[H->nconts++] = h;
-    h->mark |= GC_MARK_LISTED;
-}
-#endif
-
 // Lock-free private allocation; NULL when the size class has no room (or
 // the object is large), meaning the caller must take the slow path.
 static inline void *gc_tlh_alloc_fast(GCThreadHeap *H, size_t user_size, uint8_t type_tag,
@@ -737,12 +696,7 @@ static inline void *gc_tlh_alloc_fast(GCThreadHeap *H, size_t user_size, uint8_t
     h->size = (uint32_t)user_size;
     h->type_tag = type_tag;
     h->field_count = field_count;
-    if (gc_is_container_tag(type_tag)) {
-        b->has_containers = 1;
-#if defined(GC_TLH)
-        gc_tlh_list_container(H, h);
-#endif
-    }
+    if (gc_is_container_tag(type_tag)) b->has_containers = 1;
     H->unreported += gc_class_sizes[cls];
 #if defined(GC_TLH)
     H->local_alloc += gc_class_sizes[cls];
@@ -797,12 +751,7 @@ static void *gc_tlh_alloc_slow(GCThreadHeap *H, size_t user_size, uint8_t type_t
     h->size = (uint32_t)user_size;
     h->type_tag = type_tag;
     h->field_count = field_count;
-    if (gc_is_container_tag(type_tag)) {
-        b->has_containers = 1;
-#if defined(GC_TLH)
-        gc_tlh_list_container(H, h);
-#endif
-    }
+    if (gc_is_container_tag(type_tag)) b->has_containers = 1;
     gc_bytes_allocated += bytes;
 #if defined(GC_TLH)
     H->local_alloc += bytes;
@@ -1262,10 +1211,7 @@ static void gc_tlh_retire(GCThreadHeap *H) {
     }
     free(H->blocks);
 #if defined(GC_TLH)
-    free(H->conts);
     free(H->ctx.worklist);
-    free(H->ctx.di);
-    free(H->ctx.sort_tmp);
 #endif
     free(H);
 }
@@ -1733,6 +1679,21 @@ void *__pluto_alloc(long size) {
     return gc_alloc((size_t)size, GC_TAG_OBJECT, field_count);
 }
 
+// Container backing stores (see builtins.h): a GC_TAG_BUFFER object whose
+// first word is the owning handle, followed by the zeroed payload. Payloads
+// are 8-byte aligned like every object body. Nothing is freed eagerly: a
+// replaced buffer is garbage once its handle no longer points at it.
+void *__pluto_gc_buf_new(void *owner, long bytes) {
+    if (bytes < 0) bytes = 0;
+    long *b = (long *)gc_alloc(8 + (size_t)bytes, GC_TAG_BUFFER, 0);
+    b[0] = (long)owner;
+    return b + 1;
+}
+
+void __pluto_gc_buf_own(void *payload, void *owner) { ((long *)payload)[-1] = (long)owner; }
+
+void __pluto_gc_buf_drop(void *payload) { (void)payload; }
+
 /* Entities (object declarations) get their own tag so the runtime can honor
  * identity semantics structurally: deep_copy shares them, deep_eq compares
  * them by pointer. Mark-phase tracing uses the conservative default case.
@@ -1750,179 +1711,6 @@ void *__pluto_alloc_entity(long size) {
     // (rfc-test-harness phase 4 — lock sites are preemption points).
     ptr[size / 8] = __pluto_rwlock_init();
     return ptr;
-}
-
-// ── Data-buffer interval table ────────────────────────────────────────────────
-
-static int gc_data_interval_cmp(const void *a, const void *b) {
-    const GCDataInterval *ia = (const GCDataInterval *)a;
-    const GCDataInterval *ib = (const GCDataInterval *)b;
-    if (ia->start < ib->start) return -1;
-    if (ia->start > ib->start) return 1;
-    return 0;
-}
-
-// Sorted by start for the owner binary search. qsort through a comparator
-// function pointer is slow on big tables, so sort with an LSD radix sort on
-// the address offset instead: key = (start - min) >> 4 (malloc results are
-// 16-byte aligned), 11 bits per pass. Correctness never depends on it: the
-// result is verified with a linear sortedness check and re-sorted with
-// qsort if that fails or the scratch buffer can't be allocated.
-#define GC_RADIX_BITS 11
-#define GC_RADIX_BUCKETS (1u << GC_RADIX_BITS)
-#define GC_RADIX_MIN_N 256   // below this, qsort is already cheap
-
-
-static void gc_sort_data_intervals(GCTrace *T, GCDataInterval *a, size_t n) {
-    if (n < 2) return;
-    if (n >= GC_RADIX_MIN_N) {
-        if (n > gc_sort_tmp_cap) {
-            GCDataInterval *grown =
-                (GCDataInterval *)realloc(gc_sort_tmp, n * sizeof(GCDataInterval));
-            if (grown) {
-                gc_sort_tmp = grown;
-                gc_sort_tmp_cap = n;
-            }
-        }
-        if (n <= gc_sort_tmp_cap) {
-            uintptr_t lo = UINTPTR_MAX, hi = 0;
-            for (size_t i = 0; i < n; i++) {
-                uintptr_t s = (uintptr_t)a[i].start;
-                if (s < lo) lo = s;
-                if (s > hi) hi = s;
-            }
-            uintptr_t span = (hi - lo) >> 4;
-            int bits = 0;
-            while (bits < 64 && (span >> bits) != 0) bits++;
-
-            GCDataInterval *src = a, *dst = gc_sort_tmp;
-            size_t cnt[GC_RADIX_BUCKETS];
-            for (int shift = 0; shift < bits; shift += GC_RADIX_BITS) {
-                memset(cnt, 0, sizeof cnt);
-                for (size_t i = 0; i < n; i++) {
-                    cnt[((((uintptr_t)src[i].start - lo) >> 4) >> shift)
-                        & (GC_RADIX_BUCKETS - 1)]++;
-                }
-                size_t sum = 0;
-                for (size_t b = 0; b < GC_RADIX_BUCKETS; b++) {
-                    size_t c = cnt[b];
-                    cnt[b] = sum;
-                    sum += c;
-                }
-                for (size_t i = 0; i < n; i++) {
-                    size_t k = ((((uintptr_t)src[i].start - lo) >> 4) >> shift)
-                               & (GC_RADIX_BUCKETS - 1);
-                    dst[cnt[k]++] = src[i];
-                }
-                GCDataInterval *t = src;
-                src = dst;
-                dst = t;
-            }
-            if (src != a) memcpy(a, src, n * sizeof(GCDataInterval));
-
-            int sorted = 1;
-            for (size_t i = 1; i < n; i++) {
-                if (a[i - 1].start > a[i].start) { sorted = 0; break; }
-            }
-            if (sorted) return;
-        }
-    }
-    qsort(a, n, sizeof(GCDataInterval), gc_data_interval_cmp);
-}
-
-static inline void gc_data_interval_add(GCTrace *T, void *start, void *end, void *owner) {
-    if (gc_data_interval_count == gc_data_interval_cap) {
-        size_t cap = gc_data_interval_cap ? gc_data_interval_cap * 2 : 1024;
-        GCDataInterval *grown =
-            (GCDataInterval *)realloc(gc_data_intervals, cap * sizeof(GCDataInterval));
-        if (!grown) gc_oom("GC lookup table");
-        gc_data_intervals = grown;
-        gc_data_interval_cap = cap;
-    }
-    GCDataInterval *d = &gc_data_intervals[gc_data_interval_count++];
-    d->start = start;
-    d->end = end;
-    d->array_handle = owner;
-}
-
-static void gc_add_container_intervals(GCTrace *T, GCHeader *h) {
-    void *user = (char *)h + sizeof(GCHeader);
-    switch (h->type_tag) {
-    case GC_TAG_ARRAY:   // handle [len][cap][data_ptr], 8 bytes per element
-    case GC_TAG_BYTES: { // handle [len][cap][data_ptr], 1 byte per element
-        if (h->size < 24) break;
-        long *handle = (long *)user;
-        long cap = handle[1];
-        char *data = (char *)handle[2];
-        if (data && cap > 0) {
-            long elem = h->type_tag == GC_TAG_ARRAY ? 8 : 1;
-            gc_data_interval_add(T, data, data + cap * elem, user);
-        }
-        break;
-    }
-    case GC_TAG_MAP: {   // [count][cap][keys_ptr][vals_ptr][meta_ptr]
-        if (h->size < 40) break;
-        long *mh = (long *)user;
-        long cap = mh[1];
-        if (cap <= 0) break;
-        char *keys = (char *)mh[2], *vals = (char *)mh[3], *meta = (char *)mh[4];
-        if (keys) gc_data_interval_add(T, keys, keys + cap * 8, user);
-        if (vals) gc_data_interval_add(T, vals, vals + cap * 8, user);
-        if (meta) gc_data_interval_add(T, meta, meta + cap, user);
-        break;
-    }
-    case GC_TAG_SET: {   // [count][cap][keys_ptr][meta_ptr]
-        if (h->size < 32) break;
-        long *sh = (long *)user;
-        long cap = sh[1];
-        if (cap <= 0) break;
-        char *keys = (char *)sh[2], *meta = (char *)sh[3];
-        if (keys) gc_data_interval_add(T, keys, keys + cap * 8, user);
-        if (meta) gc_data_interval_add(T, meta, meta + cap, user);
-        break;
-    }
-    default:
-        break;
-    }
-}
-
-static void gc_finish_data_intervals(GCTrace *T);
-
-// Rebuild the data-buffer table. Only blocks flagged as holding container
-// handles are scanned (the flag is refreshed by every sweep), plus any large
-// container objects.
-static void gc_build_data_intervals(GCTrace *T) {
-    gc_data_interval_count = 0;
-    for (size_t k = 0; k < gc_small_block_count; k++) {
-        GCBlock *b = gc_small_blocks[k];
-        if (b->kind != GC_BLOCK_SMALL || !b->has_containers) continue;
-        for (uint32_t i = 0; i < b->bump; i++) {
-            GCHeader *h = (GCHeader *)(b->base + (size_t)i * b->obj_size);
-            if (gc_is_container_tag(h->type_tag)) gc_add_container_intervals(T, h);
-        }
-    }
-    for (size_t k = 0; k < gc_large_count; k++) {
-        GCHeader *h = (GCHeader *)gc_large_blocks[k]->base;
-        if (gc_is_container_tag(h->type_tag)) gc_add_container_intervals(T, h);
-    }
-    gc_finish_data_intervals(T);
-}
-
-// Sort the collected intervals and compute their coarse bounds.
-static void gc_finish_data_intervals(GCTrace *T) {
-    gc_sort_data_intervals(T, gc_data_intervals, gc_data_interval_count);
-    if (gc_data_interval_count == 0) {
-        gc_data_min = NULL;
-        gc_data_max = NULL;
-    } else {
-        void *lo = gc_data_intervals[0].start;
-        void *hi = NULL;
-        for (size_t k = 0; k < gc_data_interval_count; k++) {
-            if (gc_data_intervals[k].end > hi) hi = gc_data_intervals[k].end;
-        }
-        gc_data_min = lo;
-        gc_data_max = hi;
-    }
 }
 
 #if defined(GC_TLH) && !defined(PLUTO_TEST_MODE)
@@ -2022,6 +1810,13 @@ static __attribute__((noinline, cold)) void gc_verify_lookup(void *candidate, GC
     }
 }
 
+// candidate is h's start, or (h a backing store) its payload's start: the
+// two pointers the runtime hands out, which need no brute-force cross-check.
+static inline int gc_is_start(const GCHeader *h, const void *candidate) {
+    const char *u = (const char *)(h + 1);
+    return candidate == u || (h->type_tag == GC_TAG_BUFFER && candidate == u + 8);
+}
+
 // Find the GC object containing candidate (start or interior pointer).
 static inline GCHeader *gc_find_object(GCTrace *T, void *candidate) {
     (void)T;
@@ -2036,11 +1831,11 @@ static inline GCHeader *gc_find_object(GCTrace *T, void *candidate) {
         // An exact start of a shared object (the common miss once objects
         // are tenured in place) is unambiguous and skips the brute force.
         if (__builtin_expect(gc_verify_enabled > 0, 0) && !T->promoting
-            && h != (GCHeader *)((char *)candidate - sizeof(GCHeader))) {
+            && !(h && gc_is_start(h, candidate))) {
             GCBlock *vb = gc_pagemap_get_acq((uintptr_t)candidate);
             if (vb && vb->owner == T->local_heap) {
-                GCHeader *ex = gc_lookup(candidate, 0);
-                if (!(ex && !h && ex->next == GC_SHARED_TAG))
+                GCHeader *ex = gc_lookup(candidate, 1);
+                if (!(ex && !h && ex->next == GC_SHARED_TAG && gc_is_start(ex, candidate)))
                     gc_tlh_verify_own(candidate, T->local_heap, h);
             }
         }
@@ -2054,28 +1849,10 @@ static inline GCHeader *gc_find_object(GCTrace *T, void *candidate) {
     // threads run, and a brute-force scan would race with them.
     if (__builtin_expect(gc_verify_enabled > 0, 0) && gc_collecting
         && (uintptr_t)candidate >= gc_heap_lo && (uintptr_t)candidate < gc_heap_hi
-        && found != (GCHeader *)((char *)candidate - sizeof(GCHeader))) {
+        && !(found && gc_is_start(found, candidate))) {
         gc_verify_lookup(candidate, found);
     }
     return found;
-}
-
-// Binary search: find array handle owning a data buffer containing candidate
-static void *gc_find_array_owner(GCTrace *T, void *candidate) {
-    if (gc_data_interval_count == 0) return NULL;
-    if (candidate < gc_data_min || candidate >= gc_data_max) return NULL;
-    size_t lo = 0, hi = gc_data_interval_count;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        if (candidate < gc_data_intervals[mid].start) {
-            hi = mid;
-        } else if (candidate >= gc_data_intervals[mid].end) {
-            lo = mid + 1;
-        } else {
-            return gc_data_intervals[mid].array_handle;
-        }
-    }
-    return NULL;
 }
 
 // ── Mark phase ────────────────────────────────────────────────────────────────
@@ -2247,6 +2024,9 @@ static long gc_scan_container_chunk(GCTrace *T, void *user_ptr, long from) {
 static inline int gc_hyb_promotes(const GCTrace *T, const GCHeader *h) {
     if (h->mark & GC_MARK_PROMOTE) return 1;
     if (h->mark & GC_MARK_ROOT) return 0;
+    // A backing store shares its handle's fate: never tenured on its own,
+    // only by the PROMOTE its handle's trace hands it.
+    if (h->type_tag == GC_TAG_BUFFER) return 0;
     unsigned age = ((h->mark >> 2) & 3) + 1;
     return T->tenure_all || age >= T->tenure_age;
 }
@@ -2269,19 +2049,60 @@ static inline void gc_edge(GCTrace *T, GCHeader *child, int promo) {
     if (!GC_MARKED(child)) gc_mark_object(T, (char *)child + sizeof(GCHeader));
 }
 
+// Bytes of scanning a trace of h costs: its body, except for a backing
+// store, whose trace only follows the owner word.
+static inline size_t gc_trace_cost(const GCHeader *h) {
+    return sizeof(GCHeader) + (h->type_tag == GC_TAG_BUFFER ? 8 : h->size);
+}
+
+// A container's edge to one of its backing stores (a payload pointer: the
+// buffer object starts one word before it).
+static inline void gc_buf_edge(GCTrace *T, long payload, int promo) {
+    GCHeader *c;
+    if (payload && (c = gc_find_object(T, (void *)payload))) gc_edge(T, c, promo);
+}
+
 static void gc_trace_object(GCTrace *T, void *user_ptr) {
     GCHeader *h = gc_get_header(user_ptr);
-    T->trace_work += sizeof(GCHeader) + h->size;
+    T->trace_work += gc_trace_cost(h);
     int promo = 0;
 #if defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE)
+    if (T->local_heap && !T->promoting) promo = gc_hyb_promotes(T, h);
+#endif
+    GCHeader *c;
+    long *hs = (long *)user_ptr;
+    // Backing stores are marked whatever else this trace skips (a clean
+    // container's elements, a chunked scan's later chunks): they are
+    // objects of their own and die with nothing to keep them. A buffer
+    // reached directly (an interior pointer from a root) leads back to its
+    // handle, which keeps it and its elements alive.
+    switch (h->type_tag) {
+    case GC_TAG_ARRAY:
+    case GC_TAG_BYTES:
+        gc_buf_edge(T, hs[2], promo);
+        break;
+    case GC_TAG_SET:
+        gc_buf_edge(T, hs[2], promo);
+        gc_buf_edge(T, hs[3], promo);
+        break;
+    case GC_TAG_MAP:
+        gc_buf_edge(T, hs[2], promo);
+        gc_buf_edge(T, hs[3], promo);
+        gc_buf_edge(T, hs[4], promo);
+        break;
+    case GC_TAG_BUFFER:
+        if ((c = gc_find_object(T, (void *)hs[0]))) gc_edge(T, c, promo);
+        return;
+    default:
+        break;
+    }
+#if defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE)
     int clean_check = 0;
-    if (T->local_heap && !T->promoting) {
-        if (h->type_tag == GC_TAG_ARRAY || h->type_tag == GC_TAG_MAP || h->type_tag == GC_TAG_SET) {
-            if (h->mark & GC_MARK_CLEAN) return;   // every element is shared: nothing to mark here
-            clean_check = 1;
-            T->saw_private = 0;
-        }
-        promo = gc_hyb_promotes(T, h);
+    if (T->local_heap && !T->promoting
+        && (h->type_tag == GC_TAG_ARRAY || h->type_tag == GC_TAG_MAP || h->type_tag == GC_TAG_SET)) {
+        if (h->mark & GC_MARK_CLEAN) return;   // every element is shared: nothing to mark here
+        clean_check = 1;
+        T->saw_private = 0;
     }
 #endif
 #ifdef GC_SATB
@@ -2291,7 +2112,6 @@ static void gc_trace_object(GCTrace *T, void *user_ptr) {
         return;
     }
 #endif
-    GCHeader *c;
     switch (h->type_tag) {
     case GC_TAG_STRING:
     case GC_TAG_BYTES:
@@ -2352,19 +2172,13 @@ static void gc_trace_object(GCTrace *T, void *user_ptr) {
     }
     case GC_TAG_OBJECT:
     default: {
-        // Scan all 8-byte slots conservatively: a slot may hold an object or
-        // point into a container's backing store (disjoint allocations, so
-        // at most one of the two lookups can succeed).
+        // Scan all 8-byte slots conservatively (a pointer into a container's
+        // backing store resolves to the GC_TAG_BUFFER object, which leads
+        // back to its handle).
         long *slots = (long *)user_ptr;
         uint16_t fc = h->field_count;
         for (uint16_t i = 0; i < fc; i++) {
-            void *candidate = (void *)slots[i];
-            if ((c = gc_find_object(T, candidate))) {
-                gc_edge(T, c, promo);
-                continue;
-            }
-            void *arr_owner = gc_find_array_owner(T, candidate);
-            if (arr_owner) gc_edge(T, gc_get_header(arr_owner), promo);
+            if ((c = gc_find_object(T, (void *)slots[i]))) gc_edge(T, c, promo);
         }
         break;
     }
@@ -2498,18 +2312,28 @@ static void gc_pm_drain(void) {
 
 // Heap checkers (PLUTO_GC_VERIFY): call check(parent, word, where) for every
 // pointer-sized slot of h that can hold a reference, per its tag.
+// A container's backing store edge is reported as the buffer object's
+// start (one word before the payload), so exact-start checks resolve it.
+#define GC_BUF_START(payload) ((payload) ? (long)(payload) - 8 : 0)
 static __attribute__((unused)) void gc_check_children(GCHeader *h, void (*check)(GCHeader *, long, const char *)) {
     long *slots = (long *)(h + 1);
     switch (h->type_tag) {
     case GC_TAG_STRING:
+        return;
     case GC_TAG_BYTES:
+        check(h, GC_BUF_START(slots[2]), "backing store");
+        return;
+    case GC_TAG_BUFFER:
+        check(h, slots[0], "owner");
         return;
     case GC_TAG_ARRAY: {
+        check(h, GC_BUF_START(slots[2]), "backing store");
         long len = slots[0], *data = (long *)slots[2];
         for (long i = 0; data && i < len; i++) check(h, data[i], "array element");
         return;
     }
     case GC_TAG_MAP: {
+        for (int k = 2; k <= 4; k++) check(h, GC_BUF_START(slots[k]), "backing store");
         long cap = slots[1], *keys = (long *)slots[2], *vals = (long *)slots[3];
         unsigned char *meta = (unsigned char *)slots[4];
         for (long i = 0; meta && i < cap; i++) {
@@ -2520,6 +2344,7 @@ static __attribute__((unused)) void gc_check_children(GCHeader *h, void (*check)
         return;
     }
     case GC_TAG_SET: {
+        for (int k = 2; k <= 3; k++) check(h, GC_BUF_START(slots[k]), "backing store");
         long cap = slots[1], *keys = (long *)slots[2];
         unsigned char *meta = (unsigned char *)slots[3];
         for (long i = 0; meta && i < cap; i++) {
@@ -2625,23 +2450,11 @@ static void gc_tlh_check_invariant(void) {
 void __pluto_gc_promote_store(long value) { (void)value; }
 #endif
 
+// A root word: mark the object it points into, if any (a pointer into a
+// backing store marks the buffer, whose trace marks its handle).
 static void gc_mark_candidate(GCTrace *T, void *candidate) {
-    // Check if candidate points into a GC object
     GCHeader *h = gc_find_object(T, candidate);
-    if (h) {
-        if (!GC_MARKED(h)) gc_mark_object(T, (char *)h + sizeof(GCHeader));
-        // Object user-regions and data buffers are disjoint allocations, so a
-        // candidate inside an object cannot also be inside a data buffer.
-        return;
-    }
-    // Check if candidate points into an array data buffer
-    void *arr_owner = gc_find_array_owner(T, candidate);
-    if (arr_owner) {
-        GCHeader *arr_h = gc_get_header(arr_owner);
-        if (!GC_MARKED(arr_h)) {
-            gc_mark_object(T, arr_owner);
-        }
-    }
+    if (h && !GC_MARKED(h)) gc_mark_object(T, (char *)h + sizeof(GCHeader));
 }
 
 // ── Sweep ────────────────────────────────────────────────────────────────────
@@ -2650,23 +2463,8 @@ static void gc_mark_candidate(GCTrace *T, void *candidate) {
 static void gc_finalize(GCHeader *h) {
     long *slots = (long *)((char *)h + sizeof(GCHeader));
     switch (h->type_tag) {
-    case GC_TAG_ARRAY:   // [len][cap][data_ptr]
-    case GC_TAG_BYTES:
-        if (h->size >= 24 && slots[2]) free((void *)slots[2]);
-        break;
-    case GC_TAG_MAP:     // [count][cap][keys_ptr][vals_ptr][meta_ptr]
-        if (h->size >= 40) {
-            if (slots[2]) free((void *)slots[2]);
-            if (slots[3]) free((void *)slots[3]);
-            if (slots[4]) free((void *)slots[4]);
-        }
-        break;
-    case GC_TAG_SET:     // [count][cap][keys_ptr][meta_ptr]
-        if (h->size >= 32) {
-            if (slots[2]) free((void *)slots[2]);
-            if (slots[3]) free((void *)slots[3]);
-        }
-        break;
+    // Arrays, bytes, maps and sets own GC_TAG_BUFFER backing stores, which
+    // die with them: nothing to release.
     case GC_TAG_TASK:
         // Test mode: slots[4] holds the FIBER ID, not a TaskSync pointer —
         // freeing it would be free(small int). Nothing to release there.
@@ -2818,47 +2616,6 @@ static size_t gc_sweep_large(void) {
 // and handed over at the next report (gc_tlh_report), so a local collection
 // never blocks and a global collection simply waits for it to finish.
 
-// Interval table over H's private container backing stores only. A shared
-// container must never be marked by a local collection (its mark would
-// survive the local sweep and corrupt the next global one).
-//
-// The candidates come from H's container list rather than a walk over H's
-// blocks: objects are tenured in place, so H's blocks fill up with shared
-// containers a walk would revisit at every local collection (a pause that
-// grows with the old generation). The list holds every container H
-// allocated since its last compaction, so it covers every private one; a
-// compaction here drops entries that died, were promoted, or name a slot
-// another heap now owns, and drops duplicates (a slot reused by a second
-// container is listed twice) by clearing GC_MARK_LISTED on the first copy
-// it keeps. Ownership and slot validity are checked through the page map
-// before the header is read, since a large object's memory is unmapped when
-// it dies and an emptied block may be re-carved.
-static void gc_tlh_build_local_intervals(GCTrace *T, GCThreadHeap *H) {
-    gc_data_interval_count = 0;
-    size_t kept = 0;
-    for (size_t i = 0; i < H->nconts; i++) {
-        GCHeader *h = H->conts[i];
-        GCBlock *b = gc_pagemap_get_acq((uintptr_t)h);
-        if (!b || __atomic_load_n(&b->owner, __ATOMIC_RELAXED) != H) continue;
-        // The entry must still be an allocated slot start: an emptied block
-        // can come back to H carved for another size class.
-        if (b->kind == GC_BLOCK_SMALL) {
-            uintptr_t off = (uintptr_t)h - (uintptr_t)b->base;
-            size_t idx = gc_slot_index(b, off);
-            if (off >= GC_BLOCK_SIZE || idx >= b->bump || off != idx * b->obj_size) continue;
-        } else if (b->kind != GC_BLOCK_LARGE || (char *)h != b->base) {
-            continue;
-        }
-        if (!gc_is_container_tag(h->type_tag) || h->next == GC_SHARED_TAG
-            || !(h->mark & GC_MARK_LISTED)) continue;
-        h->mark &= (uint8_t)~GC_MARK_LISTED;
-        H->conts[kept++] = h;
-        gc_add_container_intervals(T, h);
-    }
-    H->nconts = kept;
-    for (size_t i = 0; i < kept; i++) H->conts[i]->mark |= GC_MARK_LISTED;
-    gc_finish_data_intervals(T);
-}
 
 #if defined(GC_HYBRID)
 #define GC_HYB_PRIVATE_CAP  ((size_t)4 << 20)    // tenure everything past this private live size
@@ -2911,8 +2668,9 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
         unsigned age = (h->mark >> 2) & 3;
         if (age < 3) age++;
         int promote = (h->mark & GC_MARK_PROMOTE)
-                      || (!(h->mark & GC_MARK_ROOT) && (H->tenure_all || age >= H->tenure_age));
-        h->mark = (uint8_t)((h->mark & (3 | GC_MARK_CLEAN | GC_MARK_LISTED)) | (age << 2));
+                      || (!(h->mark & GC_MARK_ROOT) && h->type_tag != GC_TAG_BUFFER
+                          && (H->tenure_all || age >= H->tenure_age));
+        h->mark = (uint8_t)((h->mark & (3 | GC_MARK_CLEAN)) | (age << 2));
         if (promote) {
             // Promote in place. While a global cycle marks, a newly shared
             // object is logged so a step traces it (marking it black here
@@ -3188,8 +2946,7 @@ static size_t gc_hyb_check_local(GCThreadHeap *H) {
     return visited + gc_hyb_check_slots * 8;
 }
 
-// A local root: mark it as usual, and pin what it references directly
-// (an object, or the container whose backing store it points into).
+// A local root: mark it as usual, and pin what it references directly.
 //
 // Pinning protects objects that may be half-built (see gc_tlh_keep):
 // codegen allocates a struct literal before evaluating its fields and
@@ -3197,18 +2954,16 @@ static size_t gc_hyb_check_local(GCThreadHeap *H) {
 // reference into an array, map or set goes through PLUTO_GC_STORE —
 // codegen builds container literals with the runtime's insert functions,
 // the runtime fills containers it builds with __pluto_array_push or the
-// barrier, and the one raw fill (array slices) allocates nothing between
-// the allocation and its last store — so a promoted container can never be
+// barrier, and the one raw fill (array slices) fills an array that
+// __pluto_array_new guarantees no collection has seen, reaching no
+// safepoint before its last store — so a promoted container can never be
 // handed a private reference. Tenuring them matters: a big table held on a
 // thread's stack would otherwise stay private forever and be rescanned by
-// every local collection that finds it dirty.
+// every local collection that finds it dirty. Backing stores stay pinned:
+// one is only ever promoted together with its handle (gc_hyb_promotes).
 static void gc_tlh_local_root(GCTrace *T, void *candidate) {
     GCHeader *h = gc_find_object(T, candidate);
-    if (!h) {
-        void *owner = gc_find_array_owner(T, candidate);
-        if (!owner) return;
-        h = gc_get_header(owner);
-    }
+    if (!h) return;
     if (!GC_MARKED(h)) gc_mark_object(T, (char *)h + sizeof(GCHeader));
     if (!gc_is_container_tag(h->type_tag)) h->mark |= GC_MARK_ROOT;
 }
@@ -3227,7 +2982,6 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     T->local_heap = H;
     gc_worklist_count = 0;
     T->trace_work = 0;
-    gc_tlh_build_local_intervals(T, H);
 
 #if defined(GC_HYBRID)
     // PLUTO_GC_VERIFY's local checks visit the whole heap; run back to back
@@ -3273,7 +3027,6 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &tm);
 
     size_t freed = gc_tlh_local_sweep(H, 1);
-    gc_data_interval_count = 0;   // promotion must not see stale intervals
     gc_worklist_count = 0;
     T->local_heap = NULL;
     T->ctx = saved;
@@ -3831,7 +3584,7 @@ static int gc_incr_trace(GCTrace *T, size_t budget) {
         if (gc_worklist_count > 0) {
             void *o = gc_worklist[--gc_worklist_count];
             gc_trace_object(T, o);
-            done += sizeof(GCHeader) + gc_get_header(o)->size;
+            done += gc_trace_cost(gc_get_header(o));
         } else {
             GCCont c = gc_conts[--gc_cont_count];
             done += sizeof(GCHeader) + 8 * (size_t)gc_scan_container_chunk(T, c.obj, c.next);
@@ -3917,7 +3670,6 @@ static void gc_incr_finish(void) {
     (void)gc_sweep();   // queues small blocks; large objects are swept now
     size_t freed = gc_bytes_allocated - gc_marked_bytes;
     gc_after_sweep(freed);
-    gc_data_interval_count = 0;
     gc_worklist_count = 0;
     gc_cycle_count++;
 }
@@ -3971,7 +3723,6 @@ static void gc_incr_start(void) {
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &t0);
     gc_finish_lazy_sweep();
     gc_marked_bytes = 0;
-    gc_build_data_intervals(T);
     gc_worklist_count = 0;
     gc_scan_roots(T);
     gc_incr_marking = 1;
@@ -4136,7 +3887,6 @@ static void gc_hyb_finish(void) {
                                                                      : GC_TLH_SHARED_FLOOR;
     gc_threshold = gc_bytes_allocated * 2;
     if (gc_threshold < GC_MIN_THRESHOLD) gc_threshold = GC_MIN_THRESHOLD;
-    gc_data_interval_count = 0;
     gc_worklist_count = 0;
     gc_cycle_count++;
 }
@@ -4198,7 +3948,6 @@ static void gc_hyb_start(int complete) {
         gc_tlh_report(H);
     }
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &ta);
-    gc_build_data_intervals(T);
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &tb);
     gc_worklist_count = 0;
     gc_hyb_marked_shared = 0;
@@ -4287,7 +4036,6 @@ void __pluto_gc_collect(void) {
     gc_finish_lazy_sweep();
     gc_marked_bytes = 0;
 #endif
-    gc_build_data_intervals(T);
     struct timespec gc_tb;
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_tb);
 
@@ -4355,7 +4103,6 @@ void __pluto_gc_collect(void) {
     // Keep the interval tables and worklist allocated across cycles
     // (grow-only) to avoid per-collection malloc/free churn. Only the live
     // counts are reset; the capacities and buffers persist for process life.
-    gc_data_interval_count = 0;
     gc_worklist_count = 0;
 
     gc_cycle_count++;

@@ -225,3 +225,14 @@ int __pluto_gc_check_safepoint(void) {
 int __pluto_gc_barrier_mode = 0;
 void __pluto_gc_log_deleted(long old) { (void)old; }
 void __pluto_gc_promote_store(long value) { (void)value; }
+
+// Container backing stores are plain malloc memory here: finalizers free
+// the current one, and a replaced one is freed at once (builtins.h).
+void *__pluto_gc_buf_new(void *owner, long bytes) {
+    (void)owner;
+    void *p = calloc(1, bytes > 0 ? (size_t)bytes : 1);
+    if (!p) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    return p;
+}
+void __pluto_gc_buf_own(void *payload, void *owner) { (void)payload; (void)owner; }
+void __pluto_gc_buf_drop(void *payload) { free(payload); }

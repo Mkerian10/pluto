@@ -228,14 +228,30 @@ long __pluto_string_len(void *s) {
 // ── Array runtime functions ───────────────────────────────────────────────────
 // Handle layout (24 bytes): [len: long] [cap: long] [data_ptr: long*]
 
+// Replace the backing store in handle slot `slot` (`old_bytes` in use) with
+// a zeroed one of `new_bytes`, keeping the old contents. Returns the new
+// payload.
+static void *__pluto_buf_regrow(long *h, int slot, long old_bytes, long new_bytes) {
+    void *old = (void *)h[slot];
+    void *grown = __pluto_gc_buf_new(h, new_bytes);
+    if (old_bytes > 0) memcpy(grown, old, (size_t)old_bytes);
+    PLUTO_GC_SET_BUF(h, slot, grown);
+    __pluto_gc_buf_drop(old);
+    return grown;
+}
+
+// The backing store is allocated BEFORE the handle, so the handle this
+// returns has never been seen by a collection: callers may fill a fresh
+// array with plain stores as long as they reach no safepoint first
+// (__pluto_array_slice does). Allocated after the buffer instead, the
+// handle could be tenured by a collection the buffer's allocation ran, and
+// those plain stores would put private references into a shared array.
 void *__pluto_array_new(long cap) {
+    void *data = __pluto_gc_buf_new(NULL, cap * 8);
     long *handle = (long *)gc_alloc(24, GC_TAG_ARRAY, 3);
-    handle[0] = 0;   // len
-    handle[1] = cap;  // cap
-    // Data buffer is NOT GC-tracked — raw malloc/realloc
-    long *data = (long *)malloc(cap * 8);
-    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
-    handle[2] = (long)data;
+    __pluto_gc_buf_own(data, handle);
+    PLUTO_GC_SET_BUF(handle, 2, data);
+    handle[1] = cap;
     return handle;
 }
 
@@ -251,10 +267,8 @@ void __pluto_array_push(void *handle, long value) {
         }
         cap = cap * 2;
         if (cap == 0) cap = 4;
-        data = (long *)realloc(data, cap * 8);
-        if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+        data = (long *)__pluto_buf_regrow(h, 2, len * 8, cap * 8);
         h[1] = cap;
-        h[2] = (long)data;
     }
     PLUTO_GC_STORE(h, 0, value);
     data[len] = value;
@@ -366,10 +380,8 @@ void __pluto_array_insert_at(void *handle, long index, long value) {
     if (len == cap) {
         cap = cap * 2;
         if (cap == 0) cap = 4;
-        data = (long *)realloc(data, cap * 8);
-        if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+        data = (long *)__pluto_buf_regrow(h, 2, len * 8, cap * 8);
         h[1] = cap;
-        h[2] = (long)data;
     }
     for (long i = len; i > index; i--) {
         data[i] = data[i - 1];
@@ -446,11 +458,9 @@ long __pluto_array_index_of(void *handle, long value, long type_tag) {
 
 long __pluto_bytes_new(void) {
     long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
-    handle[0] = 0;   // len
+    void *data = __pluto_gc_buf_new(handle, 16);
+    PLUTO_GC_SET_BUF(handle, 2, data);
     handle[1] = 16;  // cap (initial)
-    unsigned char *data = (unsigned char *)malloc(16);
-    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
-    handle[2] = (long)data;
     return (long)handle;
 }
 
@@ -466,10 +476,8 @@ void __pluto_bytes_push(long handle, long value) {
         }
         cap = cap * 2;
         if (cap == 0) cap = 16;
-        data = (unsigned char *)realloc(data, cap);
-        if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+        data = (unsigned char *)__pluto_buf_regrow(h, 2, len, cap);
         h[1] = cap;
-        h[2] = (long)data;
     }
     data[len] = (unsigned char)(value & 0xFF);
     h[0] = len + 1;
@@ -520,12 +528,14 @@ long __pluto_string_to_bytes(long str_handle) {
     __pluto_string_data(s, &str_data, &len);
     long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
     long cap = len > 16 ? len : 16;
-    handle[0] = len;
-    handle[1] = cap;
-    unsigned char *data = (unsigned char *)malloc(cap);
-    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    // str_data points into a GC string: re-read it after the allocation
+    // below (non-moving, so it is unchanged; the string stays reachable
+    // through str_handle).
+    unsigned char *data = (unsigned char *)__pluto_gc_buf_new(handle, cap);
     memcpy(data, str_data, len);
-    handle[2] = (long)data;
+    PLUTO_GC_SET_BUF(handle, 2, data);
+    handle[1] = cap;
+    handle[0] = len;
     return (long)handle;
 }
 
@@ -536,17 +546,15 @@ long __pluto_string_to_bytes(long str_handle) {
 // message style as bytes indexing; out-of-range write values are defects
 // (bugs, not conditions — same doctrine as __pluto_defect_binop).
 
-// Allocate a fresh bytes handle with length `len` (uninitialized data).
-// GC allocation happens first, then the malloc — same ordering as
-// __pluto_bytes_new / __pluto_fs_bytes_from_scratch.
+// Allocate a fresh bytes handle with length `len` (zeroed data). Handle
+// first, then its backing store — same ordering as __pluto_bytes_new.
 static long *__pluto_bytes_alloc(long len) {
     long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
     long cap = len > 16 ? len : 16;
-    unsigned char *data = (unsigned char *)malloc((size_t)cap);
-    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
-    handle[0] = len;
+    void *data = __pluto_gc_buf_new(handle, cap);
+    PLUTO_GC_SET_BUF(handle, 2, data);
     handle[1] = cap;
-    handle[2] = (long)data;
+    handle[0] = len;
     return handle;
 }
 
@@ -563,10 +571,8 @@ static void __pluto_bytes_reserve(long *h, long needed) {
         }
         new_cap *= 2;
     }
-    unsigned char *data = (unsigned char *)realloc((unsigned char *)h[2], (size_t)new_cap);
-    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    __pluto_buf_regrow(h, 2, h[0], new_cap);
     h[1] = new_cap;
-    h[2] = (long)data;
 }
 
 long __pluto_bytes_slice(long handle, long start, long end) {
@@ -1646,14 +1652,8 @@ long __pluto_socket_read_bytes(long fd, long max_bytes) {
         }
     }
     if (n < 0) n = 0; // EOF and error both yield empty bytes (parity with read)
-    long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
-    long cap = n > 16 ? n : 16;
-    unsigned char *data = (unsigned char *)malloc((size_t)cap);
-    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
-    if (n > 0) memcpy(data, buf, (size_t)n);
-    handle[0] = n;
-    handle[1] = cap;
-    handle[2] = (long)data;
+    long *handle = __pluto_bytes_alloc(n);
+    if (n > 0) memcpy((unsigned char *)handle[2], buf, (size_t)n);
     if (buf) free(buf);
     return (long)handle;
 }
@@ -2323,11 +2323,13 @@ static void map_grow(long *handle, long key_type);
 
 void *__pluto_map_new(long key_type) {
     long *h = (long *)gc_alloc(40, GC_TAG_MAP, 5);
-    h[0] = 0;            // count
-    h[1] = MAP_INIT_CAP; // capacity
-    h[2] = (long)calloc(MAP_INIT_CAP, 8);        // keys
-    h[3] = (long)calloc(MAP_INIT_CAP, 8);        // vals
-    h[4] = (long)calloc(MAP_INIT_CAP, 1);        // meta
+    void *keys = __pluto_gc_buf_new(h, MAP_INIT_CAP * 8);
+    PLUTO_GC_SET_BUF(h, 2, keys);
+    void *vals = __pluto_gc_buf_new(h, MAP_INIT_CAP * 8);
+    PLUTO_GC_SET_BUF(h, 3, vals);
+    void *meta = __pluto_gc_buf_new(h, MAP_INIT_CAP);
+    PLUTO_GC_SET_BUF(h, 4, meta);
+    h[1] = MAP_INIT_CAP; // capacity, set once every store is installed
     (void)key_type;
     return h;
 }
@@ -2465,11 +2467,13 @@ static void map_grow(long *h, long key_type) {
         exit(1);
     }
     long new_cap = old_cap * 2;
+    // Allocate first (any of these may collect); h keeps the old stores
+    // until the rehash below, which reaches no safepoint.
+    long *new_keys = (long *)__pluto_gc_buf_new(h, new_cap * 8);
+    long *new_vals = (long *)__pluto_gc_buf_new(h, new_cap * 8);
+    unsigned char *new_meta = (unsigned char *)__pluto_gc_buf_new(h, new_cap);
     long *old_keys = (long *)h[2]; long *old_vals = (long *)h[3];
     unsigned char *old_meta = (unsigned char *)h[4];
-    long *new_keys = (long *)calloc(new_cap, 8);
-    long *new_vals = (long *)calloc(new_cap, 8);
-    unsigned char *new_meta = (unsigned char *)calloc(new_cap, 1);
     for (long i = 0; i < old_cap; i++) {
         if (old_meta[i] >= 0x80) {
             PLUTO_GC_DELETE(old_keys[i]);   // every entry moves (see __pluto_array_remove_at)
@@ -2479,8 +2483,11 @@ static void map_grow(long *h, long key_type) {
             new_keys[idx] = old_keys[i]; new_vals[idx] = old_vals[i]; new_meta[idx] = 0x80;
         }
     }
-    free(old_keys); free(old_vals); free(old_meta);
-    h[1] = new_cap; h[2] = (long)new_keys; h[3] = (long)new_vals; h[4] = (long)new_meta;
+    PLUTO_GC_SET_BUF(h, 2, new_keys);
+    PLUTO_GC_SET_BUF(h, 3, new_vals);
+    PLUTO_GC_SET_BUF(h, 4, new_meta);
+    h[1] = new_cap;
+    __pluto_gc_buf_drop(old_keys); __pluto_gc_buf_drop(old_vals); __pluto_gc_buf_drop(old_meta);
 }
 
 // ── Set API ──────────────────────────────────────────────────────────────────
@@ -2490,10 +2497,11 @@ static void set_grow(long *h, long key_type);
 
 void *__pluto_set_new(long key_type) {
     long *h = (long *)gc_alloc(32, GC_TAG_SET, 4);
-    h[0] = 0;
+    void *keys = __pluto_gc_buf_new(h, MAP_INIT_CAP * 8);
+    PLUTO_GC_SET_BUF(h, 2, keys);
+    void *meta = __pluto_gc_buf_new(h, MAP_INIT_CAP);
+    PLUTO_GC_SET_BUF(h, 3, meta);
     h[1] = MAP_INIT_CAP;
-    h[2] = (long)calloc(MAP_INIT_CAP, 8);
-    h[3] = (long)calloc(MAP_INIT_CAP, 1);
     (void)key_type;
     return h;
 }
@@ -2587,10 +2595,10 @@ static void set_grow(long *h, long key_type) {
         exit(1);
     }
     long new_cap = old_cap * 2;
+    long *new_keys = (long *)__pluto_gc_buf_new(h, new_cap * 8);
+    unsigned char *new_meta = (unsigned char *)__pluto_gc_buf_new(h, new_cap);
     long *old_keys = (long *)h[2];
     unsigned char *old_meta = (unsigned char *)h[3];
-    long *new_keys = (long *)calloc(new_cap, 8);
-    unsigned char *new_meta = (unsigned char *)calloc(new_cap, 1);
     for (long i = 0; i < old_cap; i++) {
         if (old_meta[i] >= 0x80) {
             unsigned long idx = ht_hash(old_keys[i], key_type) & (unsigned long)(new_cap - 1);
@@ -2599,8 +2607,10 @@ static void set_grow(long *h, long key_type) {
             new_keys[idx] = old_keys[i]; new_meta[idx] = 0x80;
         }
     }
-    free(old_keys); free(old_meta);
-    h[1] = new_cap; h[2] = (long)new_keys; h[3] = (long)new_meta;
+    PLUTO_GC_SET_BUF(h, 2, new_keys);
+    PLUTO_GC_SET_BUF(h, 3, new_meta);
+    h[1] = new_cap;
+    __pluto_gc_buf_drop(old_keys); __pluto_gc_buf_drop(old_meta);
 }
 // ── File I/O runtime ──────────────────────────────────────────────────────────
 //
@@ -2729,14 +2739,8 @@ long __pluto_fs_write(long fd, void *data_str) {
 // Build a bytes handle from a scratch buffer. GC allocation — must be called
 // OUTSIDE any safe region.
 static long __pluto_fs_bytes_from_scratch(const char *buf, long n) {
-    long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
-    long cap = n > 16 ? n : 16;
-    unsigned char *data = (unsigned char *)malloc((size_t)cap);
-    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
-    if (n > 0) memcpy(data, buf, (size_t)n);
-    handle[0] = n;
-    handle[1] = cap;
-    handle[2] = (long)data;
+    long *handle = __pluto_bytes_alloc(n);
+    if (n > 0) memcpy((unsigned char *)handle[2], buf, (size_t)n);
     return (long)handle;
 }
 
@@ -2791,8 +2795,9 @@ long __pluto_fs_read_at(long fd, long offset, long max_bytes) {
 
 // Loops to completion like __pluto_fs_write. Returns the byte count written
 // (== len) on success, -errno on the first failing write. The data buffer is
-// malloc memory owned by the handle; the handle stays reachable from this
-// frame's stack, which the collector scans conservatively.
+// the handle's backing store; the handle stays reachable from this frame's
+// stack (scanned conservatively) and nothing moves, so the kernel may read
+// it while a collection runs.
 long __pluto_fs_write_bytes(long fd, long bytes_handle) {
     long *h = (long *)bytes_handle;
     long len = h[0];
