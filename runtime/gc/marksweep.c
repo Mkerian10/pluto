@@ -143,6 +143,8 @@ typedef struct GCBlock {
     uint8_t kind;             // GC_BLOCK_*
     uint8_t cls;              // size class (small)
     uint8_t has_containers;   // holds (or held) array/bytes/map/set handles
+    uint8_t prot;             // gen: mprotect'ed read-only (holds old objects)
+    uint8_t dirty;            // gen: written or allocated into since last GC
     GCHeader *free_list;      // free slots below bump, via GCHeader.next
     struct GCBlock *next;     // class available-list / pool / descriptor freelist
 } GCBlock;
@@ -251,9 +253,93 @@ static GCBlock *gc_new_small_block(size_t cls) {
     b->bump = 0;
     b->free_list = NULL;
     b->has_containers = 0;
+    b->prot = 0;
+    b->dirty = 0;
     b->next = NULL;
     return b;
 }
+
+#ifdef GC_GENERATIONAL
+// Generational, non-moving (--gc gen). Ages use sticky mark bits: after a
+// collection every survivor keeps mark = 1 and is "old"; new objects start
+// at 0. A minor collection marks only young objects, from the roots plus a
+// remembered set; tracing stops at old objects (already marked). The write
+// barrier is the MMU: after each collection every block holding old
+// objects is mprotect'ed read-only, and the first store into one faults; the
+// handler unprotects the block and marks it dirty. A minor collection then
+// re-traces every old object in a dirty block, plus every old container and
+// channel (their backing stores are malloc'd, outside the protected heap, so
+// stores into them are invisible to the barrier). Allocation unprotects a
+// block before writing into it. A major collection (when the old generation
+// has doubled since the last one) unprotects everything, clears all marks
+// and collects the whole heap.
+#define GC_GEN_NURSERY        ((size_t)8 << 20)
+#define GC_GEN_MIN_OLD_LIMIT  ((size_t)16 << 20)
+static size_t gc_gen_old_limit = GC_GEN_MIN_OLD_LIMIT;
+static int gc_gen_major = 0;            // current collection is major
+// mprotect works on whole VM pages: 16 KiB on Apple Silicon, 4 KiB on most
+// x86-64. Large objects are aligned and padded to it so each owns its pages.
+// If the VM page is larger than a block, blocks can't be protected one by
+// one: the barrier is disabled and every collection is a full one.
+static size_t gc_gen_vm_page = 4096;
+static int gc_gen_barrier_off = 0;
+static long gc_gen_minor_count = 0, gc_gen_major_count = 0;
+static struct sigaction gc_gen_prev_segv, gc_gen_prev_bus;
+
+static inline size_t gc_block_span(GCBlock *b) {
+    return b->kind == GC_BLOCK_LARGE ? b->obj_size : GC_BLOCK_SIZE;
+}
+
+static void gc_gen_set_prot(char *base, size_t len, int readonly) {
+    if (mprotect(base, len, readonly ? PROT_READ : (PROT_READ | PROT_WRITE)) != 0) {
+        fprintf(stderr, "pluto: gc: mprotect(%p, %zu, %s) failed: %s\n", (void *)base, len, readonly ? "RO" : "RW", strerror(errno));
+        abort();
+    }
+}
+
+static inline void gc_gen_unprotect(GCBlock *b) {
+    if (b->prot) {
+        gc_gen_set_prot(b->base, gc_block_span(b), 0);
+        b->prot = 0;
+    }
+    b->dirty = 1;
+}
+
+static void gc_gen_fault(int sig, siginfo_t *info, void *ctx) {
+    GCBlock *b = gc_pagemap_get((uintptr_t)info->si_addr);
+    if (b && b->prot && (b->kind == GC_BLOCK_SMALL || b->kind == GC_BLOCK_LARGE)) {
+        mprotect(b->base, gc_block_span(b), PROT_READ | PROT_WRITE);
+        b->prot = 0;
+        b->dirty = 1;
+        return;   // retry the store
+    }
+    // Not a barrier fault: hand it to whatever was installed before us.
+    struct sigaction *prev = sig == SIGBUS ? &gc_gen_prev_bus : &gc_gen_prev_segv;
+    if (prev->sa_flags & SA_SIGINFO) {
+        if (prev->sa_sigaction) { prev->sa_sigaction(sig, info, ctx); return; }
+    } else if (prev->sa_handler != SIG_DFL && prev->sa_handler != SIG_IGN && prev->sa_handler) {
+        prev->sa_handler(sig);
+        return;
+    }
+    signal(sig, SIG_DFL);   // re-executing the access now takes the default action
+}
+
+static void gc_gen_install_barrier(void) {
+    long pg = sysconf(_SC_PAGESIZE);
+    if (pg > 0) gc_gen_vm_page = (size_t)pg;
+    if (gc_gen_vm_page > GC_BLOCK_SIZE) {
+        gc_gen_barrier_off = 1;
+        return;
+    }
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = gc_gen_fault;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, &gc_gen_prev_segv);
+    sigaction(SIGBUS, &sa, &gc_gen_prev_bus);
+}
+#endif
 
 #ifdef GC_LAZY_SWEEP
 static GCBlock *gc_class_unswept[GC_NUM_CLASSES];
@@ -279,6 +365,9 @@ static GCHeader *gc_small_alloc(size_t cls, GCBlock **out_block) {
         b = gc_new_small_block(cls);
         gc_class_avail[cls] = b;
     }
+#ifdef GC_GENERATIONAL
+    if (b->prot || !b->dirty) gc_gen_unprotect(b);
+#endif
     GCHeader *h;
     if (b->free_list) {
         h = b->free_list;
@@ -292,9 +381,13 @@ static GCHeader *gc_small_alloc(size_t cls, GCBlock **out_block) {
 }
 
 static GCHeader *gc_large_alloc(size_t total, size_t *out_bytes, GCBlock **out_block) {
-    size_t bytes = (total + GC_PAGE_SIZE - 1) & ~(GC_PAGE_SIZE - 1);
+    size_t align = GC_PAGE_SIZE;
+#ifdef GC_GENERATIONAL
+    if (gc_gen_vm_page > align) align = gc_gen_vm_page;
+#endif
+    size_t bytes = (total + align - 1) & ~(align - 1);
     void *m = NULL;
-    if (posix_memalign(&m, GC_PAGE_SIZE, bytes) != 0) gc_oom("GC heap");
+    if (posix_memalign(&m, align, bytes) != 0) gc_oom("GC heap");
     GCBlock *b = gc_desc_free;
     if (b) {
         gc_desc_free = b->next;
@@ -1468,11 +1561,151 @@ static void gc_finish_lazy_sweep(void) {
 }
 #endif
 
+#ifdef GC_GENERATIONAL
+// Tags whose children live (partly) in malloc'd side storage the barrier
+// cannot see: old instances are re-traced by every minor collection.
+static inline int gc_gen_always_rescan(uint8_t tag) {
+    return tag == GC_TAG_ARRAY || tag == GC_TAG_MAP || tag == GC_TAG_SET || tag == GC_TAG_CHANNEL;
+}
+
+// Minor-collection remembered set. Runs before root scanning, so at this
+// point mark == 1 means exactly "old". Re-traces every old object in a dirty
+// block and every old object of an always-rescan tag; tracing pushes the
+// young objects they reach (old children are already marked).
+static void gc_gen_scan_remembered(void) {
+    for (size_t k = 0; k < gc_small_block_count; k++) {
+        GCBlock *b = gc_small_blocks[k];
+        if (b->kind != GC_BLOCK_SMALL || (!b->dirty && !b->has_containers)) continue;
+        for (uint32_t i = 0; i < b->bump; i++) {
+            GCHeader *h = (GCHeader *)(b->base + (size_t)i * b->obj_size);
+            if (h->type_tag == GC_TAG_FREE || !h->mark) continue;
+            if (b->dirty || gc_gen_always_rescan(h->type_tag)) {
+                gc_trace_object((char *)h + sizeof(GCHeader));
+            }
+        }
+    }
+    for (size_t k = 0; k < gc_large_count; k++) {
+        GCBlock *b = gc_large_blocks[k];
+        GCHeader *h = (GCHeader *)b->base;
+        if (h->mark && (b->dirty || gc_gen_always_rescan(h->type_tag))) {
+            gc_trace_object((char *)h + sizeof(GCHeader));
+        }
+    }
+}
+
+// Apply (or remove) read-only protection to every block selected by want(),
+// merging address-contiguous blocks into single mprotect calls.
+static void gc_gen_protect_pass(int readonly) {
+    char *run = NULL;
+    size_t run_len = 0;
+    for (size_t k = 0; k <= gc_small_block_count; k++) {
+        GCBlock *b = k < gc_small_block_count ? gc_small_blocks[k] : NULL;
+        int sel = 0;
+        if (b && b->kind == GC_BLOCK_SMALL) {
+            sel = readonly ? (!b->prot && b->bump > 0) : b->prot;
+        }
+        if (sel && run && b->base == run + run_len) {
+            run_len += GC_BLOCK_SIZE;
+        } else {
+            if (run) gc_gen_set_prot(run, run_len, readonly);
+            run = sel ? b->base : NULL;
+            run_len = sel ? GC_BLOCK_SIZE : 0;
+        }
+        if (sel) b->prot = (uint8_t)readonly;
+        if (b) b->dirty = 0;
+    }
+    for (size_t k = 0; k < gc_large_count; k++) {
+        GCBlock *b = gc_large_blocks[k];
+        if (readonly ? !b->prot : b->prot) {
+            gc_gen_set_prot(b->base, b->obj_size, readonly);
+            b->prot = (uint8_t)readonly;
+        }
+        b->dirty = 0;
+    }
+}
+
+// Major collection prologue: every mark goes back to 0 (everything young).
+static void gc_gen_clear_marks(void) {
+    for (size_t k = 0; k < gc_small_block_count; k++) {
+        GCBlock *b = gc_small_blocks[k];
+        if (b->kind != GC_BLOCK_SMALL) continue;
+        for (uint32_t i = 0; i < b->bump; i++) {
+            ((GCHeader *)(b->base + (size_t)i * b->obj_size))->mark = 0;
+        }
+    }
+    for (size_t k = 0; k < gc_large_count; k++) {
+        ((GCHeader *)gc_large_blocks[k]->base)->mark = 0;
+    }
+}
+
+// Sticky-mark sweep of one unprotected block: unmarked objects die, marked
+// ones (old, or young survivors now promoted) keep mark = 1.
+static size_t gc_gen_sweep_block(GCBlock *b) {
+    size_t osz = b->obj_size, freed = 0, live = 0;
+    int containers = 0;
+    GCHeader *free_list = NULL;
+    for (uint32_t i = 0; i < b->bump; i++) {
+        GCHeader *h = (GCHeader *)(b->base + (size_t)i * osz);
+        if (h->type_tag != GC_TAG_FREE) {
+            if (h->mark) {
+                live++;
+                if (gc_is_container_tag(h->type_tag)) containers = 1;
+                continue;
+            }
+            gc_finalize(h);
+            h->type_tag = GC_TAG_FREE;
+            freed += osz;
+        }
+        h->next = free_list;
+        free_list = h;
+    }
+    if (live == 0) {
+        b->kind = GC_BLOCK_POOL;
+        b->bump = 0;
+        b->free_list = NULL;
+        b->has_containers = 0;
+        b->next = gc_block_pool;
+        gc_block_pool = b;
+        return freed;
+    }
+    b->free_list = free_list;
+    b->has_containers = (uint8_t)containers;
+    return freed;
+}
+#endif
+
 // Reclaim every unmarked object and clear the marks of the survivors (lazy
 // mode: queue the small blocks instead). Returns the bytes reclaimed now.
 static size_t gc_sweep(void) {
     for (size_t c = 0; c < GC_NUM_CLASSES; c++) gc_class_avail[c] = NULL;
     size_t freed = 0;
+#ifdef GC_GENERATIONAL
+    // Protected blocks hold only old objects (always live in a minor
+    // collection) and free slots: nothing to sweep, but their free slots
+    // stay available.
+    for (size_t k = 0; k < gc_small_block_count; k++) {
+        GCBlock *b = gc_small_blocks[k];
+        if (b->kind != GC_BLOCK_SMALL) continue;
+        if (!b->prot) freed += gc_gen_sweep_block(b);
+        if (b->kind == GC_BLOCK_SMALL && (b->free_list || b->bump < b->nobjs)) {
+            b->next = gc_class_avail[b->cls];
+            gc_class_avail[b->cls] = b;
+        }
+    }
+    for (size_t k = 0; k < gc_large_count;) {
+        GCBlock *b = gc_large_blocks[k];
+        GCHeader *h = (GCHeader *)b->base;
+        if (b->prot || h->mark) { k++; continue; }
+        gc_finalize(h);
+        gc_pagemap_set(b->base, b->obj_size >> GC_PAGE_SHIFT, NULL);
+        free(b->base);
+        freed += b->obj_size;
+        b->next = gc_desc_free;
+        gc_desc_free = b;
+        gc_large_blocks[k] = gc_large_blocks[--gc_large_count];
+    }
+    return freed;
+#endif
     for (size_t k = 0; k < gc_small_block_count; k++) {
         GCBlock *b = gc_small_blocks[k];
         if (b->kind != GC_BLOCK_SMALL) continue;
@@ -1502,6 +1735,14 @@ void __pluto_gc_collect(void) {
 
     // Build the data-buffer interval table (objects need no per-cycle index:
     // the page map resolves them directly).
+#ifdef GC_GENERATIONAL
+    gc_gen_major = gc_gen_barrier_off
+                   || gc_bytes_allocated > gc_gen_old_limit + GC_GEN_NURSERY;
+    if (gc_gen_major) {
+        gc_gen_protect_pass(0);   // unprotect everything
+        gc_gen_clear_marks();
+    }
+#endif
 #ifdef GC_LAZY_SWEEP
     // Blocks still queued from the previous cycle carry its marks.
     gc_finish_lazy_sweep();
@@ -1513,6 +1754,9 @@ void __pluto_gc_collect(void) {
 
     // Reset worklist
     gc_worklist_count = 0;
+#ifdef GC_GENERATIONAL
+    if (!gc_gen_major) gc_gen_scan_remembered();
+#endif
 
     // 1. Flush registers to stack via setjmp
     jmp_buf regs;
@@ -1763,6 +2007,18 @@ void __pluto_gc_collect(void) {
     if (gc_adaptive_floor < GC_MIN_THRESHOLD) gc_adaptive_floor = GC_MIN_THRESHOLD;
     gc_threshold = live * 2;
     if (gc_threshold < gc_adaptive_floor) gc_threshold = gc_adaptive_floor;
+#ifdef GC_GENERATIONAL
+    // Every survivor is old now: protect its block, start a fresh nursery.
+    if (!gc_gen_barrier_off) gc_gen_protect_pass(1);
+    if (gc_gen_major) {
+        gc_gen_major_count++;
+        gc_gen_old_limit = live * 2;
+        if (gc_gen_old_limit < GC_GEN_MIN_OLD_LIMIT) gc_gen_old_limit = GC_GEN_MIN_OLD_LIMIT;
+    } else {
+        gc_gen_minor_count++;
+    }
+    gc_threshold = live + GC_GEN_NURSERY;
+#endif
 
     // Keep the interval tables and worklist allocated across cycles
     // (grow-only) to avoid per-collection malloc/free churn. Only the live
@@ -1779,10 +2035,16 @@ void __pluto_gc_collect(void) {
         // + trace, sweep = reclaim unmarked objects.
         fprintf(stderr,
                 "gc: #%ld live=%zu freed=%zu next_threshold=%zu pause_us=%ld"
-                " build_us=%ld mark_us=%ld sweep_us=%ld\n",
+                " build_us=%ld mark_us=%ld sweep_us=%ld kind=%s\n",
                 gc_cycle_count, gc_bytes_allocated, freed_bytes, gc_threshold,
                 GC_US(gc_t0, gc_t1), GC_US(gc_t0, gc_tb), GC_US(gc_tb, gc_tm),
-                GC_US(gc_tm, gc_ts));
+                GC_US(gc_tm, gc_ts),
+#ifdef GC_GENERATIONAL
+                gc_gen_major ? "major" : "minor"
+#else
+                "full"
+#endif
+                );
 #undef GC_US
     }
 
@@ -1796,6 +2058,9 @@ void __pluto_gc_init(void *stack_bottom) {
     // collection trigger in gc_alloc.
     gc_stack_bottom = stack_bottom;
     __pluto_register_exit_check();
+#ifdef GC_GENERATIONAL
+    gc_gen_install_barrier();
+#endif
 #ifndef PLUTO_TEST_MODE
     // Register main thread's stack for GC root scanning
     {

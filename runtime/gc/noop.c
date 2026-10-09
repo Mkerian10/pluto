@@ -67,7 +67,25 @@ void *__pluto_alloc_entity(long size) {
     return ptr;
 }
 
+#ifndef PLUTO_TEST_MODE
+// Spawned tasks allocate concurrently: serialize the list and the index.
+static pthread_mutex_t noop_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
+static void *noop_alloc_unlocked(size_t user_size, uint8_t type_tag, uint16_t field_count);
+
 void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
+#ifndef PLUTO_TEST_MODE
+    pthread_mutex_lock(&noop_mutex);
+    void *p = noop_alloc_unlocked(user_size, type_tag, field_count);
+    pthread_mutex_unlock(&noop_mutex);
+    return p;
+#else
+    return noop_alloc_unlocked(user_size, type_tag, field_count);
+#endif
+}
+
+static void *noop_alloc_unlocked(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     GCHeader *header = (GCHeader *)malloc(sizeof(GCHeader) + user_size);
     if (!header) {
         fprintf(stderr, "noop gc: out of memory (requested %zu bytes)\n", user_size);
@@ -129,7 +147,20 @@ static void noop_index(void *user) {
     noop_count++;
 }
 
+static GCHeader *noop_find_unlocked(void *p);
+
 GCHeader *__pluto_gc_find_object(void *p) {
+#ifndef PLUTO_TEST_MODE
+    pthread_mutex_lock(&noop_mutex);
+    GCHeader *h = noop_find_unlocked(p);
+    pthread_mutex_unlock(&noop_mutex);
+    return h;
+#else
+    return noop_find_unlocked(p);
+#endif
+}
+
+static GCHeader *noop_find_unlocked(void *p) {
     if (!noop_cap) return NULL;
     size_t i = noop_hash(p) & (noop_cap - 1);
     for (;;) {
