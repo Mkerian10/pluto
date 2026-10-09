@@ -1,0 +1,32 @@
+// Floor: the SAME 1.2M increments as the entity benchmarks, but on a plain
+// value `class`, single-threaded, no lock and no spawn. Establishes the pure
+// arithmetic cost so the entity-lock + threading overhead above it is visible.
+
+class Counter {
+    value: int
+
+    fn bump(mut self, n: int) {
+        let mut i = 0
+        while i < n {
+            self.value = self.value + 1
+            i = i + 1
+        }
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+fn main() {
+    let per = 300000
+    let mut c = Counter { value: 0 }
+    let start = time_ns()
+    c.bump(per)
+    c.bump(per)
+    c.bump(per)
+    c.bump(per)
+    let ms = (time_ns() - start) / 1000000
+    print(f"final: {c.get()}")
+    print(f"elapsed: {ms} ms")
+}

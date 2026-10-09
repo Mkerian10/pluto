@@ -1,0 +1,30 @@
+// Same K per-call increments as lock_class_single, but on an `object`
+// (entity). Every inc() takes and releases the per-instance reentrant write
+// lock, with zero contention (one thread). (this - lock_class_single) is the
+// pure, uncontended per-call lock overhead.
+
+object Counter {
+    value: int
+
+    fn inc(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+fn main() {
+    let k = 2000000
+    let mut c = Counter { value: 0 }
+    let start = time_ns()
+    let mut i = 0
+    while i < k {
+        c.inc()
+        i = i + 1
+    }
+    let ms = (time_ns() - start) / 1000000
+    print(f"final: {c.get()}")
+    print(f"elapsed: {ms} ms")
+}

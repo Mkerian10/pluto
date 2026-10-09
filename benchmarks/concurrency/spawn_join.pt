@@ -1,0 +1,26 @@
+// Spawn/join throughput: serially spawn N trivial tasks, joining each before
+// the next. Isolates the pthread create + join cost (the #369 per-spawn
+// overhead expressed as throughput rather than a live-thread ceiling).
+//
+// A thread-pool (Track A) or green tasks (Track B) would each attack this
+// number directly.
+
+fn tiny(x: int) int {
+    return x + 1
+}
+
+fn main() {
+    let n = 20000
+    let start = time_ns()
+    let mut i = 0
+    let mut acc = 0
+    while i < n {
+        let t = spawn tiny(i)
+        acc = acc + t.get()
+        i = i + 1
+    }
+    let ms = (time_ns() - start) / 1000000
+    print(f"tasks: {n}")
+    print(f"acc: {acc}")
+    print(f"elapsed: {ms} ms")
+}
