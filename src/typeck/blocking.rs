@@ -80,15 +80,17 @@ pub fn infer_blocking_effects(program: &Program, env: &mut TypeEnv) {
         known_bare.insert(ext.node.name.node.clone());
     }
 
-    // Step 1: per-node direct blocking, direct opacity, and call edges.
-    let mut directly_blocks: HashSet<String> = HashSet::new();
+    // Step 1: per-node direct cooperative-block, direct opacity, and call edges.
+    // (Extern blocking leaves need no direct flag — a call edge to the leaf name
+    // + the leaf set catches them in the fixpoint.)
+    let mut directly_coop: HashSet<String> = HashSet::new();
     let mut directly_opaque: HashSet<String> = HashSet::new();
     let mut call_edges: HashMap<String, HashSet<String>> = HashMap::new();
 
     let mut collect = |node_name: String, body: &Block, env: &TypeEnv| {
-        let (blocks, opaque, edges) = collect_block(body, &node_name, env, &leaves, &known_bare);
-        if blocks {
-            directly_blocks.insert(node_name.clone());
+        let (coop, opaque, edges) = collect_block(body, &node_name, env, &known_bare);
+        if coop {
+            directly_coop.insert(node_name.clone());
         }
         if opaque {
             directly_opaque.insert(node_name.clone());
@@ -137,12 +139,17 @@ pub fn infer_blocking_effects(program: &Program, env: &mut TypeEnv) {
         }
     }
 
-    // Step 2: two union fixed points over the same call graph.
-    //   blocking — reaches a blocking leaf (extern leaves count as callees).
-    //   opaque   — reaches an unresolvable call (no extern leaves; seeded only
-    //              by direct opacity, propagated through edges).
+    // Step 2: union fixed points over the same call graph.
+    //   blocking_fns     — blocks the OS thread TODAY: reaches an extern leaf
+    //                      (via edge + leaf set) OR a cooperative block
+    //                      (channel/task, seeded by directly_coop).
+    //   green_illegal_fns — blocks with NO cooperative form: reaches an extern
+    //                      leaf only. Channel/task are omitted (they yield under
+    //                      green), so this is strictly narrower.
+    //   blocking_opaque_fns — reaches an unresolvable call (seeded by opacity).
     let empty = HashSet::new();
-    env.blocking_fns = fixpoint(&call_edges, directly_blocks, &leaves);
+    env.blocking_fns = fixpoint(&call_edges, directly_coop, &leaves);
+    env.green_illegal_fns = fixpoint(&call_edges, HashSet::new(), &leaves);
     env.blocking_opaque_fns = fixpoint(&call_edges, directly_opaque, &empty);
 }
 
@@ -175,12 +182,14 @@ fn fixpoint(
 /// Visitor collecting, for one node body: whether it directly hits a blocking
 /// leaf, and its outgoing call edges (callee names/mangled names).
 struct BlockingCollector<'a> {
-    blocks: bool,
+    // Reached a COOPERATIVE blocking op (channel send/recv, task join): blocks
+    // the OS thread today, but becomes a scheduler yield under green — so it
+    // feeds `blocking_fns` but NOT `green_illegal_fns`.
+    coop: bool,
     opaque: bool,
     edges: &'a mut HashSet<String>,
     current_fn: &'a str,
     env: &'a TypeEnv,
-    leaves: &'a HashSet<String>,
     known_bare: &'a HashSet<String>,
 }
 
@@ -189,12 +198,11 @@ impl Visitor for BlockingCollector<'_> {
         match &expr.node {
             Expr::Call { name, .. } => {
                 let n = name.node.clone();
-                if self.leaves.contains(&n) {
-                    self.blocks = true;
-                } else if !self.known_bare.contains(&n) {
-                    // Target is not a known function/extern/builtin — a call
-                    // through a closure or function-reference variable, whose
-                    // body we cannot inspect. Conservatively opaque.
+                // An extern blocking leaf is caught by the fixpoint through this
+                // edge + the leaf set (no direct flag needed). A target that is
+                // not a known function/extern/builtin is a call through a
+                // closure or fn-ref variable we cannot inspect — opaque.
+                if !self.known_bare.contains(&n) {
                     self.opaque = true;
                 }
                 self.edges.insert(n);
@@ -203,7 +211,7 @@ impl Visitor for BlockingCollector<'_> {
                 let key = (self.current_fn.to_string(), method.span.start);
                 match self.env.method_resolutions.get(&key) {
                     Some(res) if resolution_is_blocking(res) => {
-                        self.blocks = true;
+                        self.coop = true;
                     }
                     Some(MethodResolution::Class { mangled_name })
                     | Some(MethodResolution::RemoteClass { mangled_name }) => {
@@ -266,25 +274,23 @@ fn collect_block(
     block: &Block,
     current_fn: &str,
     env: &TypeEnv,
-    leaves: &HashSet<String>,
     known_bare: &HashSet<String>,
 ) -> (bool, bool, HashSet<String>) {
     let mut edges = HashSet::new();
     let mut collector = BlockingCollector {
-        blocks: false,
+        coop: false,
         opaque: false,
         edges: &mut edges,
         current_fn,
         env,
-        leaves,
         known_bare,
     };
     for stmt in &block.stmts {
         collector.visit_stmt(stmt);
     }
-    let blocks = collector.blocks;
+    let coop = collector.coop;
     let opaque = collector.opaque;
-    (blocks, opaque, edges)
+    (coop, opaque, edges)
 }
 
 #[cfg(test)]
@@ -359,6 +365,36 @@ fn main() {
         crate::modules::resolve_qualified_access_single_file(&mut program).unwrap();
         let result = crate::run_frontend(&mut program, false).unwrap();
         result.env.blocking_opaque_fns
+    }
+
+    #[test]
+    fn green_guardrail_leaf_set_is_narrower_than_blocking() {
+        // A fn that only recv()s a channel blocks the OS thread today, but under
+        // green that recv is a cooperative yield — so it is NOT green-illegal.
+        // A fn that touches fs has no cooperative form — green-illegal.
+        let src = r#"
+extern fn __pluto_fs_read(fd: int) int
+fn chan_only(rx: Receiver<int>) int {
+    return rx.recv() catch 0
+}
+fn fs_only() int {
+    return __pluto_fs_read(3)
+}
+fn main() {
+    let (tx, rx) = chan<int>(1)
+    print(chan_only(rx))
+    print(fs_only())
+}
+"#;
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let mut program = parser.parse_program().unwrap();
+        crate::modules::resolve_qualified_access_single_file(&mut program).unwrap();
+        let env = crate::run_frontend(&mut program, false).unwrap().env;
+        assert!(env.blocking_fns.contains("chan_only"), "chan recv blocks the OS thread today");
+        assert!(!env.green_illegal_fns.contains("chan_only"), "chan recv yields under green — not green-illegal");
+        assert!(env.blocking_fns.contains("fs_only"), "fs blocks");
+        assert!(env.green_illegal_fns.contains("fs_only"), "fs has no cooperative form — green-illegal");
     }
 
     #[test]

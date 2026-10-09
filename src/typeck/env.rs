@@ -229,6 +229,14 @@ pub struct TypeEnv {
     /// Kept separate from `blocking_fns` so a diagnostic can distinguish a
     /// definite block from an unprovable one. Computed by `blocking::infer_blocking_effects`.
     pub blocking_opaque_fns: HashSet<String>,
+    /// Functions/methods ILLEGAL inside a green task in v1: they reach an op
+    /// that blocks the OS thread with NO cooperative/readiness form (fs, stdin,
+    /// sleep, blocking sockets). Narrower than `blocking_fns`: channel
+    /// send/recv, task `.get()`, lock waits and `select` are NOT here because
+    /// under the green scheduler they become cooperative yields
+    /// (rfc-green-tasks.md). The green-task boundary check rejects a `green f()`
+    /// whose target is in `green_illegal_fns ∪ blocking_opaque_fns`.
+    pub green_illegal_fns: HashSet<String>,
     /// Per-function error sets: maps function name to set of error type names it can raise.
     /// Populated by the error inference pass. Also holds per-closure nodes
     /// keyed as `<closure@span>` for closures bound to local variables.
@@ -589,6 +597,7 @@ impl TypeEnv {
             synchronized_singletons: HashSet::new(),
             blocking_fns: HashSet::new(),
             blocking_opaque_fns: HashSet::new(),
+            green_illegal_fns: HashSet::new(),
             fn_errors: HashMap::new(),
             closure_call_sites: HashMap::new(),
             fallible_value_calls: HashSet::new(),
