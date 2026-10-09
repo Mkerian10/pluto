@@ -28,6 +28,18 @@ PLUTO_VERBOSE=1          # log "runtime: cache hit (<hash>)" / "compiling fresh 
 PLUTO_RUNTIME_NO_CACHE=1 # bypass the disk cache — force a fresh runtime compile
 ```
 
+When working on the collector itself (`runtime/gc/marksweep.c`), two more
+runtime env vars help:
+
+```bash
+PLUTO_GC_LOG=1     # one line per collection: live/freed bytes, pause, build/mark/sweep split
+PLUTO_GC_VERIFY=1  # cross-check every pointer lookup that misses the exact-start
+                   # table against a full heap scan; aborts on disagreement
+```
+
+`PLUTO_GC_VERIFY` only runs on the rare miss path, so it is cheap enough to
+set for whole test runs (`PLUTO_GC_VERIFY=1 cargo test --test gc ...`).
+
 If a runtime change seems not to take effect, check the hash with `PLUTO_VERBOSE`
 (a "cache hit" on the *same* hash means your edit didn't reach the compile). Also
 remember a fixed-port server example can collide with a leaked process from a

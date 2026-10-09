@@ -77,6 +77,11 @@ static void *gc_stack_bottom = NULL;
 // (cycle number, live/freed bytes, next threshold, pause duration).
 static long gc_cycle_count = 0;
 static int gc_log_enabled = -1;  // -1: getenv not consulted yet
+// PLUTO_GC_VERIFY=1 cross-checks every pointer lookup that misses the
+// exact-start table against a brute-force scan of the whole heap and aborts
+// on any disagreement. Debug aid for collector work: it runs only on the
+// rare miss path, so it is cheap enough to leave on for whole test suites.
+static int gc_verify_enabled = -1;
 #ifdef PLUTO_TEST_MODE
 static int gc_collecting = 0;
 #else
@@ -91,9 +96,14 @@ static size_t gc_worklist_cap = 0;
 // Interval tables (rebuilt each collection; buffers kept across cycles,
 // grow-only, to avoid per-collection malloc/free churn — see end of
 // __pluto_gc_collect).
+// gc_intervals holds only LARGE objects (user size > GC_PROBE_WINDOW): smaller
+// objects are found from interior pointers by probing the live table (see
+// gc_find_object), so only the few large ones need a sorted table.
 static GCInterval *gc_intervals = NULL;
 static size_t gc_interval_count = 0;
 static size_t gc_interval_cap = 0;
+static size_t gc_object_count = 0;   // all objects, as of gc_build_intervals
+#define GC_PROBE_WINDOW 1024
 static GCDataInterval *gc_data_intervals = NULL;
 static size_t gc_data_interval_count = 0;
 static size_t gc_data_interval_cap = 0;
@@ -976,6 +986,7 @@ static inline void gc_data_interval_add(void *start, void *end, void *owner) {
 // previous cycle's capacity usually covers this one without reallocating.
 static void gc_build_intervals(void) {
     gc_interval_count = 0;
+    gc_object_count = 0;
     gc_data_interval_count = 0;
     size_t fresh = 0;
     int in_fresh_prefix = 1;
@@ -987,22 +998,27 @@ static void gc_build_intervals(void) {
         if (h == gc_hashed_upto) in_fresh_prefix = 0;
         if (in_fresh_prefix) gc_flush_buf_push(fresh++, user);
 
-        if (gc_interval_count == gc_interval_cap) {
-            size_t cap = gc_interval_cap ? gc_interval_cap * 2 : 1024;
-            GCInterval *grown = (GCInterval *)realloc(gc_intervals, cap * sizeof(GCInterval));
-            if (!grown) {
-                fprintf(stderr, "pluto: out of memory building GC lookup table\n");
-                exit(1);
+        gc_object_count++;
+        void *end = (char *)user + h->size;
+        if (user < lo) lo = user;
+        if (end > hi) hi = end;
+        if (h->size > GC_PROBE_WINDOW) {
+            if (gc_interval_count == gc_interval_cap) {
+                size_t cap = gc_interval_cap ? gc_interval_cap * 2 : 256;
+                GCInterval *grown =
+                    (GCInterval *)realloc(gc_intervals, cap * sizeof(GCInterval));
+                if (!grown) {
+                    fprintf(stderr, "pluto: out of memory building GC lookup table\n");
+                    exit(1);
+                }
+                gc_intervals = grown;
+                gc_interval_cap = cap;
             }
-            gc_intervals = grown;
-            gc_interval_cap = cap;
+            GCInterval *iv = &gc_intervals[gc_interval_count++];
+            iv->start = user;
+            iv->end = end;
+            iv->header = h;
         }
-        GCInterval *iv = &gc_intervals[gc_interval_count++];
-        iv->start = user;
-        iv->end = (char *)user + h->size;
-        iv->header = h;
-        if (iv->start < lo) lo = iv->start;
-        if (iv->end > hi) hi = iv->end;
 
         switch (h->type_tag) {
         case GC_TAG_ARRAY:   // handle [len][cap][data_ptr], 8 bytes per element
@@ -1056,7 +1072,7 @@ static void gc_build_intervals(void) {
 
     // Coarse bounds for the fast-reject path in gc_find_object /
     // gc_find_array_owner.
-    if (gc_interval_count == 0 && gc_data_interval_count == 0) {
+    if (gc_object_count == 0 && gc_data_interval_count == 0) {
         gc_heap_min = NULL;
         gc_heap_max = NULL;
     } else {
@@ -1065,13 +1081,53 @@ static void gc_build_intervals(void) {
     }
 }
 
-// Binary search: find GC object containing candidate pointer
+// Find the GC object containing candidate (start or interior pointer).
+//  1. Out of heap bounds -> not a pointer.
+//  2. Exact start -> O(1) live-table hit (the common case).
+//  3. Interior pointer into an object of user size <= GC_PROBE_WINDOW: that
+//     object starts within GC_PROBE_WINDOW bytes below candidate, so probe the
+//     live table at each 8-byte step downward. Objects never overlap, so the
+//     nearest start found is the only possible container: candidate is inside
+//     it or inside no object at all.
+//  4. Otherwise only a large object can contain it: binary search the sorted
+//     large-object table.
+static GCHeader *gc_find_object_slow(void *candidate);
+
 static GCHeader *gc_find_object(void *candidate) {
-    if (gc_interval_count == 0) return NULL;
+    if (gc_object_count == 0) return NULL;
     if (candidate < gc_heap_min || candidate >= gc_heap_max) return NULL;
-    // Fast path: a pointer to an object's start (the common case).
     GCHeader *exact = gc_find_start(candidate);
     if (exact) return exact;
+    GCHeader *found = gc_find_object_slow(candidate);
+    if (gc_verify_enabled > 0) {
+        GCHeader *want = NULL;
+        for (GCHeader *h = gc_head; h; h = h->next) {
+            char *u = (char *)h + sizeof(GCHeader);
+            if ((char *)candidate >= u && (char *)candidate < u + h->size) {
+                want = h;
+                break;
+            }
+        }
+        if (want != found) {
+            fprintf(stderr, "pluto: PLUTO_GC_VERIFY: lookup of %p returned %p, heap scan "
+                    "found %p\n", candidate, (void *)found, (void *)want);
+            abort();
+        }
+    }
+    return found;
+}
+
+// Interior-pointer resolution for gc_find_object (steps 3 and 4).
+static GCHeader *gc_find_object_slow(void *candidate) {
+    uintptr_t p = (uintptr_t)candidate;
+    uintptr_t floor = p > GC_PROBE_WINDOW ? p - GC_PROBE_WINDOW : 0;
+    uintptr_t q = p & ~(uintptr_t)7;
+    if (q == p) q -= 8;   // q == p was the exact-start probe above
+    for (; q >= floor && q != 0; q -= 8) {
+        GCHeader *h = gc_find_start((void *)q);
+        if (h) return p < q + h->size ? h : NULL;
+    }
+
     size_t lo = 0, hi = gc_interval_count;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
@@ -1271,6 +1327,8 @@ void __pluto_gc_collect(void) {
     if (gc_log_enabled < 0) {
         const char *e = getenv("PLUTO_GC_LOG");
         gc_log_enabled = (e && e[0] == '1') ? 1 : 0;
+        const char *v = getenv("PLUTO_GC_VERIFY");
+        gc_verify_enabled = (v && v[0] == '1') ? 1 : 0;
     }
     struct timespec gc_t0;
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_t0);
@@ -1497,9 +1555,9 @@ void __pluto_gc_collect(void) {
     // cache-friendly and wins unless almost nothing died; individual
     // backward-shift deletes are random, cache-cold writes, so they are used
     // only when fewer than 1/8 as many objects died as survived.
-    // gc_interval_count is the object count as of gc_build_intervals —
+    // gc_object_count is the object count as of gc_build_intervals —
     // nothing allocates in between.
-    size_t dead_count = gc_interval_count - gc_marked_count;
+    size_t dead_count = gc_object_count - gc_marked_count;
     int live_rebuild = dead_count * 8 >= gc_marked_count;
     if (live_rebuild) {
         size_t want = 1024;
@@ -1626,6 +1684,7 @@ void __pluto_gc_collect(void) {
     // (grow-only) to avoid per-collection malloc/free churn. Only the live
     // counts are reset; the capacities and buffers persist for process life.
     gc_interval_count = 0;
+    gc_object_count = 0;
     gc_data_interval_count = 0;
     gc_worklist_count = 0;
 
