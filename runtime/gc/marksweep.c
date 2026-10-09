@@ -1948,8 +1948,74 @@ static void gc_mark_object(void *user_ptr) {
     gc_worklist_push(user_ptr);
 }
 
+#ifdef GC_INCREMENTAL
+// Large containers are scanned GC_INCR_CHUNK slots at a time while marking
+// incrementally, so no single step pays for a whole million-element array.
+// A continuation (container, next slot) waits on gc_conts; each chunk
+// re-reads the container's length and buffers, so pushes, growth and
+// reallocation in between are harmless. Entries that move toward lower
+// slots — behind the cursor — are logged by the runtime while marking
+// (remove_at, reverse, map/set deletion shifts and rehashing), so nothing
+// reachable at the snapshot can slip past an in-progress scan.
+#define GC_INCR_CHUNK 1024
+typedef struct { void *obj; long next; } GCCont;
+static GCCont *gc_conts = NULL;
+static size_t gc_cont_count = 0, gc_cont_cap = 0;
+
+static inline void gc_shade(long word) {
+    GCHeader *c = gc_find_object((void *)word);
+    if (c) gc_mark_object((char *)c + sizeof(GCHeader));
+}
+
+// Scan slots [from, from + GC_INCR_CHUNK) of an array, map or set; queue a
+// continuation if more remain. Returns the number of slots scanned.
+static long gc_scan_container_chunk(void *user_ptr, long from) {
+    GCHeader *h = gc_get_header(user_ptr);
+    long *s = (long *)user_ptr;
+    long limit, end;
+    if (h->type_tag == GC_TAG_ARRAY) {
+        long *data = (long *)s[2];
+        limit = s[0];
+        end = limit < from + GC_INCR_CHUNK ? limit : from + GC_INCR_CHUNK;
+        for (long i = from; i < end; i++) gc_shade(data[i]);
+    } else {
+        int is_map = h->type_tag == GC_TAG_MAP;
+        long *keys = (long *)s[2];
+        long *vals = is_map ? (long *)s[3] : NULL;
+        unsigned char *meta = (unsigned char *)(is_map ? s[4] : s[3]);
+        limit = s[1];
+        end = limit < from + GC_INCR_CHUNK ? limit : from + GC_INCR_CHUNK;
+        for (long i = from; i < end; i++) {
+            if (meta[i] < 0x80) continue;
+            gc_shade(keys[i]);
+            if (vals) gc_shade(vals[i]);
+        }
+    }
+    if (end < limit) {
+        if (gc_cont_count == gc_cont_cap) {
+            size_t cap = gc_cont_cap ? gc_cont_cap * 2 : 64;
+            GCCont *grown = (GCCont *)realloc(gc_conts, cap * sizeof(GCCont));
+            if (!grown) gc_oom("GC scan continuations");
+            gc_conts = grown;
+            gc_cont_cap = cap;
+        }
+        gc_conts[gc_cont_count].obj = user_ptr;
+        gc_conts[gc_cont_count].next = end;
+        gc_cont_count++;
+    }
+    return end > from ? end - from : 0;
+}
+#endif
+
 static void gc_trace_object(void *user_ptr) {
     GCHeader *h = gc_get_header(user_ptr);
+#ifdef GC_INCREMENTAL
+    if (gc_incr_marking && (h->type_tag == GC_TAG_ARRAY || h->type_tag == GC_TAG_MAP
+                            || h->type_tag == GC_TAG_SET)) {
+        gc_scan_container_chunk(user_ptr, 0);
+        return;
+    }
+#endif
     switch (h->type_tag) {
     case GC_TAG_STRING:
     case GC_TAG_BYTES:
@@ -3195,13 +3261,18 @@ static void gc_incr_drain_logs(void) {
 // Returns 1 when the worklist is empty.
 static int gc_incr_trace(size_t budget) {
     size_t done = 0;
-    while (gc_worklist_count > 0) {
-        void *o = gc_worklist[--gc_worklist_count];
-        gc_trace_object(o);
-        done += sizeof(GCHeader) + gc_get_header(o)->size;
+    while (gc_worklist_count > 0 || gc_cont_count > 0) {
+        if (gc_worklist_count > 0) {
+            void *o = gc_worklist[--gc_worklist_count];
+            gc_trace_object(o);
+            done += sizeof(GCHeader) + gc_get_header(o)->size;
+        } else {
+            GCCont c = gc_conts[--gc_cont_count];
+            done += sizeof(GCHeader) + 8 * (size_t)gc_scan_container_chunk(c.obj, c.next);
+        }
         if (budget && done >= budget) break;
     }
-    return gc_worklist_count == 0;
+    return gc_worklist_count == 0 && gc_cont_count == 0;
 }
 
 // PLUTO_GC_VERIFY at the end of marking: no marked object may reference an
@@ -3259,7 +3330,7 @@ static void gc_incr_step_at(struct timespec t0, const char *kind) {
         do {
             gc_incr_drain_logs();
             gc_incr_trace(0);
-        } while (gc_worklist_count > 0);
+        } while (gc_worklist_count > 0 || gc_cont_count > 0);
         gc_incr_finish();
         finished = 1;
     }
@@ -3324,7 +3395,7 @@ void __pluto_gc_collect(void) {
         do {
             gc_incr_drain_logs();
             gc_incr_trace(0);
-        } while (gc_worklist_count > 0);
+        } while (gc_worklist_count > 0 || gc_cont_count > 0);
         gc_incr_finish();
         gc_collecting = 0;
         return;

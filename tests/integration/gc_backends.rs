@@ -53,3 +53,10 @@ fn sharing_through_entities_tasks_and_channels() {
 fn references_moved_during_marking() {
     differential("satb.pt");
 }
+
+/// Large containers whose elements move (remove_at, map deletion shifts)
+/// while `incr` scans them in chunks: moved elements must be logged.
+#[test]
+fn elements_moved_behind_a_chunked_scan() {
+    differential("chunks.pt");
+}
