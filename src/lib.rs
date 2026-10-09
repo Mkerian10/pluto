@@ -681,6 +681,8 @@ pub enum GcBackend {
     /// Generational non-moving mark-sweep: sticky mark bits, minor
     /// collections over a remembered set, mprotect write barrier.
     Gen,
+    /// Mark-sweep with parallel marking on helper threads.
+    ParMark,
 }
 
 /// The default backend is mark-sweep; PLUTO_GC_BACKEND=<name> overrides it
@@ -696,12 +698,13 @@ impl Default for GcBackend {
 
 impl GcBackend {
     /// Every backend, in a stable order (index = position).
-    pub const ALL: [GcBackend; 5] = [
+    pub const ALL: [GcBackend; 6] = [
         GcBackend::MarkSweep,
         GcBackend::Noop,
         GcBackend::Legacy,
         GcBackend::Lazy,
         GcBackend::Gen,
+        GcBackend::ParMark,
     ];
 
     fn index(&self) -> usize {
@@ -715,6 +718,7 @@ impl GcBackend {
             GcBackend::Legacy => "legacy",
             GcBackend::Lazy => "lazy",
             GcBackend::Gen => "gen",
+            GcBackend::ParMark => "parmark",
         }
     }
 
@@ -727,7 +731,9 @@ impl GcBackend {
             GcBackend::MarkSweep => include_str!("../runtime/gc/marksweep.c"),
             GcBackend::Noop => include_str!("../runtime/gc/noop.c"),
             GcBackend::Legacy => include_str!("../runtime/gc/legacy.c"),
-            GcBackend::Lazy | GcBackend::Gen => include_str!("../runtime/gc/marksweep.c"),
+            GcBackend::Lazy | GcBackend::Gen | GcBackend::ParMark => {
+                include_str!("../runtime/gc/marksweep.c")
+            }
         }
     }
 
@@ -738,6 +744,7 @@ impl GcBackend {
             GcBackend::MarkSweep | GcBackend::Noop | GcBackend::Legacy => &[],
             GcBackend::Lazy => &["-DGC_LAZY_SWEEP"],
             GcBackend::Gen => &["-DGC_GENERATIONAL"],
+            GcBackend::ParMark => &["-DGC_PARALLEL_MARK"],
         }
     }
 }

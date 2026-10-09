@@ -1253,9 +1253,65 @@ static void gc_worklist_push(void *ptr) {
     gc_worklist[gc_worklist_count++] = ptr;
 }
 
+#if defined(GC_PARALLEL_MARK) && !defined(PLUTO_TEST_MODE)
+// Parallel marking (--gc parmark). Roots are scanned serially; the resulting
+// worklist moves to a shared stack and helper threads (plus the collector)
+// drain it in parallel. Each worker traces from a private stack, claiming
+// objects with an atomic exchange on the mark byte, and spills half its
+// stack to the shared one whenever another worker is idle. Marking ends when
+// every worker is idle and the shared stack is empty. Helpers are created
+// lazily (cores - 1, at most GC_PM_MAX_HELPERS, or PLUTO_GC_THREADS - 1),
+// park between collections, and are never registered as mutator threads.
+#define GC_PM_MAX_HELPERS 7
+#define GC_PM_SHARE 128       // spill when a stack is deeper than this...
+#define GC_PM_BATCH 64        // ...and take this many from the shared stack
+typedef struct { void **items; size_t count, cap; } GCMarkStack;
+static __thread GCMarkStack *gc_pm_local = NULL;   // set while marking in parallel
+static GCMarkStack gc_pm_stacks[GC_PM_MAX_HELPERS + 1];
+static pthread_mutex_t gc_pm_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t gc_pm_work_cv = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t gc_pm_start_cv = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t gc_pm_done_cv = PTHREAD_COND_INITIALIZER;
+static void **gc_pm_shared = NULL;
+static size_t gc_pm_shared_count = 0, gc_pm_shared_cap = 0;
+static int gc_pm_nhelpers = -1;           // -1: not started
+static int gc_pm_active = 0, gc_pm_idle = 0, gc_pm_done = 0, gc_pm_finished = 0;
+static long gc_pm_epoch = 0;
+static pid_t gc_pm_pid = 0;
+
+static inline void gc_pm_push(GCMarkStack *st, void *p) {
+    if (st->count == st->cap) {
+        size_t cap = st->cap ? st->cap * 2 : 1024;
+        void **grown = (void **)realloc(st->items, cap * sizeof(void *));
+        if (!grown) gc_oom("GC mark stack");
+        st->items = grown;
+        st->cap = cap;
+    }
+    st->items[st->count++] = p;
+}
+
+static void gc_pm_shared_push(void *p) {   // caller holds gc_pm_mu
+    if (gc_pm_shared_count == gc_pm_shared_cap) {
+        size_t cap = gc_pm_shared_cap ? gc_pm_shared_cap * 2 : 1024;
+        void **grown = (void **)realloc(gc_pm_shared, cap * sizeof(void *));
+        if (!grown) gc_oom("GC mark stack");
+        gc_pm_shared = grown;
+        gc_pm_shared_cap = cap;
+    }
+    gc_pm_shared[gc_pm_shared_count++] = p;
+}
+#endif
+
 static void gc_mark_object(void *user_ptr) {
     GCHeader *h = gc_get_header(user_ptr);
     if (h->mark) return;
+#if defined(GC_PARALLEL_MARK) && !defined(PLUTO_TEST_MODE)
+    if (gc_pm_local) {
+        if (__atomic_exchange_n(&h->mark, 1, __ATOMIC_RELAXED)) return;   // lost the race
+        gc_pm_push(gc_pm_local, user_ptr);
+        return;
+    }
+#endif
     h->mark = 1;
 #ifdef GC_LAZY_SWEEP
     gc_marked_bytes += gc_slot_bytes(h);
@@ -1385,6 +1441,117 @@ static void gc_trace_object(void *user_ptr) {
     }
     }
 }
+
+#if defined(GC_PARALLEL_MARK) && !defined(PLUTO_TEST_MODE)
+static void gc_pm_work(GCMarkStack *st) {
+    gc_pm_local = st;
+    for (;;) {
+        while (st->count) {
+            void *o = st->items[--st->count];
+            gc_trace_object(o);
+            if (st->count > GC_PM_SHARE && __atomic_load_n(&gc_pm_idle, __ATOMIC_RELAXED) > 0) {
+                pthread_mutex_lock(&gc_pm_mu);
+                size_t give = st->count / 2;
+                for (size_t i = 0; i < give; i++) gc_pm_shared_push(st->items[i]);
+                memmove(st->items, st->items + give, (st->count - give) * sizeof(void *));
+                st->count -= give;
+                pthread_cond_broadcast(&gc_pm_work_cv);
+                pthread_mutex_unlock(&gc_pm_mu);
+            }
+        }
+        pthread_mutex_lock(&gc_pm_mu);
+        for (;;) {
+            if (gc_pm_shared_count > 0) {
+                size_t take = gc_pm_shared_count < GC_PM_BATCH ? gc_pm_shared_count : GC_PM_BATCH;
+                for (size_t i = 0; i < take; i++) gc_pm_push(st, gc_pm_shared[--gc_pm_shared_count]);
+                break;
+            }
+            if (gc_pm_done) break;
+            gc_pm_idle++;
+            if (gc_pm_idle == gc_pm_active) {   // nobody holds work: marking is complete
+                gc_pm_done = 1;
+                pthread_cond_broadcast(&gc_pm_work_cv);
+                break;
+            }
+            pthread_cond_wait(&gc_pm_work_cv, &gc_pm_mu);
+            gc_pm_idle--;
+        }
+        int finished = gc_pm_done && st->count == 0;
+        pthread_mutex_unlock(&gc_pm_mu);
+        if (finished) break;
+    }
+    gc_pm_local = NULL;
+}
+
+static void *gc_pm_helper_main(void *arg) {
+    int id = (int)(intptr_t)arg;
+    long seen = 0;
+    for (;;) {
+        pthread_mutex_lock(&gc_pm_mu);
+        while (gc_pm_epoch == seen) pthread_cond_wait(&gc_pm_start_cv, &gc_pm_mu);
+        seen = gc_pm_epoch;
+        pthread_mutex_unlock(&gc_pm_mu);
+        gc_pm_work(&gc_pm_stacks[id]);
+        pthread_mutex_lock(&gc_pm_mu);
+        gc_pm_finished++;
+        pthread_cond_signal(&gc_pm_done_cv);
+        pthread_mutex_unlock(&gc_pm_mu);
+    }
+    return NULL;
+}
+
+static void gc_pm_start_helpers(void) {
+    pid_t pid = getpid();
+    if (gc_pm_nhelpers >= 0 && gc_pm_pid == pid) return;
+    if (gc_pm_nhelpers >= 0) {
+        // Forked child: the helpers did not survive; start over cleanly.
+        pthread_mutex_init(&gc_pm_mu, NULL);
+        pthread_cond_init(&gc_pm_work_cv, NULL);
+        pthread_cond_init(&gc_pm_start_cv, NULL);
+        pthread_cond_init(&gc_pm_done_cv, NULL);
+        gc_pm_epoch = 0;
+    }
+    gc_pm_pid = pid;
+    long n = sysconf(_SC_NPROCESSORS_ONLN) - 1;
+    const char *env = getenv("PLUTO_GC_THREADS");
+    if (env && atoi(env) > 0) n = atoi(env) - 1;
+    if (n < 0) n = 0;
+    if (n > GC_PM_MAX_HELPERS) n = GC_PM_MAX_HELPERS;
+    gc_pm_nhelpers = 0;
+    for (int i = 1; i <= n; i++) {
+        pthread_t t;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        if (pthread_create(&t, &attr, gc_pm_helper_main, (void *)(intptr_t)i) == 0) gc_pm_nhelpers++;
+        pthread_attr_destroy(&attr);
+    }
+}
+
+// Drain the serial worklist (filled by root scanning) in parallel.
+static void gc_pm_drain(void) {
+    gc_pm_start_helpers();
+    if (gc_pm_nhelpers == 0) {
+        while (gc_worklist_count > 0) gc_trace_object(gc_worklist[--gc_worklist_count]);
+        return;
+    }
+    pthread_mutex_lock(&gc_pm_mu);
+    while (gc_worklist_count > 0) gc_pm_shared_push(gc_worklist[--gc_worklist_count]);
+    gc_pm_active = gc_pm_nhelpers + 1;
+    gc_pm_idle = 0;
+    gc_pm_done = 0;
+    gc_pm_finished = 0;
+    gc_pm_epoch++;
+    pthread_cond_broadcast(&gc_pm_start_cv);
+    pthread_mutex_unlock(&gc_pm_mu);
+
+    gc_pm_work(&gc_pm_stacks[0]);
+
+    pthread_mutex_lock(&gc_pm_mu);
+    while (gc_pm_finished < gc_pm_nhelpers) pthread_cond_wait(&gc_pm_done_cv, &gc_pm_mu);
+    pthread_mutex_unlock(&gc_pm_mu);
+}
+#endif
 
 static void gc_mark_candidate(void *candidate) {
     // Check if candidate points into a GC object
@@ -1957,10 +2124,14 @@ void __pluto_gc_collect(void) {
 #endif
 
     // 5. Drain worklist (breadth-first trace)
+#if defined(GC_PARALLEL_MARK) && !defined(PLUTO_TEST_MODE)
+    gc_pm_drain();
+#else
     while (gc_worklist_count > 0) {
         void *obj = gc_worklist[--gc_worklist_count];
         gc_trace_object(obj);
     }
+#endif
 
     struct timespec gc_tm;
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_tm);
