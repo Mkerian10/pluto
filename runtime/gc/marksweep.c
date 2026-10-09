@@ -134,11 +134,13 @@ typedef struct GCTrace {
     struct GCThreadHeap *local_heap;
     int promoting, saw_private, satb_tracing;
     int tenure_all;               // hybrid local mark: every unpinned survivor is promoted
+    int minor;                    // hybrid local mark: the old generation is not traced
+    int saw_young;                // hybrid minor mark: a lookup resolved to a young object
     unsigned tenure_age;          // hybrid local mark: local survivals before promotion
     size_t trace_work;
     struct GCMarkStack *pm_local;   // parallel marking: this worker's stack
 } GCTrace;
-static __thread GCTrace gc_tr_tls = { &gc_global_ctx, GC_MARK_LOCAL, NULL, 0, 0, 0, 0, 0, 0, NULL };
+static __thread GCTrace gc_tr_tls = { &gc_global_ctx, GC_MARK_LOCAL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, NULL };
 #define GC_TR() (&gc_tr_tls)
 #define GC_MARKED(h) ((h)->mark & T->mark_bit)
 #if defined(GC_HYBRID)
@@ -161,6 +163,12 @@ static size_t gc_shared_threshold = GC_TLH_SHARED_FLOOR;
 // the sizing policy from measurements.
 static size_t gc_hyb_young_min = (size_t)1 << 20, gc_hyb_young_max = (size_t)4 << 20;
 static unsigned gc_hyb_tenure_force = 0;
+// Old generation sizing: a major local collection runs when the old
+// generation has grown by its live size (at least GC_HYB_OLD_FLOOR); a
+// major that would find more than gc_hyb_old_cap promotes its survivors to
+// the shared heap instead, which bounds a major's pause.
+#define GC_HYB_OLD_FLOOR ((size_t)4 << 20)
+static size_t gc_hyb_old_cap = (size_t)32 << 20;
 #endif
 
 #define gc_worklist             (T->ctx->worklist)
@@ -649,6 +657,22 @@ typedef struct GCThreadHeap {
                                // yet applied its result (owner sweep pending)
     int shared_sweep_pending;  // the cycle finished: free dead shared objects
     size_t swept_promoted;     // bytes the running local sweep promoted
+    // Old generation (private objects tenured in place, header next ==
+    // GC_OLD_TAG / GC_OLD_REM_TAG). Minor collections skip it; stores into
+    // it are recorded: an old object written with any reference is put on
+    // remset (once, next = GC_OLD_REM_TAG); an old container instead logs
+    // each young value stored into it on remvals (so a big table is never
+    // rescanned). Major collections trace and sweep it whole.
+    GCHeader **remset;
+    size_t nremset, remset_cap;
+    long *remvals;
+    size_t nremvals, remvals_cap;
+    size_t young_live;         // young bytes surviving the last collection
+    size_t old_live;           // old bytes live after the last major collection
+    size_t old_growth;         // bytes tenured into the old generation since then
+    size_t sweep_young_live;   // young bytes the running sweep kept young
+    int major;                 // this collection traces and sweeps the old generation
+    int tenure_shared;         // this collection promotes to the shared heap, not old
     size_t barrier_promoted;   // bytes promoted by stores and transfers (PLUTO_GC_LOG)
     int verify_now;            // PLUTO_GC_VERIFY: run the heap-wide local checks this time
     size_t verify_alloc;       // ...allocated since they last ran
@@ -1203,6 +1227,8 @@ static void gc_tlh_retire(GCThreadHeap *H) {
     for (size_t k = 0; k < H->nparked; k++) gc_tlh_own_append(H, H->parked[k]);
     H->nparked = 0;
     free(H->parked);
+    free(H->remset);
+    free(H->remvals);
 #endif
 #if defined(GC_TLH)
     gc_tlh_report(H);
@@ -1449,6 +1475,7 @@ static void gc_init_env(void) {
     if ((e = getenv("PLUTO_GC_YOUNG_MIN"))) gc_hyb_young_min = (size_t)atol(e);
     if ((e = getenv("PLUTO_GC_YOUNG_MAX"))) gc_hyb_young_max = (size_t)atol(e);
     if ((e = getenv("PLUTO_GC_TENURE"))) gc_hyb_tenure_force = (unsigned)atoi(e);
+    if ((e = getenv("PLUTO_GC_OLD_CAP"))) gc_hyb_old_cap = (size_t)atol(e);
 #endif
     if (gc_verify_enabled > 0) {
         // The division-free slot index must agree with division everywhere.
@@ -1864,6 +1891,9 @@ static inline GCHeader *gc_find_object(GCTrace *T, void *candidate) {
     if (T->local_heap) {
         GCHeader *h = gc_tlh_find_own(candidate, T->local_heap);
 #if defined(GC_HYBRID)
+        // saw_private is set for old objects too: a container is clean only
+        // when every element is shared, since a major collection must
+        // still mark old elements.
         if (h) T->saw_private = 1;
 #endif
         // Cross-check only candidates on H's pages that did not land on an
@@ -1879,6 +1909,12 @@ static inline GCHeader *gc_find_object(GCTrace *T, void *candidate) {
                     gc_tlh_verify_own(candidate, T->local_heap, h);
             }
         }
+#if defined(GC_HYBRID)
+        if (h && T->minor) {
+            if (h->next != NULL) return NULL;   // old: not this collection's
+            T->saw_young = 1;
+        }
+#endif
         return h;
     }
 #endif
@@ -2063,6 +2099,14 @@ static long gc_scan_container_chunk(GCTrace *T, void *user_ptr, long from) {
 // twice and the sweep can promote in place with no second trace.
 static inline int gc_hyb_promotes(const GCTrace *T, const GCHeader *h) {
     if (h->mark & GC_MARK_PROMOTE) return 1;
+    // In a major collection an old object's young children are tenured
+    // with it, so no old-to-young reference survives and the remembered set
+    // restarts empty. A minor collection leaves them young (they age like
+    // any other) and keeps their holders remembered instead: tenuring
+    // everything an old object happened to reference at a minor collection
+    // filled the old generation with short-lived values (3.2 GB tenured on
+    // one Kerberos file).
+    if (h->next == GC_OLD_TAG || h->next == GC_OLD_REM_TAG) return !T->minor;
     if (h->mark & GC_MARK_ROOT) return 0;
     // A backing store shares its handle's fate: never tenured on its own,
     // only by the PROMOTE its handle's trace hands it.
@@ -2420,13 +2464,16 @@ static void gc_tlh_promote_visit(GCTrace *T, GCHeader *h) {
     GCThreadHeap *H = T->local_heap;   // the promoting thread's own heap
     GCBlock *b = gc_pagemap_get((uintptr_t)h);
     if (!b || b->owner != H || h->next == GC_SHARED_TAG) return;
+#if defined(GC_HYBRID)
+    int was_young = h->next == NULL;
+#endif
     h->next = GC_SHARED_TAG;
     H->promoted_bytes += b->obj_size;
 #if defined(GC_HYBRID)
     H->barrier_promoted += b->obj_size;
 #endif
 #if defined(GC_HYBRID)
-    if (b->nprivate) b->nprivate--;
+    if (was_young && b->nprivate) b->nprivate--;
     // A global cycle judges shared objects. While one marks, a newly shared
     // object is logged, so the next step traces it — marking it black here
     // would skip the shared objects only it reaches. Once the cycle is done
@@ -2453,6 +2500,59 @@ void __pluto_gc_promote_store(long value) {
     T->local_heap = NULL;
     T->promoting = 0;
     T->ctx = saved;
+}
+
+#if defined(GC_HYBRID)
+static void gc_hyb_remember(GCThreadHeap *H, GCHeader *h) {
+    if (H->nremset == H->remset_cap) {
+        size_t cap = H->remset_cap ? H->remset_cap * 2 : 256;
+        GCHeader **grown = (GCHeader **)realloc(H->remset, cap * sizeof(GCHeader *));
+        if (!grown) gc_oom("GC remembered set");
+        H->remset = grown;
+        H->remset_cap = cap;
+    }
+    H->remset[H->nremset++] = h;
+    h->next = GC_OLD_REM_TAG;
+}
+
+static void gc_hyb_log_young(GCThreadHeap *H, long value) {
+    if (H->nremvals == H->remvals_cap) {
+        size_t cap = H->remvals_cap ? H->remvals_cap * 2 : 256;
+        long *grown = (long *)realloc(H->remvals, cap * sizeof(long));
+        if (!grown) gc_oom("GC remembered values");
+        H->remvals = grown;
+        H->remvals_cap = cap;
+    }
+    H->remvals[H->nremvals++] = value;
+}
+#endif
+
+// The barrier's slow path: a store of `value` into `obj`, whose header says
+// shared (promote the value first) or old. An old object is private to this
+// thread, so only this thread can be storing into it. A plain object joins
+// the remembered set (once: its header becomes GC_OLD_REM_TAG, which the
+// barrier lets through); an old container instead logs the value when it
+// is a young object of this heap, so the next minor collection marks it
+// without rescanning the container.
+void __pluto_gc_store_slow(long obj, long value) {
+    GCHeader *h = (GCHeader *)((char *)obj - sizeof(GCHeader));
+    if (h->next == GC_SHARED_TAG) {
+        __pluto_gc_promote_store(value);
+        return;
+    }
+#if defined(GC_HYBRID)
+    GCThreadHeap *H = gc_my_heap;
+    if (!H || h->next != GC_OLD_TAG) return;
+    // The fast path clears a private container's "all elements shared"
+    // flag; old containers come here instead.
+    h->mark &= (uint8_t)~GC_MARK_CLEAN;
+    if (gc_is_container_tag(h->type_tag)) {
+        GCHeader *v = gc_tlh_find_own((void *)value, H);
+        if (v && v->next == NULL) gc_hyb_log_young(H, (long)(v + 1));   // the object's start
+    } else {
+        gc_hyb_remember(H, h);
+    }
+#endif
 }
 
 // PLUTO_GC_VERIFY: check invariant I at a global collection (all threads
@@ -2491,6 +2591,7 @@ static void gc_tlh_check_invariant(void) {
 }
 #else
 void __pluto_gc_promote_store(long value) { (void)value; }
+void __pluto_gc_store_slow(long obj, long value) { (void)obj; (void)value; }
 #endif
 
 // A root word: mark the object it points into, if any (a pointer into a
@@ -2696,6 +2797,16 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
 #endif
         return 1;
     }
+#if defined(GC_HYBRID)
+    // A minor collection does not mark the old generation: its objects
+    // survive any sweep but a major one (large objects and full walks under
+    // a pending global result reach them here).
+    if (private_marked && !H->major && (h->next == GC_OLD_TAG || h->next == GC_OLD_REM_TAG)) {
+        if (H->shared_sweep_pending) h->mark &= (uint8_t)~GC_MARK_GLOBAL;
+        *live_private += osz;
+        return 1;
+    }
+#endif
     int local = !private_marked || (h->mark & GC_MARK_LOCAL);
 #if defined(GC_HYBRID)
     int held = gc_incr_marking && (h->mark & GC_MARK_GLOBAL);
@@ -2714,10 +2825,11 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
                       || (!(h->mark & GC_MARK_ROOT) && h->type_tag != GC_TAG_BUFFER
                           && (H->tenure_all || age >= H->tenure_age));
         h->mark = (uint8_t)((h->mark & (3 | GC_MARK_CLEAN)) | (age << 2));
-        if (promote) {
-            // Promote in place. While a global cycle marks, a newly shared
-            // object is logged so a step traces it (marking it black here
-            // would skip the shared objects only it reaches).
+        if (promote && H->tenure_shared) {
+            // Promote in place to the shared heap (the old generation is
+            // full). While a global cycle marks, a newly shared object is
+            // logged so a step traces it (marking it black here would skip
+            // the shared objects only it reaches).
             h->next = GC_SHARED_TAG;
             H->promoted_bytes += osz;
             H->swept_promoted += osz;
@@ -2726,7 +2838,13 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
             h->mark &= (uint8_t)~GC_MARK_LOCAL;
             return 1;
         }
+        if (promote && h->next == NULL) {   // tenure into the old generation
+            h->next = GC_OLD_TAG;
+            H->old_growth += osz;
+            H->swept_promoted += osz;
+        }
     }
+    if (private_marked && h->next == NULL) H->sweep_young_live += osz;
     if (H->shared_sweep_pending) h->mark &= (uint8_t)~GC_MARK_GLOBAL;
 #else
     if (!local) return 0;
@@ -2740,9 +2858,9 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
 static void gc_hyb_verify_no_private(GCBlock *b) {
     for (uint32_t i = 0; i < b->bump; i++) {
         GCHeader *h = (GCHeader *)(b->base + (size_t)i * b->obj_size);
-        if (h->type_tag != GC_TAG_FREE && h->next != GC_SHARED_TAG) {
-            fprintf(stderr, "pluto: PLUTO_GC_VERIFY: block %p counted no private objects but "
-                    "holds private %p (tag %d)\n", (void *)b->base, (void *)(h + 1), h->type_tag);
+        if (h->type_tag != GC_TAG_FREE && h->next == NULL) {
+            fprintf(stderr, "pluto: PLUTO_GC_VERIFY: block %p counted no young objects but "
+                    "holds young %p (tag %d)\n", (void *)b->base, (void *)(h + 1), h->type_tag);
             abort();
         }
     }
@@ -2806,7 +2924,7 @@ static int gc_tlh_sweep_one(GCThreadHeap *H, GCBlock *b, int private_marked,
         if (h->type_tag != GC_TAG_FREE) {
             if (gc_tlh_keep(H, h, private_marked, osz, live_private)) {
                 live++;
-                if (h->next != GC_SHARED_TAG) {
+                if (h->next == NULL) {   // young (nprivate counts young objects)
                     nprivate++;
 #if defined(GC_HYBRID)
                     b->young[i >> 6] |= (uint64_t)1 << (i & 63);
@@ -2872,12 +2990,12 @@ static int gc_hyb_sweep_young(GCThreadHeap *H, GCBlock *b, size_t *freed, size_t
             bits &= bits - 1;
             uint64_t bit = (uint64_t)1 << (i & 63);
             GCHeader *h = (GCHeader *)(b->base + i * osz);
-            if (h->type_tag == GC_TAG_FREE || h->next == GC_SHARED_TAG) {
-                b->young[w] &= ~bit;   // freed or promoted since it was set
+            if (h->type_tag == GC_TAG_FREE || h->next != NULL) {
+                b->young[w] &= ~bit;   // freed, tenured or shared since it was set
                 continue;
             }
             if (gc_tlh_keep(H, h, 1, osz, live_private)) {
-                if (h->next == GC_SHARED_TAG) b->young[w] &= ~bit;   // promoted now
+                if (h->next != NULL) b->young[w] &= ~bit;   // tenured now
                 else nprivate++;
                 continue;
             }
@@ -2909,7 +3027,8 @@ static int gc_hyb_sweep_young(GCThreadHeap *H, GCBlock *b, size_t *freed, size_t
         return 0;
     }
     b->next = NULL;
-    return *live_private == before ? 2 : 0;
+    (void)before;
+    return 0;   // full: parked only by a full walk, which sees the old objects too
 }
 
 // PLUTO_GC_VERIFY: the young bits cover every private object of the block,
@@ -2920,8 +3039,8 @@ static void gc_hyb_verify_young(GCBlock *b) {
         GCHeader *h = (GCHeader *)(b->base + (size_t)i * b->obj_size);
         if (h->type_tag == GC_TAG_FREE) continue;
         live++;
-        if (h->next != GC_SHARED_TAG && !(b->young[i >> 6] & ((uint64_t)1 << (i & 63)))) {
-            fprintf(stderr, "pluto: PLUTO_GC_VERIFY: private %p (tag %d) in block %p has no young bit\n",
+        if (h->next == NULL && !(b->young[i >> 6] & ((uint64_t)1 << (i & 63)))) {
+            fprintf(stderr, "pluto: PLUTO_GC_VERIFY: young %p (tag %d) in block %p has no young bit\n",
                     (void *)(h + 1), h->type_tag, (void *)b->base);
             abort();
         }
@@ -2943,16 +3062,19 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
     // that gain free slots rejoin the sweep set after the main loop (never
     // before: sweeping a block twice under a pending result would judge its
     // survivors, whose marks the first pass cleared, dead).
+    // A major collection (or an exit reclaim) judges the old generation as
+    // well, so it walks every block in full, parked ones included.
+    int full = H->major || H->shared_sweep_pending;
     GCBlock **unparked = NULL;
     size_t nunparked = 0;
-    if (H->shared_sweep_pending && H->nparked) {
+    if (full && H->nparked) {
         unparked = (GCBlock **)malloc(H->nparked * sizeof(GCBlock *));
         if (!unparked) gc_oom("GC parked blocks");
         size_t np = 0;
         for (size_t k = 0; k < H->nparked; k++) {
             GCBlock *b = H->parked[k];
             size_t dummy = 0;
-            int r = gc_tlh_sweep_one(H, b, 0, &freed, &dummy);
+            int r = gc_tlh_sweep_one(H, b, H->major ? private_marked : 0, &freed, &dummy);
             if (r == 2) H->parked[np++] = b;
             else if (r == 0) unparked[nunparked++] = b;
         }
@@ -2968,7 +3090,7 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
         // Exactness matters — a skipped private object would keep a stale
         // local mark and hide its children from the next local mark — so
         // PLUTO_GC_VERIFY checks every skipped block.
-        if (b->kind == GC_BLOCK_SMALL && b->nprivate == 0 && !H->shared_sweep_pending) {
+        if (b->kind == GC_BLOCK_SMALL && b->nprivate == 0 && !full) {
             if (H->verify_now) gc_hyb_verify_no_private(b);
             if (b->free_list || b->bump < b->nobjs) {
                 b->next = H->avail[b->cls];
@@ -2978,7 +3100,7 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
             continue;
         }
         int r;
-        if (b->kind == GC_BLOCK_SMALL && private_marked && !H->shared_sweep_pending) {
+        if (b->kind == GC_BLOCK_SMALL && private_marked && !full) {
             if (H->verify_now) gc_hyb_verify_young(b);
             r = gc_hyb_sweep_young(H, b, &freed, &live_private);
         } else {
@@ -3057,9 +3179,11 @@ static void gc_hyb_check_local_slot(GCHeader *parent, long word, const char *whe
     gc_hyb_check_slots++;
     GCHeader *c = gc_tlh_find_own((void *)word, gc_hyb_check_heap);
     if (!c || (char *)word != (char *)(c + 1)) return;   // exact starts only, like the global check
-    fprintf(stderr, "pluto: PLUTO_GC_VERIFY: after a local collection, shared %p (tag %d, size %u) "
-            "%s holds private %p (tag %d, size %u)\n", (void *)(parent + 1), parent->type_tag,
-            parent->size, where, (void *)(c + 1), c->type_tag, c->size);
+    if (parent->next != GC_SHARED_TAG) return;   // old parents: gc_hyb_check_remembered
+    fprintf(stderr, "pluto: PLUTO_GC_VERIFY: after a local collection, %s %p (tag %d, size %u) "
+            "%s holds %s %p (tag %d, size %u)\n", parent->next == GC_SHARED_TAG ? "shared" : "old",
+            (void *)(parent + 1), parent->type_tag, parent->size, where,
+            c->next == NULL ? "young" : "old", (void *)(c + 1), c->type_tag, c->size);
     abort();
 }
 
@@ -3078,11 +3202,66 @@ static size_t gc_hyb_check_local(GCThreadHeap *H) {
             visited += b->kind == GC_BLOCK_LARGE ? b->obj_size : GC_BLOCK_SIZE;
             for (uint32_t i = 0; i < cnt; i++) {
                 GCHeader *h = (GCHeader *)(b->base + (size_t)i * osz);
-                if (h->type_tag != GC_TAG_FREE && h->next == GC_SHARED_TAG)
+                if (h->type_tag != GC_TAG_FREE && h->next != NULL)
                     gc_check_children(h, gc_hyb_check_local_slot);
             }
         }
     }
+    gc_hyb_check_heap = NULL;
+    return visited + gc_hyb_check_slots * 8;
+}
+
+// PLUTO_GC_VERIFY, before each minor collection: every reference from the
+// old generation into the young one is recorded — its holder is on the
+// remembered set, or (old containers) the young value was logged. A store
+// that skipped the barrier shows up here, before the minor collection
+// would have freed the young object under it.
+static __thread long *gc_hyb_check_vals;
+static __thread size_t gc_hyb_check_nvals;
+static int gc_hyb_cmp_long(const void *a, const void *b) {
+    long x = *(const long *)a, y = *(const long *)b;
+    return (x > y) - (x < y);
+}
+static void gc_hyb_check_rem_slot(GCHeader *parent, long word, const char *where) {
+    gc_hyb_check_slots++;
+    if (parent->next != GC_OLD_TAG) return;   // remembered holders are traced anyway
+    GCHeader *c = gc_tlh_find_own((void *)word, gc_hyb_check_heap);
+    if (!c || c->next != NULL || !gc_is_start(c, (void *)word)) return;
+    if (gc_is_container_tag(parent->type_tag)
+        && bsearch(&word, gc_hyb_check_vals, gc_hyb_check_nvals, sizeof(long), gc_hyb_cmp_long)) return;
+    fprintf(stderr, "pluto: PLUTO_GC_VERIFY: old %p (tag %d, size %u) %s holds young %p (tag %d, "
+            "size %u) but is not remembered\n", (void *)(parent + 1), parent->type_tag, parent->size,
+            where, (void *)(c + 1), c->type_tag, c->size);
+    abort();
+}
+
+static size_t gc_hyb_check_remembered(GCThreadHeap *H) {
+    gc_hyb_check_heap = H;
+    gc_hyb_check_slots = 0;
+    gc_hyb_check_nvals = H->nremvals;
+    gc_hyb_check_vals = (long *)malloc((H->nremvals + 1) * sizeof(long));
+    if (!gc_hyb_check_vals) gc_oom("GC verifier");
+    memcpy(gc_hyb_check_vals, H->remvals, H->nremvals * sizeof(long));
+    qsort(gc_hyb_check_vals, gc_hyb_check_nvals, sizeof(long), gc_hyb_cmp_long);
+    size_t visited = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        GCBlock **set = pass ? H->parked : H->blocks;
+        size_t n = pass ? H->nparked : H->nblocks;
+        for (size_t k = 0; k < n; k++) {
+            GCBlock *b = set[k];
+            if (b->kind != GC_BLOCK_SMALL && b->kind != GC_BLOCK_LARGE) continue;
+            uint32_t cnt = b->kind == GC_BLOCK_LARGE ? 1 : b->bump;
+            size_t osz = b->kind == GC_BLOCK_LARGE ? 0 : b->obj_size;
+            visited += b->kind == GC_BLOCK_LARGE ? b->obj_size : GC_BLOCK_SIZE;
+            for (uint32_t i = 0; i < cnt; i++) {
+                GCHeader *h = (GCHeader *)(b->base + (size_t)i * osz);
+                if (h->type_tag != GC_TAG_FREE && h->next == GC_OLD_TAG)
+                    gc_check_children(h, gc_hyb_check_rem_slot);
+            }
+        }
+    }
+    free(gc_hyb_check_vals);
+    gc_hyb_check_vals = NULL;
     gc_hyb_check_heap = NULL;
     return visited + gc_hyb_check_slots * 8;
 }
@@ -3137,10 +3316,17 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
         H->verify_alloc = 0;
         H->verify_cost = gc_hyb_check_clean(H);
     }
-    H->tenure_all = H->private_live > GC_HYB_PRIVATE_CAP;
+    // Minor (young generation only) or major (the whole private heap)?
+    size_t old_due = H->old_live > GC_HYB_OLD_FLOOR ? H->old_live : GC_HYB_OLD_FLOOR;
+    H->major = H->old_growth >= old_due;
+    H->tenure_shared = H->major && H->old_live + H->old_growth > gc_hyb_old_cap;
+    T->minor = !H->major;
+    if (H->verify_now && T->minor) H->verify_cost += gc_hyb_check_remembered(H);
+    H->tenure_all = H->young_live > GC_HYB_PRIVATE_CAP || H->tenure_shared;
     T->tenure_all = H->tenure_all;
     T->tenure_age = H->tenure_age;
     H->swept_promoted = 0;
+    H->sweep_young_live = 0;
     size_t allocated = H->local_alloc;   // since the last local collection
 #define GC_LOCAL_ROOT(c) gc_tlh_local_root(T, (void *)(c))
 #else
@@ -3164,6 +3350,31 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     if (__pluto_current_error) GC_LOCAL_ROOT(__pluto_current_error);
     if (__pluto_current_error_type) GC_LOCAL_ROOT(__pluto_current_error_type);
 #undef GC_LOCAL_ROOT
+#if defined(GC_HYBRID)
+    if (T->minor) {
+        // The old generation's references into the young one: remembered
+        // holders are traced (as old parents, they hand their young children
+        // the promotion), logged values are marked and promoted.
+        size_t kept_rem = 0;
+        for (size_t i = 0; i < H->nremset; i++) {
+            // Resolved through the page map: a holder since promoted may have
+            // died in the shared heap, and a large one's memory is unmapped.
+            GCHeader *o = gc_tlh_find_own(H->remset[i] + 1, H);
+            if (o != H->remset[i] || o->next != GC_OLD_REM_TAG) continue;   // gone, shared, or a duplicate
+            T->saw_young = 0;
+            gc_trace_object(T, o + 1);
+            if (T->saw_young) H->remset[kept_rem++] = o;   // still holds young objects
+            else o->next = GC_OLD_TAG;
+        }
+        // Holders are deduplicated by their header: one dropped above is
+        // OLD again, so a later duplicate entry is skipped.
+        H->nremset = kept_rem;
+        for (size_t i = 0; i < H->nremvals; i++) {
+            GCHeader *c = gc_find_object(T, (void *)H->remvals[i]);
+            if (c) gc_edge(T, c, 0);
+        }
+    }
+#endif
     while (gc_worklist_count > 0) gc_trace_object(T, gc_worklist[--gc_worklist_count]);
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &tm);
 
@@ -3172,13 +3383,42 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     T->local_heap = NULL;
     T->ctx = saved;
 #if defined(GC_HYBRID)
+    int was_minor = T->minor;
+    T->minor = 0;
+    if (was_minor) {
+        // Logged values that are still young stay logged (their containers
+        // still reference them, or did: an overwritten value just ages out).
+        size_t kept_vals = 0;
+        for (size_t i = 0; i < H->nremvals; i++) {
+            GCHeader *v = gc_tlh_find_own((void *)H->remvals[i], H);
+            if (v && (long)(v + 1) == H->remvals[i] && v->next == NULL) H->remvals[kept_vals++] = H->remvals[i];
+        }
+        H->nremvals = kept_vals;
+    } else {
+        // A major collection tenured every young object an old one
+        // referenced: the remembered set starts over.
+        for (size_t i = 0; i < H->nremset; i++) {
+            GCHeader *o = gc_tlh_find_own(H->remset[i] + 1, H);
+            if (o == H->remset[i] && o->next == GC_OLD_REM_TAG) o->next = GC_OLD_TAG;
+        }
+        H->nremset = 0;
+        H->nremvals = 0;
+    }
+    int was_major = H->major;
+    H->young_live = H->sweep_young_live;
+    if (H->major) {
+        H->old_live = H->private_live > H->young_live ? H->private_live - H->young_live : 0;
+        H->old_growth = 0;
+        H->major = 0;
+    }
+    H->tenure_shared = 0;
     // Adaptive tenuring: when most of what was allocated since the last
     // collection survived it, the young generation is holding long-lived
     // data, and keeping it for a second survival only marks it twice.
     // Promote on first survival until survival falls again.
-    H->tenure_age = (H->private_live + H->swept_promoted) * 2 > allocated ? 1 : GC_HYB_TENURE_AGE;
+    H->tenure_age = (H->young_live + H->swept_promoted) * 2 > allocated ? 1 : GC_HYB_TENURE_AGE;
     if (gc_hyb_tenure_force) H->tenure_age = gc_hyb_tenure_force;
-    if (H->verify_now) H->verify_cost += gc_hyb_check_local(H);
+    if (H->verify_now) H->verify_cost += gc_hyb_check_local(H) + gc_hyb_check_remembered(H);
 #endif
 
     H->local_freed += freed;
@@ -3188,8 +3428,13 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     // scan it every time, even when what it holds has been promoted.
     // Allocating at least 4x the scan work between collections bounds local
     // GC work to a fraction of allocation.
+#if defined(GC_HYBRID)
+    H->local_threshold = H->young_live * 2;
+    if (!was_major && H->local_threshold < 4 * T->trace_work) H->local_threshold = 4 * T->trace_work;
+#else
     H->local_threshold = H->private_live * 2;
     if (H->local_threshold < 4 * T->trace_work) H->local_threshold = 4 * T->trace_work;
+#endif
 #if defined(GC_HYBRID)
     // The young generation is bounded: what a local collection can find
     // live is at most this much plus whatever it could not yet tenure.
@@ -3204,13 +3449,15 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
 #if defined(GC_HYBRID)
         size_t tenured = H->swept_promoted, stored = H->barrier_promoted;
         H->barrier_promoted = 0;
+        int major_log = was_major;
 #else
         size_t tenured = 0, stored = 0;
+        int major_log = 0;
 #endif
         fprintf(stderr,
-                "gc: local #%ld heap=%p live=%zu freed=%zu tenured=%zu stored=%zu next_threshold=%zu"
+                "gc: local #%ld heap=%p major=%d live=%zu freed=%zu tenured=%zu stored=%zu next_threshold=%zu"
                 " pause_us=%ld mark_us=%ld sweep_us=%ld kind=local\n",
-                H->local_count, (void *)H, H->private_live, freed, tenured, stored,
+                H->local_count, (void *)H, major_log, H->private_live, freed, tenured, stored,
                 H->local_threshold, GC_US(t0, t1), GC_US(t0, tm), GC_US(tm, t1));
 #undef GC_US
     }
@@ -3227,7 +3474,15 @@ static void gc_tlh_exit_reclaim(GCThreadHeap *H) {
     gc_init_env();
     struct timespec t0, t1;
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &t0);
+#if defined(GC_HYBRID)
+    H->major = 1;   // the old generation dies with the thread too
+#endif
     size_t freed = gc_tlh_local_sweep(H, 1);   // no local marks: every private object dies
+#if defined(GC_HYBRID)
+    H->major = 0;
+    H->nremset = 0;
+    H->nremvals = 0;
+#endif
     H->local_freed += freed;
     if (gc_log_enabled) {
         clock_gettime(CLOCK_MONOTONIC, &t1);

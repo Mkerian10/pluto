@@ -111,10 +111,11 @@ typedef struct GCHeader {
 // __pluto_gc_barrier_mode, defined by every GC backend, is a bit set
 // selecting which barriers are live:
 //
-//   bit 0 (1)  promotion (thread-local heaps). A live object whose header
-//              `next` word is GC_SHARED_TAG is shared between threads;
-//              storing a pointer into it must first promote the stored value
-//              (__pluto_gc_promote_store).
+//   bit 0 (1)  thread-local heaps. A live object whose header `next` word
+//              is GC_SHARED_TAG is shared between threads: storing a pointer
+//              into it must first promote the stored value. One whose `next`
+//              is GC_OLD_TAG is in its thread's old generation: the store is
+//              recorded. Both go through __pluto_gc_store_slow.
 //   bit 1 (2)  snapshot-at-the-beginning logging (incremental marking, only
 //              while a cycle is marking). A reference that is overwritten in,
 //              or removed from, a heap object is logged
@@ -127,12 +128,21 @@ typedef struct GCHeader {
 // container, so never GC_MARK_CLEAN). Neither macro may be separated from
 // its store by anything that can reach a safepoint.
 #define GC_SHARED_TAG ((GCHeader *)(uintptr_t)1)
+// Hybrid: a private object that has been tenured into its thread's old
+// generation (_REM: and is on the thread's remembered set). A store into an
+// old object must be recorded so the next minor collection, which does not
+// trace the old generation, still finds the young objects it now holds.
+#define GC_OLD_TAG     ((GCHeader *)(uintptr_t)2)
+#define GC_OLD_REM_TAG ((GCHeader *)(uintptr_t)3)
 // Hybrid: a private container whose elements were all shared when a local
 // collection last scanned it. Local collections skip its elements until a
 // store into it (which always goes through PLUTO_GC_STORE) clears the bit.
 #define GC_MARK_CLEAN 0x20
 extern int __pluto_gc_barrier_mode;
 void __pluto_gc_promote_store(long value);
+// A store of `value` into `obj` whose header says shared or old (next 1 or
+// 2): promotes the value (shared) or records the store (old).
+void __pluto_gc_store_slow(long obj, long value);
 void __pluto_gc_log_deleted(long old);
 #define PLUTO_GC_STORE(obj, old, value)                                           \
     do {                                                                          \
@@ -140,8 +150,8 @@ void __pluto_gc_log_deleted(long old);
         if (__builtin_expect(m_ != 0, 0)) {                                       \
             if (m_ & 1) {                                                         \
                 GCHeader *h_ = (GCHeader *)((char *)(obj) - sizeof(GCHeader));    \
-                if (h_->next == GC_SHARED_TAG)                                    \
-                    __pluto_gc_promote_store((long)(value));                      \
+                if ((uintptr_t)h_->next - 1 < 2)                                  \
+                    __pluto_gc_store_slow((long)(obj), (long)(value));            \
                 else if (h_->mark & GC_MARK_CLEAN)                                \
                     h_->mark &= (uint8_t)~GC_MARK_CLEAN;                          \
             }                                                                     \

@@ -184,6 +184,7 @@ impl RuntimeRegistry {
         reg.declare(module, "__pluto_gc_heap_size", &[], &[types::I64])?;
         reg.declare(module, "__pluto_safepoint", &[], &[])?;
         reg.declare(module, "__pluto_gc_promote_store", &[types::I64], &[])?;
+        reg.declare(module, "__pluto_gc_store_slow", &[types::I64, types::I64], &[])?;
         reg.declare(module, "__pluto_gc_log_deleted", &[types::I64], &[])?;
 
         // Concurrency

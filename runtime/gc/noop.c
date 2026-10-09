@@ -225,6 +225,7 @@ int __pluto_gc_check_safepoint(void) {
 int __pluto_gc_barrier_mode = 0;
 void __pluto_gc_log_deleted(long old) { (void)old; }
 void __pluto_gc_promote_store(long value) { (void)value; }
+void __pluto_gc_store_slow(long obj, long value) { (void)obj; (void)value; }
 
 // Container backing stores are plain malloc memory here: finalizers free
 // the current one, and a replaced one is freed at once (builtins.h).

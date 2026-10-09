@@ -140,13 +140,16 @@ impl<'a> LowerContext<'a> {
         self.builder.ins().brif(promote_bit, promote_check_bb, &[], log_check_bb, &[]);
         self.builder.switch_to_block(promote_check_bb);
         self.builder.seal_block(promote_check_bb);
+        // Header `next` 1 (shared: promote the value) or 2 (old, not yet
+        // remembered: record the store) takes the runtime's slow path.
         let hdr_next = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(-16));
-        let is_shared = self.builder.ins().icmp_imm(IntCC::Equal, hdr_next, 1);
-        self.builder.ins().brif(is_shared, promote_call_bb, &[], log_check_bb, &[]);
+        let tag_minus_one = self.builder.ins().iadd_imm(hdr_next, -1);
+        let needs_slow = self.builder.ins().icmp_imm(IntCC::UnsignedLessThan, tag_minus_one, 2);
+        self.builder.ins().brif(needs_slow, promote_call_bb, &[], log_check_bb, &[]);
         self.builder.switch_to_block(promote_call_bb);
         self.builder.seal_block(promote_call_bb);
         self.builder.set_cold_block(promote_call_bb);
-        self.call_runtime_void("__pluto_gc_promote_store", &[val]);
+        self.call_runtime_void("__pluto_gc_store_slow", &[obj_ptr, val]);
         self.builder.ins().jump(log_check_bb, &[]);
 
         // Bit 1: deletion logging.
