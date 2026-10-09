@@ -737,6 +737,88 @@ static int gc_data_interval_cmp(const void *a, const void *b) {
     return 0;
 }
 
+// ── Interval sorting ───────────────────────────────────────────────────────
+//
+// Both interval kinds share one layout, { start, end, owner }, and are sorted
+// by start for the binary-search fallback lookups. qsort through a comparator
+// function pointer dominated collection time on large heaps (it ran over
+// every object, every cycle), so sort with an LSD radix sort on the address
+// offset instead: key = (start - min) >> 4 (allocations are 16-byte aligned),
+// 11 bits per pass, so a few O(n) passes and no comparator calls.
+//
+// Correctness never depends on the radix sort: the result is verified with a
+// linear sortedness check and, if that ever fails (or the scratch buffer can't
+// be allocated), the table is re-sorted with qsort. A radix-sort bug can cost
+// time, not a missed mark.
+typedef struct { void *start; void *end; void *owner; } GCSortInterval;
+_Static_assert(sizeof(GCInterval) == sizeof(GCSortInterval), "interval layout");
+_Static_assert(sizeof(GCDataInterval) == sizeof(GCSortInterval), "data interval layout");
+
+#define GC_RADIX_BITS 11
+#define GC_RADIX_BUCKETS (1u << GC_RADIX_BITS)
+#define GC_RADIX_MIN_N 256   // below this, qsort is already cheap
+
+static GCSortInterval *gc_sort_tmp = NULL;
+static size_t gc_sort_tmp_cap = 0;
+
+static void gc_sort_intervals(GCSortInterval *a, size_t n,
+                              int (*cmp)(const void *, const void *)) {
+    if (n < 2) return;
+    if (n >= GC_RADIX_MIN_N) {
+        if (n > gc_sort_tmp_cap) {
+            GCSortInterval *grown =
+                (GCSortInterval *)realloc(gc_sort_tmp, n * sizeof(GCSortInterval));
+            if (grown) {
+                gc_sort_tmp = grown;
+                gc_sort_tmp_cap = n;
+            }
+        }
+        if (n <= gc_sort_tmp_cap) {
+            uintptr_t lo = UINTPTR_MAX, hi = 0;
+            for (size_t i = 0; i < n; i++) {
+                uintptr_t s = (uintptr_t)a[i].start;
+                if (s < lo) lo = s;
+                if (s > hi) hi = s;
+            }
+            uintptr_t span = (hi - lo) >> 4;
+            int bits = 0;
+            while (bits < 64 && (span >> bits) != 0) bits++;
+
+            GCSortInterval *src = a, *dst = gc_sort_tmp;
+            size_t cnt[GC_RADIX_BUCKETS];
+            for (int shift = 0; shift < bits; shift += GC_RADIX_BITS) {
+                memset(cnt, 0, sizeof cnt);
+                for (size_t i = 0; i < n; i++) {
+                    cnt[((((uintptr_t)src[i].start - lo) >> 4) >> shift)
+                        & (GC_RADIX_BUCKETS - 1)]++;
+                }
+                size_t sum = 0;
+                for (size_t b = 0; b < GC_RADIX_BUCKETS; b++) {
+                    size_t c = cnt[b];
+                    cnt[b] = sum;
+                    sum += c;
+                }
+                for (size_t i = 0; i < n; i++) {
+                    size_t k = ((((uintptr_t)src[i].start - lo) >> 4) >> shift)
+                               & (GC_RADIX_BUCKETS - 1);
+                    dst[cnt[k]++] = src[i];
+                }
+                GCSortInterval *t = src;
+                src = dst;
+                dst = t;
+            }
+            if (src != a) memcpy(a, src, n * sizeof(GCSortInterval));
+
+            int sorted = 1;
+            for (size_t i = 1; i < n; i++) {
+                if (a[i - 1].start > a[i].start) { sorted = 0; break; }
+            }
+            if (sorted) return;
+        }
+    }
+    qsort(a, n, sizeof(GCSortInterval), cmp);
+}
+
 static void gc_build_intervals(void) {
     // Count objects
     size_t count = 0;
@@ -830,13 +912,12 @@ static void gc_build_intervals(void) {
         }
     }
 
-    qsort(gc_intervals, gc_interval_count, sizeof(GCInterval), gc_interval_cmp);
-    if (gc_data_interval_count > 0) {
-        qsort(gc_data_intervals, gc_data_interval_count, sizeof(GCDataInterval), gc_data_interval_cmp);
-    }
+    gc_sort_intervals((GCSortInterval *)gc_intervals, gc_interval_count, gc_interval_cmp);
+    gc_sort_intervals((GCSortInterval *)gc_data_intervals, gc_data_interval_count,
+                      gc_data_interval_cmp);
 
     // Coarse bounds over objects + data buffers for the fast-reject path in
-    // gc_find_object / gc_find_array_owner. O(n) but negligible beside qsort.
+    // gc_find_object / gc_find_array_owner. One sequential O(n) pass.
     if (gc_interval_count == 0 && gc_data_interval_count == 0) {
         gc_heap_min = NULL;
         gc_heap_max = NULL;
@@ -1065,6 +1146,8 @@ void __pluto_gc_collect(void) {
 
     // Build interval tables
     gc_build_intervals();
+    struct timespec gc_tb;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_tb);
 
     // Reset worklist
     gc_worklist_count = 0;
@@ -1273,6 +1356,9 @@ void __pluto_gc_collect(void) {
         gc_trace_object(obj);
     }
 
+    struct timespec gc_tm;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_tm);
+
     // ── Sweep phase ───────────────────────────────────────────────────────
     GCHeader **pp = &gc_head;
     size_t freed_bytes = 0;
@@ -1350,6 +1436,9 @@ void __pluto_gc_collect(void) {
         }
     }
 
+    struct timespec gc_ts;
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &gc_ts);
+
     gc_bytes_allocated -= freed_bytes;
 
     // Survivor-aware threshold update (policy comment at gc_threshold's
@@ -1393,10 +1482,16 @@ void __pluto_gc_collect(void) {
     if (gc_log_enabled) {
         struct timespec gc_t1;
         clock_gettime(CLOCK_MONOTONIC, &gc_t1);
-        long us = (gc_t1.tv_sec - gc_t0.tv_sec) * 1000000L
-                + (gc_t1.tv_nsec - gc_t0.tv_nsec) / 1000L;
-        fprintf(stderr, "gc: #%ld live=%zu freed=%zu next_threshold=%zu pause_us=%ld\n",
-                gc_cycle_count, gc_bytes_allocated, freed_bytes, gc_threshold, us);
+#define GC_US(a, b) (((b).tv_sec - (a).tv_sec) * 1000000L + ((b).tv_nsec - (a).tv_nsec) / 1000L)
+        // Phase split: build = interval/lookup tables, mark = root scan +
+        // trace, sweep = free unmarked objects.
+        fprintf(stderr,
+                "gc: #%ld live=%zu freed=%zu next_threshold=%zu pause_us=%ld"
+                " build_us=%ld mark_us=%ld sweep_us=%ld\n",
+                gc_cycle_count, gc_bytes_allocated, freed_bytes, gc_threshold,
+                GC_US(gc_t0, gc_t1), GC_US(gc_t0, gc_tb), GC_US(gc_tb, gc_tm),
+                GC_US(gc_tm, gc_ts));
+#undef GC_US
     }
 
     gc_collecting = 0;
