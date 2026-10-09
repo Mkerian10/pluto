@@ -1698,6 +1698,62 @@ fn must_release_statement_drop_rejected() {
     );
 }
 
+/// A `let _ = ...` discard must not launder a release obligation: discarding
+/// a freshly produced must_release value is rejected just like a statement
+/// drop (#507).
+#[test]
+fn must_release_underscore_discard_producer_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let _ = l.acquire()
+            }
+            "#,
+        ),
+        "`let _ = ...` discards Lease<Held>, a must_release state",
+    );
+}
+
+/// Discarding an obligated binding through `let _ = ...` is likewise rejected —
+/// `_` cannot silently drop a value that must be released (#507).
+#[test]
+fn must_release_underscore_discard_binding_rejected() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                let _ = h
+            }
+            "#,
+        ),
+        "`let _ = ...` discards Lease<Held>, a must_release state",
+    );
+}
+
+/// A typestate transition consumes its receiver even when the result is
+/// discarded, so using the receiver after `let _ = h.release()` is rejected;
+/// the droppable result itself discards cleanly (#507).
+#[test]
+fn must_release_underscore_discard_consumes_receiver() {
+    compile_should_fail_with(
+        &lease_src(
+            r#"
+            fn main() {
+                let l = Lease<Idle> { id: 1 }
+                let h = l.acquire()
+                let _ = h.release()
+                print(h.describe())
+            }
+            "#,
+        ),
+        "'h' was consumed by the transition '.release()'",
+    );
+}
+
 /// Branch joins are conservative: releasing on only one path leaves the
 /// obligation live after the join.
 #[test]

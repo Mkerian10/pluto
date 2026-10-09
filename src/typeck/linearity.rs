@@ -1395,6 +1395,29 @@ impl Visitor for Linearity<'_> {
         }
         match &stmt.node {
             Stmt::Let { name, ty, value, .. } => {
+                // `_` is a non-binding discard (#507). It must not launder a
+                // release obligation: dropping a must_release / typestate
+                // result (or an obligated binding) via `let _ = ...` would
+                // otherwise skip the scope-exit leak check. Reject it like an
+                // immediate drop; an ordinary value is just visited (so the
+                // receiver of `let _ = x.transition()` is still consumed) and
+                // not bound.
+                if name.node == "_" {
+                    if let Some(ob) = self.value_obligation(value) {
+                        self.error = Some(CompileError::type_err(
+                            format!(
+                                "`let _ = ...` discards {display}, a must_release state; \
+                                 bind the result (`let held = ...`) and {suggest}",
+                                display = ob.display,
+                                suggest = suggest_exits(&ob),
+                            ),
+                            value.span,
+                        ));
+                        return;
+                    }
+                    self.visit_expr(value);
+                    return;
+                }
                 // A binding at a laundering type annotation (nullable, trait)
                 // erases the obligation even though the value itself is
                 // tracked — reject the annotation form outright.
