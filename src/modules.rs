@@ -2431,7 +2431,7 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
             resolve_qualified_access_in_expr(&mut start.node, start.span, module_names, enum_name_map);
             resolve_qualified_access_in_expr(&mut end.node, end.span, module_names, enum_name_map);
         }
-        Expr::Spawn { call } => {
+        Expr::Spawn { call, .. } => {
             resolve_qualified_access_in_expr(&mut call.node, call.span, module_names, enum_name_map);
         }
         Expr::NullCoalesce { lhs, rhs } => {

@@ -5,7 +5,7 @@ use crate::visit::{walk_expr_mut, VisitMut};
 
 /// Desugar `spawn func(args)` into `spawn (=> { return func(args) })`.
 ///
-/// After this pass, `Expr::Spawn { call }` contains a `Expr::Closure` instead of
+/// After this pass, `Expr::Spawn { call, .. }` contains a `Expr::Closure` instead of
 /// an `Expr::Call`. The closure infrastructure (capture analysis, lifting, codegen)
 /// handles the rest.
 struct SpawnDesugarer;
@@ -16,7 +16,7 @@ impl VisitMut for SpawnDesugarer {
         walk_expr_mut(self, expr);
 
         // Then desugar this node if it's a Spawn
-        if let Expr::Spawn { call } = &mut expr.node {
+        if let Expr::Spawn { call, .. } = &mut expr.node {
             // Replace the Call/MethodCall with a Closure wrapping it
             let call_spanned = std::mem::replace(
                 call,
@@ -42,7 +42,7 @@ impl VisitMut for SpawnDesugarer {
 
 /// Desugar `spawn func(args)` into `spawn (=> { return func(args) })`.
 ///
-/// After this pass, `Expr::Spawn { call }` contains a `Expr::Closure` instead of
+/// After this pass, `Expr::Spawn { call, .. }` contains a `Expr::Closure` instead of
 /// an `Expr::Call`. The closure infrastructure (capture analysis, lifting, codegen)
 /// handles the rest.
 pub fn desugar_spawn(program: &mut Program) -> Result<(), CompileError> {
@@ -92,6 +92,7 @@ mod tests {
     #[test]
     fn spawn_desugars_function_call() {
         let mut expr = Expr::Spawn {
+            green: false,
             call: Box::new(spanned(Expr::Call {
                 name: spanned("foo".to_string()),
                 args: vec![],
@@ -104,7 +105,7 @@ mod tests {
 
         // Check that spawn now contains a closure
         match expr {
-            Expr::Spawn { call } => match &call.node {
+            Expr::Spawn { call, .. } => match &call.node {
                 Expr::Closure { params, body, return_type } => {
                     assert_eq!(params.len(), 0);
                     assert!(return_type.is_none());
@@ -129,6 +130,7 @@ mod tests {
     #[test]
     fn spawn_desugars_method_call() {
         let mut expr = Expr::Spawn {
+            green: false,
             call: Box::new(spanned(Expr::MethodCall {
                 object: Box::new(spanned(Expr::Ident("obj".to_string()))),
                 method: spanned("bar".to_string()),
@@ -141,7 +143,7 @@ mod tests {
 
         // Check that spawn now contains a closure
         match expr {
-            Expr::Spawn { call } => match &call.node {
+            Expr::Spawn { call, .. } => match &call.node {
                 Expr::Closure { params, body, return_type } => {
                     assert_eq!(params.len(), 0);
                     assert!(return_type.is_none());
@@ -165,6 +167,7 @@ mod tests {
     #[test]
     fn spawn_preserves_function_call_args() {
         let mut expr = Expr::Spawn {
+            green: false,
             call: Box::new(spanned(Expr::Call {
                 name: spanned("foo".to_string()),
                 args: vec![
@@ -179,7 +182,7 @@ mod tests {
         desugar_expr(&mut expr);
 
         match expr {
-            Expr::Spawn { call } => match &call.node {
+            Expr::Spawn { call, .. } => match &call.node {
                 Expr::Closure { body, .. } => match &body.node.stmts[0].node {
                     Stmt::Return(Some(ret_expr)) => match &ret_expr.node {
                         Expr::Call { name, args, .. } => {
@@ -204,6 +207,7 @@ mod tests {
         let mut expr = Expr::BinOp {
             op: BinOp::Add,
             lhs: Box::new(spanned(Expr::Spawn {
+                green: false,
                 call: Box::new(spanned(Expr::Call {
                     name: spanned("foo".to_string()),
                     args: vec![],
@@ -219,7 +223,7 @@ mod tests {
         // Check that the spawn in the lhs was desugared
         match expr {
             Expr::BinOp { lhs, .. } => match &lhs.node {
-                Expr::Spawn { call } => match &call.node {
+                Expr::Spawn { call, .. } => match &call.node {
                     Expr::Closure { .. } => {
                         // Success - spawn was desugared
                     }
@@ -237,6 +241,7 @@ mod tests {
             elements: vec![
                 spanned(Expr::IntLit(1)),
                 spanned(Expr::Spawn {
+                    green: false,
                     call: Box::new(spanned(Expr::Call {
                         name: spanned("foo".to_string()),
                         args: vec![],
@@ -254,7 +259,7 @@ mod tests {
                 assert_eq!(elements.len(), 2);
                 // Second element should be desugared spawn
                 match &elements[1].node {
-                    Expr::Spawn { call } => match &call.node {
+                    Expr::Spawn { call, .. } => match &call.node {
                         Expr::Closure { .. } => {
                             // Success
                         }
@@ -274,6 +279,7 @@ mod tests {
             ty: None,
             is_mut: false,
             value: spanned(Expr::Spawn {
+                green: false,
                 call: Box::new(spanned(Expr::Call {
                     name: spanned("foo".to_string()),
                     args: vec![],
@@ -287,7 +293,7 @@ mod tests {
 
         match stmt {
             Stmt::Let { value, .. } => match &value.node {
-                Expr::Spawn { call } => match &call.node {
+                Expr::Spawn { call, .. } => match &call.node {
                     Expr::Closure { .. } => {
                         // Success
                     }
@@ -308,6 +314,7 @@ mod tests {
                     ty: None,
                     is_mut: false,
                     value: spanned(Expr::Spawn {
+                        green: false,
                         call: Box::new(spanned(Expr::Call {
                             name: spanned("foo".to_string()),
                             args: vec![],
@@ -317,6 +324,7 @@ mod tests {
                     }),
                 }),
                 spanned(Stmt::Return(Some(spanned(Expr::Spawn {
+                    green: false,
                     call: Box::new(spanned(Expr::Call {
                         name: spanned("bar".to_string()),
                         args: vec![],
@@ -335,7 +343,7 @@ mod tests {
         // Check first statement
         match &block.stmts[0].node {
             Stmt::Let { value, .. } => match &value.node {
-                Expr::Spawn { call } => match &call.node {
+                Expr::Spawn { call, .. } => match &call.node {
                     Expr::Closure { .. } => {}
                     _ => panic!("First spawn should be desugared"),
                 },
@@ -347,7 +355,7 @@ mod tests {
         // Check second statement
         match &block.stmts[1].node {
             Stmt::Return(Some(ret_expr)) => match &ret_expr.node {
-                Expr::Spawn { call } => match &call.node {
+                Expr::Spawn { call, .. } => match &call.node {
                     Expr::Closure { .. } => {}
                     _ => panic!("Second spawn should be desugared"),
                 },

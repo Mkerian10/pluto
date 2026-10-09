@@ -492,6 +492,7 @@ mod tests {
     #[test]
     fn reject_spawn() {
         let expr = Expr::Spawn {
+            green: false,
             call: Box::new(spanned(Expr::IntLit(1))),
         };
         let result = validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant);

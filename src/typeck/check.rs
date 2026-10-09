@@ -2051,7 +2051,7 @@ fn check_expr_for_mut_method_call(
             // Recurse into object
             check_expr_for_mut_method_call(&object.node, object.span, class_name, env)?;
         }
-        Expr::Propagate { expr: inner } | Expr::Spawn { call: inner } => {
+        Expr::Propagate { expr: inner } | Expr::Spawn { call: inner, .. } => {
             check_expr_for_mut_method_call(&inner.node, inner.span, class_name, env)?;
         }
         Expr::Catch { expr: inner, handlers } => {

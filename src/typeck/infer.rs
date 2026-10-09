@@ -569,7 +569,7 @@ pub(crate) fn infer_expr(
             }
             Ok(PlutoType::Set(Box::new(et)))
         }
-        Expr::Spawn { call } => {
+        Expr::Spawn { call, .. } => {
             // After desugaring, call is a Closure wrapping the original function call.
             // Infer the closure type to get the return type.
             let closure_type = infer_expr(&call.node, call.span, env, None)?;

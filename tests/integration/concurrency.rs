@@ -1640,3 +1640,40 @@ fn task_get_in_if_expr_condition() {
     );
     assert_eq!(out.trim(), "100");
 }
+
+// ── green tasks (rfc-green-tasks.md) ────────────────────────────────────────
+// The `green` executor keyword mirrors `spawn` (same Task<T>, args, capture,
+// result via .get()). Codegen currently lowers it like a thread spawn; the
+// cooperative scheduler is wired in a later phase.
+#[test]
+fn green_task_basic_and_result() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn work(x: int) int { return x + 1 }
+        fn main() {
+            let t = green work(41)
+            let g = green work(99)
+            print(t.get())
+            print(g.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42\n100");
+}
+
+#[test]
+fn green_task_method_call() {
+    let out = compile_and_run_stdout(
+        r#"
+        class Adder { base: int
+            fn add(self, x: int) int { return self.base + x }
+        }
+        fn main() {
+            let a = Adder { base: 10 }
+            let t = green a.add(5)
+            print(t.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "15");
+}

@@ -620,7 +620,7 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Spanned<Expr>) {
                 v.visit_expr(operand);
             }
         }
-        Expr::Spawn { call } => v.visit_expr(call),
+        Expr::Spawn { call, .. } => v.visit_expr(call),
         Expr::FieldAccess { object, .. } => v.visit_expr(object),
 
         // Binary
@@ -1202,7 +1202,7 @@ pub fn walk_expr_mut<V: VisitMut>(v: &mut V, expr: &mut Spanned<Expr>) {
                 v.visit_expr_mut(operand);
             }
         }
-        Expr::Spawn { call } => v.visit_expr_mut(call),
+        Expr::Spawn { call, .. } => v.visit_expr_mut(call),
         Expr::FieldAccess { object, .. } => v.visit_expr_mut(object),
 
         Expr::BinOp { lhs, rhs, .. } => {

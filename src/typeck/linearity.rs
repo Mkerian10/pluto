@@ -2083,7 +2083,7 @@ impl Visitor for Linearity<'_> {
                 self.obligations = saved_obligations;
                 self.consumed = saved_consumed;
             }
-            Expr::Spawn { call } => {
+            Expr::Spawn { call, .. } => {
                 self.visit_expr(call);
             }
             Expr::Propagate { expr: inner } => {

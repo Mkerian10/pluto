@@ -3600,7 +3600,7 @@ impl<'a> LowerContext<'a> {
             Expr::ClosureCreate { fn_name, captures, .. } => {
                 self.lower_closure_create(fn_name, captures)
             }
-            Expr::Spawn { call } => {
+            Expr::Spawn { call, .. } => {
                 match &call.node {
                     Expr::ClosureCreate { fn_name, captures, .. } => {
                         let closure_ptr = self.lower_closure_create(fn_name, captures)?;
@@ -7070,7 +7070,7 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
                 PlutoType::Void
             }
         }
-        Expr::Spawn { call } => {
+        Expr::Spawn { call, .. } => {
             let closure_type = infer_type_for_expr(&call.node, env, var_types);
             match closure_type {
                 PlutoType::Fn(_, ret, _, _) => PlutoType::Task(ret),

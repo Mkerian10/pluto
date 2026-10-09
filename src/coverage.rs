@@ -561,7 +561,7 @@ impl<'a> CoverageScanner<'a> {
                     self.scan_stmt(s);
                 }
             }
-            Expr::Spawn { call } => self.scan_expr(&call.node),
+            Expr::Spawn { call, .. } => self.scan_expr(&call.node),
             Expr::StringInterp { parts } => {
                 for part in parts {
                     if let crate::parser::ast::StringInterpPart::Expr(expr) = part {

@@ -1638,7 +1638,7 @@ impl PrettyPrinter {
                     self.write(")");
                 }
             }
-            Expr::Spawn { call } => {
+            Expr::Spawn { call, .. } => {
                 self.write("spawn ");
                 // The inner expr should be a Call — emit it directly
                 self.emit_expr(&call.node, 0);

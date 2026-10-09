@@ -1019,7 +1019,7 @@ impl<'a> Analyzer<'a> {
                     self.scan_nested(&a.node);
                 }
             }
-            Expr::Spawn { call } => self.scan_nested(&call.node),
+            Expr::Spawn { call, .. } => self.scan_nested(&call.node),
             Expr::StructLit { fields, .. } | Expr::EnumData { fields, .. } => {
                 for (_, v) in fields {
                     self.scan_nested(&v.node);
@@ -1580,7 +1580,7 @@ impl<'a> Analyzer<'a> {
                     self.alias_scan(a);
                 }
             }
-            Expr::Spawn { call } => self.alias_scan(call),
+            Expr::Spawn { call, .. } => self.alias_scan(call),
             Expr::EnumData { fields, .. } => {
                 for (_, v) in fields {
                     self.alias_scan(v);

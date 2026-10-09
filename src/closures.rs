@@ -1132,6 +1132,7 @@ mod tests {
         let mut new_fns = Vec::new();
 
         let mut expr = Expr::Spawn {
+            green: false,
             call: Box::new(spanned(Expr::Closure {
                 params: vec![],
                 return_type: None,
@@ -1142,7 +1143,7 @@ mod tests {
         lift_in_expr(&mut expr, dummy_span(), &mut env, &mut counter, &mut new_fns).unwrap();
 
         match expr {
-            Expr::Spawn { call } => match call.node {
+            Expr::Spawn { call, .. } => match call.node {
                 Expr::ClosureCreate { .. } => {
                     assert_eq!(new_fns.len(), 1);
                 }

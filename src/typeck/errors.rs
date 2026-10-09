@@ -780,7 +780,7 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
                 ctx.edge(name.clone());
             }
         }
-        Expr::Spawn { call } => {
+        Expr::Spawn { call, .. } => {
             // Spawn is opaque to the error system — do NOT recurse into the closure body.
             // Only collect effects from spawn arg expressions (inside the closure's inner Call/MethodCall).
             if let Expr::Closure { body, .. } = &call.node {
@@ -1402,7 +1402,7 @@ fn enforce_expr(
             enforce_expr(&start.node, start.span, current_fn, env, lenient)?;
             enforce_expr(&end.node, end.span, current_fn, env, lenient)
         }
-        Expr::Spawn { call } => {
+        Expr::Spawn { call, .. } => {
             // Enforce spawn arg expressions + reject Propagate in args.
             // Do NOT enforce the inner call itself or the closure body as a whole.
             if let Expr::Closure { body, .. } = &call.node {
