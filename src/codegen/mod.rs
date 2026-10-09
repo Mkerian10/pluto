@@ -955,7 +955,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             }
 
             let test_start_ref = module.declare_func_in_func(runtime.get("__pluto_test_start"), builder.func);
-            let test_pass_ref = module.declare_func_in_func(runtime.get("__pluto_test_pass"), builder.func);
+            let test_finish_ref = module.declare_func_in_func(runtime.get("__pluto_test_finish"), builder.func);
             let string_new_ref = module.declare_func_in_func(runtime.get("__pluto_string_new"), builder.func);
             let test_run_ref = module.declare_func_in_func(runtime.get("__pluto_test_run"), builder.func);
 
@@ -1037,8 +1037,9 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
                 // call __pluto_test_run(fn_ptr, strategy, seed, iterations, schedule)
                 builder.ins().call(test_run_ref, &[fn_addr, strategy_val, seed_val, iterations_val, schedule_val]);
 
-                // call __pluto_test_pass()
-                builder.ins().call(test_pass_ref, &[]);
+                // call __pluto_test_finish() — reports ok/FAILED based on whether
+                // an uncaught error escaped the test body (#496).
+                builder.ins().call(test_finish_ref, &[]);
             }
 
             // call __pluto_test_summary(count)

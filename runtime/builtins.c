@@ -3838,6 +3838,7 @@ static char *g_current_test_name = NULL;
 static int g_current_test_skip = 0;
 static long g_tests_passed = 0;
 static long g_tests_skipped = 0;
+static long g_tests_failed = 0;
 
 const char *__pluto_test_current_name(void) {
     return g_current_test_name;
@@ -3961,8 +3962,48 @@ void __pluto_test_pass(void) {
     printf("ok\n");
 }
 
+// Called by the generated harness after __pluto_test_run returns. An uncaught
+// error that escaped the test body is left in __pluto_current_error (the
+// sequential path leaves it in the main-thread slot; the scheduler strategies
+// restore the test fiber's error before returning). Such a test FAILS — it is
+// reported as failed, counted as a failure, and makes the run exit non-zero
+// (issue #496). `expect_raises` consumes an intended raise itself, so it never
+// reaches here with the error still set.
+void __pluto_test_finish(void) {
+    if (g_current_test_skip) {
+        g_current_test_skip = 0;
+        g_tests_skipped++;
+        __pluto_clear_error();
+        return;
+    }
+    if (__pluto_current_error != NULL) {
+        g_tests_failed++;
+        if (__pluto_current_error_type) {
+            const char *data;
+            long len;
+            __pluto_string_data(__pluto_current_error_type, &data, &len);
+            printf("FAILED (uncaught %.*s)\n", (int)len, data);
+        } else {
+            printf("FAILED (uncaught error)\n");
+        }
+        // Consume the error so the atexit safety net doesn't double-report it.
+        __pluto_clear_error();
+        return;
+    }
+    g_tests_passed++;
+    printf("ok\n");
+}
+
 void __pluto_test_summary(long count) {
     (void)count;  // counted at runtime now — a --test filter skips some
+    if (g_tests_failed > 0) {
+        printf("\n%ld passed, %ld failed", g_tests_passed, g_tests_failed);
+        if (g_tests_skipped > 0) {
+            printf(" (%ld filtered out)", g_tests_skipped);
+        }
+        printf("\n");
+        exit(1);
+    }
     if (g_tests_skipped > 0) {
         printf("\n%ld tests passed (%ld filtered out)\n", g_tests_passed, g_tests_skipped);
     } else {
