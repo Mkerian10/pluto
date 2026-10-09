@@ -105,22 +105,45 @@ typedef struct GCHeader {
     uint16_t field_count;     // 2B: number of 8-byte slots to scan
 } GCHeader;
 
-// ── Sharing barrier ───────────────────────────────────────────────────────────
+// ── Write barriers ────────────────────────────────────────────────────────────
 //
-// A live object whose header `next` word is GC_SHARED_TAG is shared between
-// threads (backends with private per-thread heaps). Storing a pointer into a
-// shared object must first promote the stored value: PLUTO_GC_BARRIER checks
-// the target's header and calls __pluto_gc_promote_store only when the target
-// is shared. Every backend defines __pluto_gc_promote_store (a no-op where
-// heaps are not private); in those backends no live object carries the tag,
-// so the check never fires. Codegen emits the same inline check before
-// non-scalar field stores.
+// __pluto_gc_barrier_mode, defined by every GC backend, selects which
+// barrier is live:
+//
+//   0  none.
+//   1  promotion (--gc tlh). A live object whose header `next` word is
+//      GC_SHARED_TAG is shared between threads; storing a pointer into it
+//      must first promote the stored value (__pluto_gc_promote_store).
+//   2  snapshot-at-the-beginning (--gc incr, only while a marking cycle is
+//      in progress). A reference that is overwritten in, or removed from, a
+//      heap object is logged (__pluto_gc_log_deleted) so marking still finds
+//      everything that was reachable when the cycle began.
+//
+// PLUTO_GC_STORE(obj, old, value) guards a store of `value` into `obj` over
+// `old` (0 for a fresh slot); PLUTO_GC_DELETE(old) guards a removal. Codegen
+// emits the same logic before non-scalar field stores. Neither macro may be
+// separated from its store by anything that can reach a safepoint.
 #define GC_SHARED_TAG ((GCHeader *)(uintptr_t)1)
+extern int __pluto_gc_barrier_mode;
 void __pluto_gc_promote_store(long value);
-#define PLUTO_GC_BARRIER(obj, value)                                              \
+void __pluto_gc_log_deleted(long old);
+#define PLUTO_GC_STORE(obj, old, value)                                           \
     do {                                                                          \
-        if (((GCHeader *)((char *)(obj) - sizeof(GCHeader)))->next == GC_SHARED_TAG) \
-            __pluto_gc_promote_store((long)(value));                              \
+        int m_ = __pluto_gc_barrier_mode;                                         \
+        if (__builtin_expect(m_ != 0, 0)) {                                       \
+            if (m_ == 1) {                                                        \
+                if (((GCHeader *)((char *)(obj) - sizeof(GCHeader)))->next        \
+                    == GC_SHARED_TAG)                                             \
+                    __pluto_gc_promote_store((long)(value));                      \
+            } else if ((old) != 0) {                                              \
+                __pluto_gc_log_deleted((long)(old));                              \
+            }                                                                     \
+        }                                                                         \
+    } while (0)
+#define PLUTO_GC_DELETE(old)                                                      \
+    do {                                                                          \
+        if (__builtin_expect(__pluto_gc_barrier_mode == 2, 0))                    \
+            __pluto_gc_log_deleted((long)(old));                                  \
     } while (0)
 
 // ── Channel Sync (Production Mode Only) ──────────────────────────────────────

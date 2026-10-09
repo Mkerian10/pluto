@@ -112,23 +112,48 @@ impl<'a> LowerContext<'a> {
         self.builder.ins().call(func_ref, args);
     }
 
-    /// Sharing barrier (GC_SHARED_TAG in runtime/builtins.h): before storing a
-    /// pointer into an existing heap object, promote the stored value if the
-    /// target is shared between threads. Inline cost is one load of the
-    /// target's header word and one compare; the call runs only for shared
-    /// targets — never, in backends without private per-thread heaps (no
-    /// live object carries the tag there).
-    fn emit_gc_barrier(&mut self, obj_ptr: Value, val: Value) {
+    /// Write barrier before storing `val` into the pointer slot at
+    /// `obj_ptr + offset` of an existing heap object (runtime/builtins.h,
+    /// PLUTO_GC_STORE). Inline cost when no barrier is live is one load of
+    /// `__pluto_gc_barrier_mode` and a branch. Mode 1 (tlh) promotes `val`
+    /// when the target's header carries the shared tag; mode 2 (incr, while
+    /// marking) logs the slot's current value, which the store is about to
+    /// overwrite. Must be emitted immediately before the store.
+    fn emit_gc_barrier(&mut self, obj_ptr: Value, offset: i32, val: Value) {
+        let gv = self.module.declare_data_in_func(self.runtime.gc_barrier_mode(), self.builder.func);
+        let mode_addr = self.builder.ins().global_value(types::I64, gv);
+        let mode = self.builder.ins().load(types::I32, MemFlags::trusted(), mode_addr, 0);
+        let live_bb = self.builder.create_block();
+        let promote_bb = self.builder.create_block();
+        let promote_call_bb = self.builder.create_block();
+        let log_bb = self.builder.create_block();
+        let cont_bb = self.builder.create_block();
+        self.builder.ins().brif(mode, live_bb, &[], cont_bb, &[]);
+
+        self.builder.switch_to_block(live_bb);
+        self.builder.seal_block(live_bb);
+        let is_promote = self.builder.ins().icmp_imm(IntCC::Equal, mode, 1);
+        self.builder.ins().brif(is_promote, promote_bb, &[], log_bb, &[]);
+
+        self.builder.switch_to_block(promote_bb);
+        self.builder.seal_block(promote_bb);
         let hdr_next = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(-16));
         let is_shared = self.builder.ins().icmp_imm(IntCC::Equal, hdr_next, 1);
-        let call_bb = self.builder.create_block();
-        let cont_bb = self.builder.create_block();
-        self.builder.ins().brif(is_shared, call_bb, &[], cont_bb, &[]);
-        self.builder.switch_to_block(call_bb);
-        self.builder.seal_block(call_bb);
-        self.builder.set_cold_block(call_bb);
+        self.builder.ins().brif(is_shared, promote_call_bb, &[], cont_bb, &[]);
+
+        self.builder.switch_to_block(promote_call_bb);
+        self.builder.seal_block(promote_call_bb);
+        self.builder.set_cold_block(promote_call_bb);
         self.call_runtime_void("__pluto_gc_promote_store", &[val]);
         self.builder.ins().jump(cont_bb, &[]);
+
+        self.builder.switch_to_block(log_bb);
+        self.builder.seal_block(log_bb);
+        self.builder.set_cold_block(log_bb);
+        let old = self.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, Offset32::new(offset));
+        self.call_runtime_void("__pluto_gc_log_deleted", &[old]);
+        self.builder.ins().jump(cont_bb, &[]);
+
         self.builder.switch_to_block(cont_bb);
         self.builder.seal_block(cont_bb);
     }
@@ -635,7 +660,7 @@ impl<'a> LowerContext<'a> {
                     let offset = pos as i32 * POINTER_SIZE;
                     let val = self.coerce_to_expected_type(val, &val_type, &field_type)?;
                     if type_holds_pointer(&field_type) {
-                        self.emit_gc_barrier(ptr, val);
+                        self.emit_gc_barrier(ptr, offset, val);
                     }
                     self.builder.ins().store(MemFlags::new(), val, ptr, Offset32::new(offset));
                 }
@@ -2548,7 +2573,7 @@ impl<'a> LowerContext<'a> {
                         name, &resolution.field_wirings, &seed_vals, &scoped_locals,
                     )?,
                 };
-                self.emit_gc_barrier(seed_ptr, dep_val);
+                self.emit_gc_barrier(seed_ptr, offset, dep_val);
                 self.builder.ins().store(MemFlags::new(), dep_val, seed_ptr, Offset32::new(offset));
             }
         }
@@ -6189,7 +6214,7 @@ fn lower_generator_block(
                 let slot_val = to_array_slot(val, &val_type, &mut ctx.builder);
                 let gen_ptr = ctx.builder.use_var(gen_ptr_var);
                 if type_holds_pointer(&val_type) {
-                    ctx.emit_gc_barrier(gen_ptr, slot_val);
+                    ctx.emit_gc_barrier(gen_ptr, 24, slot_val);
                 }
                 ctx.builder.ins().store(MemFlags::new(), slot_val, gen_ptr, Offset32::new(24));
 
@@ -6200,7 +6225,7 @@ fn lower_generator_block(
                     let offset = (4 + i) as i32 * POINTER_SIZE;
                     let gen_ptr = ctx.builder.use_var(gen_ptr_var);
                     if type_holds_pointer(ty) {
-                        ctx.emit_gc_barrier(gen_ptr, slot);
+                        ctx.emit_gc_barrier(gen_ptr, offset, slot);
                     }
                     ctx.builder.ins().store(MemFlags::new(), slot, gen_ptr, Offset32::new(offset));
                 }
@@ -6212,7 +6237,7 @@ fn lower_generator_block(
                     let offset = (4 + num_params + i) as i32 * POINTER_SIZE;
                     let gen_ptr = ctx.builder.use_var(gen_ptr_var);
                     if type_holds_pointer(ty) {
-                        ctx.emit_gc_barrier(gen_ptr, slot);
+                        ctx.emit_gc_barrier(gen_ptr, offset, slot);
                     }
                     ctx.builder.ins().store(MemFlags::new(), slot, gen_ptr, Offset32::new(offset));
                 }
