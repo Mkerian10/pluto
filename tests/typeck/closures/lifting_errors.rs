@@ -19,7 +19,7 @@ print(f()+g())}"#); }
 
 // Closure in match arm captures match binding
 #[test]
-fn capture_match_arm_binding() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:1}{E.A{x}{let f=()=>x}}}"#, "expected ., found :"); }
+fn capture_match_arm_binding() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:1}{E.A{x}{let f=()=>x}}}"#, "wrap it in parentheses"); }
 
 // Closure parameter shadows capture
 #[test]
