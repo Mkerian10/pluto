@@ -221,6 +221,14 @@ pub struct TypeEnv {
     /// analysis for a green-task boundary check (#369) and a safe CPU-only
     /// spawn pool. Currently computed but not yet enforced.
     pub blocking_fns: HashSet<String>,
+    /// Functions/methods (mangled names) that MIGHT block because they reach a
+    /// call the analysis can't resolve to a concrete target — a trait dynamic
+    /// dispatch, an unresolved method call, or a call through a closure /
+    /// function-reference variable. Conservative: a sound pool/green gate must
+    /// treat `blocking_fns ∪ blocking_opaque_fns` as "cannot prove non-blocking".
+    /// Kept separate from `blocking_fns` so a diagnostic can distinguish a
+    /// definite block from an unprovable one. Computed by `blocking::infer_blocking_effects`.
+    pub blocking_opaque_fns: HashSet<String>,
     /// Per-function error sets: maps function name to set of error type names it can raise.
     /// Populated by the error inference pass. Also holds per-closure nodes
     /// keyed as `<closure@span>` for closures bound to local variables.
@@ -580,6 +588,7 @@ impl TypeEnv {
             di_zero_closure: Vec::new(),
             synchronized_singletons: HashSet::new(),
             blocking_fns: HashSet::new(),
+            blocking_opaque_fns: HashSet::new(),
             fn_errors: HashMap::new(),
             closure_call_sites: HashMap::new(),
             fallible_value_calls: HashSet::new(),

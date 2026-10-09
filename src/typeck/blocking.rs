@@ -68,14 +68,30 @@ pub fn infer_blocking_effects(program: &Program, env: &mut TypeEnv) {
     let leaves: HashSet<String> =
         BLOCKING_EXTERN_LEAVES.iter().map(|s| s.to_string()).collect();
 
-    // Step 1: per-node direct blocking + call edges.
+    // Names a bare `Expr::Call` may target without being opaque: top-level
+    // functions, extern bindings, and builtins. A call to any other name is a
+    // closure / function-reference variable whose target we cannot resolve —
+    // conservatively opaque (it might reach a blocking op we can't see).
+    let mut known_bare: HashSet<String> = env.builtins.clone();
+    for func in &program.functions {
+        known_bare.insert(func.node.name.node.clone());
+    }
+    for ext in &program.extern_fns {
+        known_bare.insert(ext.node.name.node.clone());
+    }
+
+    // Step 1: per-node direct blocking, direct opacity, and call edges.
     let mut directly_blocks: HashSet<String> = HashSet::new();
+    let mut directly_opaque: HashSet<String> = HashSet::new();
     let mut call_edges: HashMap<String, HashSet<String>> = HashMap::new();
 
     let mut collect = |node_name: String, body: &Block, env: &TypeEnv| {
-        let (blocks, edges) = collect_block(body, &node_name, env, &leaves);
+        let (blocks, opaque, edges) = collect_block(body, &node_name, env, &leaves, &known_bare);
         if blocks {
             directly_blocks.insert(node_name.clone());
+        }
+        if opaque {
+            directly_opaque.insert(node_name.clone());
         }
         call_edges.entry(node_name).or_default().extend(edges);
     };
@@ -121,17 +137,31 @@ pub fn infer_blocking_effects(program: &Program, env: &mut TypeEnv) {
         }
     }
 
-    // Step 2: fixed point — a node blocks if it directly blocks or calls a
-    // node that blocks (an extern leaf counts as a blocking callee).
-    let mut blocking: HashSet<String> = directly_blocks;
+    // Step 2: two union fixed points over the same call graph.
+    //   blocking — reaches a blocking leaf (extern leaves count as callees).
+    //   opaque   — reaches an unresolvable call (no extern leaves; seeded only
+    //              by direct opacity, propagated through edges).
+    let empty = HashSet::new();
+    env.blocking_fns = fixpoint(&call_edges, directly_blocks, &leaves);
+    env.blocking_opaque_fns = fixpoint(&call_edges, directly_opaque, &empty);
+}
+
+/// Union fixed point: a node joins `set` if it is seeded, or it has an edge to
+/// a node already in `set` or to a `leaf`.
+fn fixpoint(
+    call_edges: &HashMap<String, HashSet<String>>,
+    seed: HashSet<String>,
+    leaves: &HashSet<String>,
+) -> HashSet<String> {
+    let mut set = seed;
     loop {
         let mut changed = false;
-        for (node, edges) in &call_edges {
-            if blocking.contains(node) {
+        for (node, edges) in call_edges {
+            if set.contains(node) {
                 continue;
             }
-            if edges.iter().any(|c| blocking.contains(c) || leaves.contains(c)) {
-                blocking.insert(node.clone());
+            if edges.iter().any(|c| set.contains(c) || leaves.contains(c)) {
+                set.insert(node.clone());
                 changed = true;
             }
         }
@@ -139,18 +169,19 @@ pub fn infer_blocking_effects(program: &Program, env: &mut TypeEnv) {
             break;
         }
     }
-
-    env.blocking_fns = blocking;
+    set
 }
 
 /// Visitor collecting, for one node body: whether it directly hits a blocking
 /// leaf, and its outgoing call edges (callee names/mangled names).
 struct BlockingCollector<'a> {
     blocks: bool,
+    opaque: bool,
     edges: &'a mut HashSet<String>,
     current_fn: &'a str,
     env: &'a TypeEnv,
     leaves: &'a HashSet<String>,
+    known_bare: &'a HashSet<String>,
 }
 
 impl Visitor for BlockingCollector<'_> {
@@ -160,19 +191,34 @@ impl Visitor for BlockingCollector<'_> {
                 let n = name.node.clone();
                 if self.leaves.contains(&n) {
                     self.blocks = true;
+                } else if !self.known_bare.contains(&n) {
+                    // Target is not a known function/extern/builtin — a call
+                    // through a closure or function-reference variable, whose
+                    // body we cannot inspect. Conservatively opaque.
+                    self.opaque = true;
                 }
                 self.edges.insert(n);
             }
             Expr::MethodCall { method, .. } => {
                 let key = (self.current_fn.to_string(), method.span.start);
-                if let Some(res) = self.env.method_resolutions.get(&key) {
-                    if resolution_is_blocking(res) {
+                match self.env.method_resolutions.get(&key) {
+                    Some(res) if resolution_is_blocking(res) => {
                         self.blocks = true;
                     }
-                    if let MethodResolution::Class { mangled_name }
-                    | MethodResolution::RemoteClass { mangled_name } = res
-                    {
+                    Some(MethodResolution::Class { mangled_name })
+                    | Some(MethodResolution::RemoteClass { mangled_name }) => {
                         self.edges.insert(mangled_name.clone());
+                    }
+                    // Dynamic dispatch: the concrete impl is unknown and may
+                    // block. Conservatively opaque.
+                    Some(MethodResolution::TraitDynamic { .. }) => {
+                        self.opaque = true;
+                    }
+                    // Infallible, non-blocking builtins and try_*/detach/cancel.
+                    Some(_) => {}
+                    // No resolution recorded for a method call — unanalyzable.
+                    None => {
+                        self.opaque = true;
                     }
                 }
             }
@@ -221,20 +267,24 @@ fn collect_block(
     current_fn: &str,
     env: &TypeEnv,
     leaves: &HashSet<String>,
-) -> (bool, HashSet<String>) {
+    known_bare: &HashSet<String>,
+) -> (bool, bool, HashSet<String>) {
     let mut edges = HashSet::new();
     let mut collector = BlockingCollector {
         blocks: false,
+        opaque: false,
         edges: &mut edges,
         current_fn,
         env,
         leaves,
+        known_bare,
     };
     for stmt in &block.stmts {
         collector.visit_stmt(stmt);
     }
     let blocks = collector.blocks;
-    (blocks, edges)
+    let opaque = collector.opaque;
+    (blocks, opaque, edges)
 }
 
 #[cfg(test)]
@@ -300,6 +350,44 @@ fn main() {
         );
         assert!(b.contains("joiner"), "joiner .get()s a task → blocks; got {b:?}");
         assert!(!b.contains("poller"), "try_recv never parks → not blocking; got {b:?}");
+    }
+
+    fn opaque_fns(src: &str) -> std::collections::HashSet<String> {
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let mut program = parser.parse_program().unwrap();
+        crate::modules::resolve_qualified_access_single_file(&mut program).unwrap();
+        let result = crate::run_frontend(&mut program, false).unwrap();
+        result.env.blocking_opaque_fns
+    }
+
+    #[test]
+    fn unresolvable_calls_are_conservatively_opaque() {
+        let src = r#"
+trait Greeter {
+    fn greet(self) int
+}
+fn via_trait(g: Greeter) int {
+    return g.greet()
+}
+fn apply(f: fn(int) int, x: int) int {
+    return f(x)
+}
+fn b(x: int) int {
+    return x * 2
+}
+fn a(x: int) int {
+    return b(x) + 1
+}
+fn main() {
+    print(a(3))
+}
+"#;
+        let o = opaque_fns(src);
+        assert!(o.contains("via_trait"), "trait dynamic dispatch is opaque; got {o:?}");
+        assert!(o.contains("apply"), "call through a fn-ref variable is opaque; got {o:?}");
+        assert!(!o.contains("a"), "a → b are fully resolved named calls; got {o:?}");
+        assert!(!o.contains("b"), "b is pure; got {o:?}");
     }
 
     #[test]
