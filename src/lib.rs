@@ -702,6 +702,18 @@ fn runtime_log(msg: &str) {
     }
 }
 
+/// C compiler flags for every runtime translation unit. Part of the runtime
+/// cache key, so changing them invalidates previously cached objects.
+///
+/// `-O2`: the runtime (GC, strings, maps, threading) was historically built
+/// unoptimized; collection and hot builtins are dominated by small helper
+/// calls that only become cheap with inlining.
+/// `-fno-strict-aliasing`: the runtime type-puns heap words through
+/// `long *` / `void *` throughout; keep that well-defined.
+/// `-fwrapv`: signed overflow wraps (hash mixing, integer helpers), matching
+/// the behavior the code was written and tested against.
+const RUNTIME_CFLAGS: &[&str] = &["-O2", "-fno-strict-aliasing", "-fwrapv"];
+
 fn runtime_cache_key(test_mode: bool, gc: GcBackend) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -715,6 +727,7 @@ fn runtime_cache_key(test_mode: bool, gc: GcBackend) -> String {
     include_str!("../runtime/miniz.c").hash(&mut hasher);
     include_str!("../runtime/miniz.h").hash(&mut hasher);
     test_mode.hash(&mut hasher);
+    RUNTIME_CFLAGS.hash(&mut hasher);
     gc.name().hash(&mut hasher);
     std::env::consts::ARCH.hash(&mut hasher);
     std::env::consts::OS.hash(&mut hasher);
@@ -831,7 +844,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
 
     // Compile gc.c
     let mut cmd = std::process::Command::new("cc");
-    cmd.arg("-c");
+    cmd.arg("-c").args(RUNTIME_CFLAGS);
     if test_mode {
         cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
     }
@@ -849,7 +862,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
 
     // Compile threading.c
     let mut cmd = std::process::Command::new("cc");
-    cmd.arg("-c");
+    cmd.arg("-c").args(RUNTIME_CFLAGS);
     if test_mode {
         cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
     }
@@ -867,7 +880,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
 
     // Compile builtins.c
     let mut cmd = std::process::Command::new("cc");
-    cmd.arg("-c");
+    cmd.arg("-c").args(RUNTIME_CFLAGS);
     if test_mode {
         cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
     }
@@ -885,7 +898,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
 
     // Compile coverage.c
     let mut cmd = std::process::Command::new("cc");
-    cmd.arg("-c");
+    cmd.arg("-c").args(RUNTIME_CFLAGS);
     if test_mode {
         cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
     }
@@ -901,7 +914,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     // archive APIs and stdio dependency are compiled out: std.compress needs
     // only the raw deflate/inflate core plus the zlib-style CRC-32 helper.
     let mut cmd = std::process::Command::new("cc");
-    cmd.arg("-c");
+    cmd.arg("-c").args(RUNTIME_CFLAGS);
     if test_mode {
         cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
     }
@@ -916,7 +929,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
 
     // Compile compress.c (std.compress runtime wrappers over miniz).
     let mut cmd = std::process::Command::new("cc");
-    cmd.arg("-c");
+    cmd.arg("-c").args(RUNTIME_CFLAGS);
     if test_mode {
         cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
     }
