@@ -264,9 +264,9 @@ fn check_stmt(
                     value.span,
                 ));
             }
-            // Check for collisions with global declarations (only for let, not params/bindings)
-            env.check_global_name_collision(&name.node, name.span)?;
-            if let Some(declared_ty) = ty {
+            // Validate an explicit annotation against the value type (done even
+            // for a discard — only the binding itself is skipped for `_`).
+            let bound_type = if let Some(declared_ty) = ty {
                 let expected = resolve_type(declared_ty, env)?;
                 if !types_compatible(&val_type, &expected, env) {
                     return Err(CompileError::type_err(
@@ -274,53 +274,66 @@ fn check_stmt(
                         value.span,
                     ));
                 }
-                env.define(name.node.clone(), expected.clone(), name.span)?;
+                expected
             } else {
-                env.define(name.node.clone(), val_type.clone(), name.span)?;
-            }
-            // Fn-value provenance: remember which error-graph node a
-            // fn-valued variable came from (closure literal, function
-            // reference, or another tracked variable), for boundary checks.
-            match &value.node {
-                Expr::Closure { body, .. } => {
-                    let node = super::errors::closure_node_key(body.span);
-                    env.fn_value_provenance.insert(name.node.clone(), node);
-                }
-                Expr::Ident(refname) => {
-                    let key = (value.span.start, value.span.end);
-                    if env.fn_ref_sites.get(&key) == Some(refname) {
-                        env.fn_value_provenance.insert(name.node.clone(), refname.clone());
-                    } else if let Some(p) = env.fn_value_provenance.lookup(refname).cloned() {
-                        env.fn_value_provenance.insert(name.node.clone(), p);
+                val_type.clone()
+            };
+
+            if name.node == "_" {
+                // `_` is a non-binding, repeatable discard: declare no variable
+                // and track nothing, so a second `let _ = ...` in the same scope
+                // is fine. The value was still inferred above for its type,
+                // errors, and side effects. Linearity (linearity.rs) separately
+                // rejects discarding a value that carries a release obligation,
+                // so `_` cannot launder a must_release / typestate result (#507).
+            } else {
+                // Check for collisions with global declarations (only for let, not params/bindings)
+                env.check_global_name_collision(&name.node, name.span)?;
+                env.define(name.node.clone(), bound_type, name.span)?;
+                // Fn-value provenance: remember which error-graph node a
+                // fn-valued variable came from (closure literal, function
+                // reference, or another tracked variable), for boundary checks.
+                match &value.node {
+                    Expr::Closure { body, .. } => {
+                        let node = super::errors::closure_node_key(body.span);
+                        env.fn_value_provenance.insert(name.node.clone(), node);
                     }
+                    Expr::Ident(refname) => {
+                        let key = (value.span.start, value.span.end);
+                        if env.fn_ref_sites.get(&key) == Some(refname) {
+                            env.fn_value_provenance.insert(name.node.clone(), refname.clone());
+                        } else if let Some(p) = env.fn_value_provenance.lookup(refname).cloned() {
+                            env.fn_value_provenance.insert(name.node.clone(), p);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            }
-            // A fn-valued binding with an explicit *infallible* annotation is
-            // a boundary: `let f: fn(int) int = fallible_thing` must fail.
-            if let Some(declared_ty) = ty {
-                let expected = resolve_type(declared_ty, env)?;
-                record_fn_value_boundary(value, &expected, env);
-            }
-            // Track immutable bindings (let without mut)
-            if !is_mut {
-                env.mark_immutable(&name.node);
-            }
-            // Track variable declaration for unused-variable warnings
-            let depth = env.scope_depth() - 1;
-            env.variable_decls.insert((name.node.clone(), depth), name.span);
-            // Track task origin for spawn expressions
-            if let Expr::Spawn { .. } = &value.node && let Some(fn_name) = env.spawn_target_fns.get(&(value.span.start, value.span.end)) {
-                env.define_task_origin(name.node.clone(), fn_name.clone());
-            }
-            // Track taint propagation: if inside a scope block and value is tainted, mark variable
-            if !env.scope_tainted.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
-                env.scope_tainted.insert(name.node.clone(), ());
-            }
-            // Flow facts: a direct `xs.len()` binding transfers the length
-            // term's facts to the new variable (facts.rs::binding_facts).
-            for f in super::facts::binding_facts(&name.node, &value.node, env) {
-                env.facts.assume(f);
+                // A fn-valued binding with an explicit *infallible* annotation is
+                // a boundary: `let f: fn(int) int = fallible_thing` must fail.
+                if let Some(declared_ty) = ty {
+                    let expected = resolve_type(declared_ty, env)?;
+                    record_fn_value_boundary(value, &expected, env);
+                }
+                // Track immutable bindings (let without mut)
+                if !is_mut {
+                    env.mark_immutable(&name.node);
+                }
+                // Track variable declaration for unused-variable warnings
+                let depth = env.scope_depth() - 1;
+                env.variable_decls.insert((name.node.clone(), depth), name.span);
+                // Track task origin for spawn expressions
+                if let Expr::Spawn { .. } = &value.node && let Some(fn_name) = env.spawn_target_fns.get(&(value.span.start, value.span.end)) {
+                    env.define_task_origin(name.node.clone(), fn_name.clone());
+                }
+                // Track taint propagation: if inside a scope block and value is tainted, mark variable
+                if !env.scope_tainted.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
+                    env.scope_tainted.insert(name.node.clone(), ());
+                }
+                // Flow facts: a direct `xs.len()` binding transfers the length
+                // term's facts to the new variable (facts.rs::binding_facts).
+                for f in super::facts::binding_facts(&name.node, &value.node, env) {
+                    env.facts.assume(f);
+                }
             }
         }
         Stmt::Return(value) => {

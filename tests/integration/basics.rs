@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_and_run, compile_batch_stdout, compile_should_fail_with, pluto};
+use common::{compile_and_run, compile_and_run_stdout, compile_batch_stdout, compile_should_fail_with, pluto};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -394,6 +394,30 @@ fn cli_compile_error_formatting() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("error"), "Expected CLI error format, got: {}", stderr);
+}
+
+#[test]
+fn underscore_is_a_repeatable_discard() {
+    // `_` is a non-binding wildcard discard: several `let _ = ...` in the same
+    // scope are fine (a common shape in decoders that read fields only to
+    // advance a cursor), and the right-hand sides still run for their side
+    // effects (#507).
+    let out = compile_and_run_stdout(
+        r#"
+        fn step(n: int) int {
+            print(n)
+            return n
+        }
+
+        fn main() {
+            let _ = step(1)
+            let _ = step(2)
+            let _ = step(3)
+            print(99)
+        }
+        "#,
+    );
+    assert_eq!(out, "1\n2\n3\n99\n");
 }
 
 #[test]
