@@ -387,6 +387,8 @@ void *__pluto_array_slice(void *handle, long start, long end) {
     if (start > end) start = end;
     long new_len = end - start;
     long *data = (long *)h[2];
+    // Filled with raw stores: nothing between the allocation and the last
+    // store can reach a safepoint, so no collection sees it half-built.
     void *new_handle = __pluto_array_new(new_len > 0 ? new_len : 1);
     long *nh = (long *)new_handle;
     long *new_data = (long *)nh[2];

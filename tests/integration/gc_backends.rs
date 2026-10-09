@@ -60,3 +60,11 @@ fn references_moved_during_marking() {
 fn elements_moved_behind_a_chunked_scan() {
     differential("chunks.pt");
 }
+
+/// Containers the runtime fills with plain stores (array slices) while their
+/// elements are young: no collection may see a container before the call
+/// that allocates it returns (once broke hybrid's clean-container flag).
+#[test]
+fn runtime_filled_containers_with_young_elements() {
+    differential("slices.pt");
+}

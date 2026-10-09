@@ -1502,9 +1502,14 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
         // Allocate new data buffer (raw malloc, like __pluto_array_new)
         long *new_data = (long *)calloc((size_t)cap, sizeof(long));
         copy[2] = (long)new_data;
-        // Deep-copy each element
+        // Deep-copy each element. Copying an element allocates, so a
+        // collection can see this array half-filled: every store goes
+        // through the barrier like any other container store (it keeps a
+        // hybrid local collection's "all elements shared" verdict honest).
         for (long i = 0; i < len; i++) {
-            new_data[i] = dc_copy_slot(src_data[i], visited);
+            long v = dc_copy_slot(src_data[i], visited);
+            PLUTO_GC_STORE(copy, 0, v);
+            new_data[i] = v;
         }
         return (long)copy;
     }
@@ -1559,9 +1564,13 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
         copy[4] = (long)new_meta;
 
         for (long i = 0; i < cap; i++) {
-            if (src_meta[i] >= 0x80) {
-                new_keys[i] = dc_copy_slot(src_keys[i], visited);
-                new_vals[i] = dc_copy_slot(src_vals[i], visited);
+            if (src_meta[i] >= 0x80) {   // stores barriered: see the array case
+                long k = dc_copy_slot(src_keys[i], visited);
+                PLUTO_GC_STORE(copy, 0, k);
+                new_keys[i] = k;
+                long v = dc_copy_slot(src_vals[i], visited);
+                PLUTO_GC_STORE(copy, 0, v);
+                new_vals[i] = v;
             }
         }
         return (long)copy;
@@ -1587,8 +1596,10 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
         copy[3] = (long)new_meta;
 
         for (long i = 0; i < cap; i++) {
-            if (src_meta[i] >= 0x80) {
-                new_keys[i] = dc_copy_slot(src_keys[i], visited);
+            if (src_meta[i] >= 0x80) {   // stores barriered: see the array case
+                long k = dc_copy_slot(src_keys[i], visited);
+                PLUTO_GC_STORE(copy, 0, k);
+                new_keys[i] = k;
             }
         }
         return (long)copy;
