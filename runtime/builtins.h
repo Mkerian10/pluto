@@ -122,9 +122,14 @@ typedef struct GCHeader {
 //
 // PLUTO_GC_STORE(obj, old, value) guards a store of `value` into `obj` over
 // `old` (0 for a fresh slot); PLUTO_GC_DELETE(old) guards a removal. Codegen
-// emits the same logic before non-scalar field stores. Neither macro may be
-// separated from its store by anything that can reach a safepoint.
+// emits the same logic before non-scalar field stores (class fields: never a
+// container, so never GC_MARK_CLEAN). Neither macro may be separated from
+// its store by anything that can reach a safepoint.
 #define GC_SHARED_TAG ((GCHeader *)(uintptr_t)1)
+// Hybrid: a private container whose elements were all shared when a local
+// collection last scanned it. Local collections skip its elements until a
+// store into it (which always goes through PLUTO_GC_STORE) clears the bit.
+#define GC_MARK_CLEAN 0x20
 extern int __pluto_gc_barrier_mode;
 void __pluto_gc_promote_store(long value);
 void __pluto_gc_log_deleted(long old);
@@ -132,10 +137,13 @@ void __pluto_gc_log_deleted(long old);
     do {                                                                          \
         int m_ = __pluto_gc_barrier_mode;                                         \
         if (__builtin_expect(m_ != 0, 0)) {                                       \
-            if ((m_ & 1)                                                          \
-                && ((GCHeader *)((char *)(obj) - sizeof(GCHeader)))->next         \
-                   == GC_SHARED_TAG)                                              \
-                __pluto_gc_promote_store((long)(value));                          \
+            if (m_ & 1) {                                                         \
+                GCHeader *h_ = (GCHeader *)((char *)(obj) - sizeof(GCHeader));    \
+                if (h_->next == GC_SHARED_TAG)                                    \
+                    __pluto_gc_promote_store((long)(value));                      \
+                else if (h_->mark & GC_MARK_CLEAN)                                \
+                    h_->mark &= (uint8_t)~GC_MARK_CLEAN;                          \
+            }                                                                     \
             if ((m_ & 2) && (old) != 0) __pluto_gc_log_deleted((long)(old));      \
         }                                                                         \
     } while (0)
