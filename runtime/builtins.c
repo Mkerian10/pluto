@@ -325,7 +325,7 @@ long __pluto_array_first(void *handle) {
 
 void __pluto_array_clear(void *handle) {
     long *h = (long *)handle;
-    if (__pluto_gc_barrier_mode == 2) {
+    if (__pluto_gc_barrier_mode & 2) {
         long *data = (long *)h[2];
         for (long i = 0; i < h[0]; i++) PLUTO_GC_DELETE(data[i]);
     }
@@ -344,7 +344,7 @@ long __pluto_array_remove_at(void *handle, long index) {
     PLUTO_GC_DELETE(removed);
     // Elements moving to lower indices can cross an incremental collector's
     // scan cursor: log them while it marks.
-    if (__pluto_gc_barrier_mode == 2) {
+    if (__pluto_gc_barrier_mode & 2) {
         for (long i = index + 1; i < len; i++) PLUTO_GC_DELETE(data[i]);
     }
     for (long i = index; i < len - 1; i++) {
@@ -401,7 +401,7 @@ void __pluto_array_reverse(void *handle) {
     long *h = (long *)handle;
     long len = h[0];
     long *data = (long *)h[2];
-    if (__pluto_gc_barrier_mode == 2) {   // every element moves (see remove_at)
+    if (__pluto_gc_barrier_mode & 2) {   // every element moves (see remove_at)
         for (long i = 0; i < len; i++) PLUTO_GC_DELETE(data[i]);
     }
     for (long i = 0; i < len / 2; i++) {
