@@ -47,7 +47,11 @@ void __pluto_safepoint(void) {
 }
 
 void *__pluto_alloc(long size) {
-    return gc_alloc((size_t)size, GC_TAG_OBJECT, 0);
+    // field_count must match the mark-sweep backend: structural equality
+    // and deep copy walk field_count slots (0 would make every pair of
+    // same-class objects compare equal).
+    if (size == 0) size = 8;
+    return gc_alloc((size_t)size, GC_TAG_OBJECT, (uint16_t)(size / 8));
 }
 
 void *__pluto_alloc_entity(long size) {
@@ -55,7 +59,7 @@ void *__pluto_alloc_entity(long size) {
     // __pluto_entity_rdlock/wrlock in threading.c). Never freed here — the
     // noop backend never collects.
     if (size == 0) size = 8;
-    long *ptr = (long *)gc_alloc((size_t)size + 8, GC_TAG_ENTITY, 0);
+    long *ptr = (long *)gc_alloc((size_t)size + 8, GC_TAG_ENTITY, (uint16_t)(size / 8));
     // Both modes: test mode carries a real fiber-aware lock too
     // (rfc-test-harness phase 4 — lock sites are preemption points).
     ptr[size / 8] = __pluto_rwlock_init();
