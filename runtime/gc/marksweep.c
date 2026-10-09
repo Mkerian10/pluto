@@ -131,6 +131,7 @@ static GCMarkCtx gc_global_ctx;
 #define GC_MARK_GLOBAL 2
 #define GC_MARK_ROOT   0x10   // hybrid: referenced straight from a root this local collection
 #define GC_MARK_PROMOTE 0x40  // hybrid: reached from an object this local collection promotes
+#define GC_MARK_LISTED 0x80   // tlh: on its heap's private-container list (survives sweeps)
 // Every thread-local the trace consults lives in one struct reached through
 // a pointer (T) that the hot functions take as a parameter: on macOS each
 // access to a __thread variable is a call into the dynamic linker's TLV
@@ -649,6 +650,8 @@ typedef struct GCThreadHeap {
                                // still owned here) until handed back under gc_mutex
     GCBlock *dead_large;       // large objects freed by local collections, unmapped
                                // under gc_mutex
+    GCHeader **conts;          // containers this heap allocated that may still be
+    size_t nconts, conts_cap;  // private (see gc_tlh_build_local_intervals)
     long torture_count;
     long local_count;
 #endif
@@ -696,6 +699,21 @@ static void gc_tlh_own(GCThreadHeap *H, GCBlock *b) {   // under gc_mutex or STW
     H->blocks[H->nblocks++] = b;
 }
 
+#if defined(GC_TLH)
+static void gc_oom(const char *what);
+static inline void gc_tlh_list_container(GCThreadHeap *H, GCHeader *h) {
+    if (H->nconts == H->conts_cap) {
+        size_t cap = H->conts_cap ? H->conts_cap * 2 : 256;
+        GCHeader **grown = (GCHeader **)realloc(H->conts, cap * sizeof(GCHeader *));
+        if (!grown) gc_oom("GC container list");
+        H->conts = grown;
+        H->conts_cap = cap;
+    }
+    H->conts[H->nconts++] = h;
+    h->mark |= GC_MARK_LISTED;
+}
+#endif
+
 // Lock-free private allocation; NULL when the size class has no room (or
 // the object is large), meaning the caller must take the slow path.
 static inline void *gc_tlh_alloc_fast(GCThreadHeap *H, size_t user_size, uint8_t type_tag,
@@ -719,7 +737,12 @@ static inline void *gc_tlh_alloc_fast(GCThreadHeap *H, size_t user_size, uint8_t
     h->size = (uint32_t)user_size;
     h->type_tag = type_tag;
     h->field_count = field_count;
-    if (gc_is_container_tag(type_tag)) b->has_containers = 1;
+    if (gc_is_container_tag(type_tag)) {
+        b->has_containers = 1;
+#if defined(GC_TLH)
+        gc_tlh_list_container(H, h);
+#endif
+    }
     H->unreported += gc_class_sizes[cls];
 #if defined(GC_TLH)
     H->local_alloc += gc_class_sizes[cls];
@@ -774,7 +797,12 @@ static void *gc_tlh_alloc_slow(GCThreadHeap *H, size_t user_size, uint8_t type_t
     h->size = (uint32_t)user_size;
     h->type_tag = type_tag;
     h->field_count = field_count;
-    if (gc_is_container_tag(type_tag)) b->has_containers = 1;
+    if (gc_is_container_tag(type_tag)) {
+        b->has_containers = 1;
+#if defined(GC_TLH)
+        gc_tlh_list_container(H, h);
+#endif
+    }
     gc_bytes_allocated += bytes;
 #if defined(GC_TLH)
     H->local_alloc += bytes;
@@ -1234,6 +1262,7 @@ static void gc_tlh_retire(GCThreadHeap *H) {
     }
     free(H->blocks);
 #if defined(GC_TLH)
+    free(H->conts);
     free(H->ctx.worklist);
     free(H->ctx.di);
     free(H->ctx.sort_tmp);
@@ -2792,20 +2821,42 @@ static size_t gc_sweep_large(void) {
 // Interval table over H's private container backing stores only. A shared
 // container must never be marked by a local collection (its mark would
 // survive the local sweep and corrupt the next global one).
+//
+// The candidates come from H's container list rather than a walk over H's
+// blocks: objects are tenured in place, so H's blocks fill up with shared
+// containers a walk would revisit at every local collection (a pause that
+// grows with the old generation). The list holds every container H
+// allocated since its last compaction, so it covers every private one; a
+// compaction here drops entries that died, were promoted, or name a slot
+// another heap now owns, and drops duplicates (a slot reused by a second
+// container is listed twice) by clearing GC_MARK_LISTED on the first copy
+// it keeps. Ownership and slot validity are checked through the page map
+// before the header is read, since a large object's memory is unmapped when
+// it dies and an emptied block may be re-carved.
 static void gc_tlh_build_local_intervals(GCTrace *T, GCThreadHeap *H) {
     gc_data_interval_count = 0;
-    for (size_t k = 0; k < H->nblocks; k++) {
-        GCBlock *b = H->blocks[k];
-        if (!b->has_containers) continue;
-        uint32_t n = b->kind == GC_BLOCK_LARGE ? 1 : b->bump;
-        size_t osz = b->kind == GC_BLOCK_LARGE ? 0 : b->obj_size;
-        for (uint32_t i = 0; i < n; i++) {
-            GCHeader *h = (GCHeader *)(b->base + (size_t)i * osz);
-            if (gc_is_container_tag(h->type_tag) && h->next != GC_SHARED_TAG) {
-                gc_add_container_intervals(T, h);
-            }
+    size_t kept = 0;
+    for (size_t i = 0; i < H->nconts; i++) {
+        GCHeader *h = H->conts[i];
+        GCBlock *b = gc_pagemap_get_acq((uintptr_t)h);
+        if (!b || __atomic_load_n(&b->owner, __ATOMIC_RELAXED) != H) continue;
+        // The entry must still be an allocated slot start: an emptied block
+        // can come back to H carved for another size class.
+        if (b->kind == GC_BLOCK_SMALL) {
+            uintptr_t off = (uintptr_t)h - (uintptr_t)b->base;
+            size_t idx = gc_slot_index(b, off);
+            if (off >= GC_BLOCK_SIZE || idx >= b->bump || off != idx * b->obj_size) continue;
+        } else if (b->kind != GC_BLOCK_LARGE || (char *)h != b->base) {
+            continue;
         }
+        if (!gc_is_container_tag(h->type_tag) || h->next == GC_SHARED_TAG
+            || !(h->mark & GC_MARK_LISTED)) continue;
+        h->mark &= (uint8_t)~GC_MARK_LISTED;
+        H->conts[kept++] = h;
+        gc_add_container_intervals(T, h);
     }
+    H->nconts = kept;
+    for (size_t i = 0; i < kept; i++) H->conts[i]->mark |= GC_MARK_LISTED;
     gc_finish_data_intervals(T);
 }
 
@@ -2861,7 +2912,7 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
         if (age < 3) age++;
         int promote = (h->mark & GC_MARK_PROMOTE)
                       || (!(h->mark & GC_MARK_ROOT) && (H->tenure_all || age >= H->tenure_age));
-        h->mark = (uint8_t)((h->mark & (3 | GC_MARK_CLEAN)) | (age << 2));
+        h->mark = (uint8_t)((h->mark & (3 | GC_MARK_CLEAN | GC_MARK_LISTED)) | (age << 2));
         if (promote) {
             // Promote in place. While a global cycle marks, a newly shared
             // object is logged so a step traces it (marking it black here
@@ -3139,6 +3190,18 @@ static size_t gc_hyb_check_local(GCThreadHeap *H) {
 
 // A local root: mark it as usual, and pin what it references directly
 // (an object, or the container whose backing store it points into).
+//
+// Pinning protects objects that may be half-built (see gc_tlh_keep):
+// codegen allocates a struct literal before evaluating its fields and
+// initializes it with plain stores. Containers are exempt. Every store of a
+// reference into an array, map or set goes through PLUTO_GC_STORE —
+// codegen builds container literals with the runtime's insert functions,
+// the runtime fills containers it builds with __pluto_array_push or the
+// barrier, and the one raw fill (array slices) allocates nothing between
+// the allocation and its last store — so a promoted container can never be
+// handed a private reference. Tenuring them matters: a big table held on a
+// thread's stack would otherwise stay private forever and be rescanned by
+// every local collection that finds it dirty.
 static void gc_tlh_local_root(GCTrace *T, void *candidate) {
     GCHeader *h = gc_find_object(T, candidate);
     if (!h) {
@@ -3147,7 +3210,7 @@ static void gc_tlh_local_root(GCTrace *T, void *candidate) {
         h = gc_get_header(owner);
     }
     if (!GC_MARKED(h)) gc_mark_object(T, (char *)h + sizeof(GCHeader));
-    h->mark |= GC_MARK_ROOT;
+    if (!gc_is_container_tag(h->type_tag)) h->mark |= GC_MARK_ROOT;
 }
 #endif
 
@@ -3957,6 +4020,9 @@ void __pluto_gc_log_deleted(long old) { (void)old; }
 //     directly. A new cycle first finishes any owner sweep still pending, so
 //     no stale mark survives into it.
 static long gc_hyb_steps = 0, gc_hyb_cycle_us = 0, gc_hyb_cycle_max_us = 0;
+// PLUTO_GC_LOG: where a start step's pause went (owner sweeps it ran for
+// idle heaps, the data-buffer table, the root scan).
+static long gc_hyb_start_sweep_us = 0, gc_hyb_start_build_us = 0, gc_hyb_start_roots_us = 0;
 
 static void gc_hyb_check_slot(GCHeader *parent, long word, const char *where) {
     GCHeader *c = gc_lookup((void *)word, 0);
@@ -4107,7 +4173,12 @@ static void gc_hyb_step_at(struct timespec t0, const char *kind, int complete) {
                     gc_cycle_count, gc_bytes_allocated, gc_hyb_marked_shared, gc_shared_threshold,
                     us, gc_hyb_steps, gc_hyb_cycle_us, gc_hyb_cycle_max_us);
         } else {
-            fprintf(stderr, "gc: global pause_us=%ld left=%zu kind=%s\n", us, gc_worklist_count, kind);
+            if (kind[0] == 's' && kind[1] == 't' && kind[2] == 'a')
+                fprintf(stderr, "gc: global pause_us=%ld left=%zu owner_sweep_us=%ld build_us=%ld roots_us=%ld"
+                        " kind=%s\n", us, gc_worklist_count, gc_hyb_start_sweep_us, gc_hyb_start_build_us,
+                        gc_hyb_start_roots_us, kind);
+            else
+                fprintf(stderr, "gc: global pause_us=%ld left=%zu kind=%s\n", us, gc_worklist_count, kind);
         }
     }
     gc_collecting = 0;
@@ -4118,7 +4189,7 @@ static void gc_hyb_start(int complete) {
     GCTrace *T = GC_TR();
     gc_collecting = 1;
     gc_init_env();
-    struct timespec t0 = {0, 0};
+    struct timespec t0 = {0, 0}, ta, tb, tc;
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &t0);
     for (size_t i = 0; i < gc_tlh_heap_count; i++) {
         GCThreadHeap *H = gc_tlh_heaps[i];
@@ -4126,12 +4197,22 @@ static void gc_hyb_start(int complete) {
         if (H->shared_sweep_pending) H->local_freed += gc_tlh_local_sweep(H, 0);
         gc_tlh_report(H);
     }
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &ta);
     gc_build_data_intervals(T);
+    if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &tb);
     gc_worklist_count = 0;
     gc_hyb_marked_shared = 0;
     T->mark_bit = GC_MARK_GLOBAL;
     gc_scan_roots(T);
     T->mark_bit = GC_MARK_LOCAL;
+    if (gc_log_enabled) {
+        clock_gettime(CLOCK_MONOTONIC, &tc);
+#define GC_US(a, b) (((b).tv_sec - (a).tv_sec) * 1000000L + ((b).tv_nsec - (a).tv_nsec) / 1000L)
+        gc_hyb_start_sweep_us = GC_US(t0, ta);
+        gc_hyb_start_build_us = GC_US(ta, tb);
+        gc_hyb_start_roots_us = GC_US(tb, tc);
+#undef GC_US
+    }
     gc_incr_marking = 1;
     __pluto_gc_barrier_mode = 3;
     for (size_t i = 0; i < gc_tlh_heap_count; i++) gc_tlh_heaps[i]->marks_valid = 1;
