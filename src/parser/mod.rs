@@ -2747,6 +2747,7 @@ impl<'a> Parser<'a> {
         self.restrict_struct_lit = true;
         let condition = self.parse_expr(0)?;
         self.restrict_struct_lit = old_restrict;
+        self.reject_unparenthesized_struct_lit(condition.span)?;
         let then_block = self.parse_block()?;
 
         let else_block = if self.peek().is_some() && matches!(self.peek().expect("token should exist after is_some check").node, Token::Else) {
@@ -2781,6 +2782,7 @@ impl<'a> Parser<'a> {
         self.restrict_struct_lit = true;
         let condition = self.parse_expr(0)?;
         self.restrict_struct_lit = old_restrict;
+        self.reject_unparenthesized_struct_lit(condition.span)?;
         let body = self.parse_block()?;
         let end = body.span.end;
 
@@ -2799,6 +2801,7 @@ impl<'a> Parser<'a> {
         self.restrict_struct_lit = true;
         let iterable = self.parse_expr(0)?;
         self.restrict_struct_lit = old_restrict;
+        self.reject_unparenthesized_struct_lit(iterable.span)?;
         let body = self.parse_block()?;
         let end = body.span.end;
 
@@ -2815,6 +2818,7 @@ impl<'a> Parser<'a> {
         self.restrict_struct_lit = true;
         let scrutinee = self.parse_expr(0)?;
         self.restrict_struct_lit = old_restrict;
+        self.reject_unparenthesized_struct_lit(scrutinee.span)?;
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
@@ -2983,6 +2987,7 @@ impl<'a> Parser<'a> {
         self.restrict_struct_lit = true;
         let condition = self.parse_expr(0)?;
         self.restrict_struct_lit = old_restrict;
+        self.reject_unparenthesized_struct_lit(condition.span)?;
 
         let then_block = self.parse_block()?;
 
@@ -3026,6 +3031,7 @@ impl<'a> Parser<'a> {
         self.restrict_struct_lit = true;
         let expr = self.parse_expr(0)?;
         self.restrict_struct_lit = old_restrict;
+        self.reject_unparenthesized_struct_lit(expr.span)?;
 
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -4886,6 +4892,47 @@ impl<'a> Parser<'a> {
         }
         // Must be a colon
         matches!(self.tokens[i].node, Token::Colon)
+    }
+
+    /// Positioned at `{`: returns true only when it opens a struct/enum-literal
+    /// field list (`{ ident: ... }`), never an empty block or a `match` body.
+    /// Match arms always begin with `ident .` or `_` (never `ident :`), so an
+    /// `ident :` after `{` is an unambiguous signal of a field list.
+    fn looks_like_struct_fields_ahead(&self) -> bool {
+        let mut i = self.pos + 1; // past the `{`
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
+            return false;
+        }
+        i += 1;
+        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
+            i += 1;
+        }
+        i < self.tokens.len() && matches!(self.tokens[i].node, Token::Colon)
+    }
+
+    /// After a struct-literal-restricted scrutinee/condition is parsed, an
+    /// unparenthesized struct/enum literal leaves a stray `{ ident: ... }` that
+    /// would otherwise be mis-parsed as the following block, producing a
+    /// confusing error pointed inside the literal's fields. Detect that here
+    /// and report it against the scrutinee with a parenthesize suggestion
+    /// (issue #489). `match (Foo { x: 1 }) { ... }` is accepted because the
+    /// parentheses re-enable struct-literal parsing.
+    fn reject_unparenthesized_struct_lit(&self, expr_span: Span) -> Result<(), CompileError> {
+        let at_brace = self
+            .peek()
+            .is_some_and(|t| matches!(t.node, Token::LBrace));
+        if at_brace && self.looks_like_struct_fields_ahead() {
+            return Err(CompileError::syntax(
+                "a struct or enum literal is ambiguous here with the block that \
+                 follows; wrap it in parentheses, e.g. `(Point { x: 1 })`"
+                    .to_string(),
+                expr_span,
+            ));
+        }
+        Ok(())
     }
 
     /// Lookahead to determine if we have a static trait call: `TraitName::method<TypeArgs>`
@@ -7052,7 +7099,37 @@ mod tests {
         let mut parser = Parser::new(&tokens, src);
         let result = parser.parse_program();
 
-        // Should fail due to restrict_struct_lit in condition
-        assert!(result.is_err());
+        // Should fail due to restrict_struct_lit in condition, with the
+        // targeted parenthesize diagnostic (#489).
+        let err = result.unwrap_err();
+        assert!(
+            format!("{err}").contains("wrap it in parentheses"),
+            "expected parenthesize suggestion, got: {err}"
+        );
+    }
+
+    #[test]
+    fn match_scrutinee_unparenthesized_struct_literal_errors() {
+        // A struct/enum literal directly in a match scrutinee is ambiguous with
+        // the arm block; it should report the targeted diagnostic (#489) rather
+        // than mis-parsing the field list as arms.
+        let src = "fn main() { let n = match Foo { x: 1 } { _ => 0 } }";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        let err = parser.parse_program().unwrap_err();
+        assert!(
+            format!("{err}").contains("wrap it in parentheses"),
+            "expected parenthesize suggestion, got: {err}"
+        );
+    }
+
+    #[test]
+    fn match_scrutinee_parenthesized_struct_literal_parses() {
+        // Parentheses re-enable struct-literal parsing, so this is the accepted
+        // form (#489).
+        let src = "fn main() { let n = match (Foo { x: 1 }) { _ => 0 } }";
+        let tokens = lex(src).unwrap();
+        let mut parser = Parser::new(&tokens, src);
+        assert!(parser.parse_program().is_ok());
     }
 }

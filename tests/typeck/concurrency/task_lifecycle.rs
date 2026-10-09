@@ -114,4 +114,4 @@ let x=t[0]}"#, "unknown generic type 'Array'"); }
 
 // Task in match binding
 #[test]
-fn task_match_binding() { compile_should_fail_with(r#"enum E{A{t:Task<int>}} fn task()int{return 1} fn main(){match E.A{t:spawn task()}{E.A{t}{let x=t.get() let y=t.get()}}}"#, "expected ., found :"); }
+fn task_match_binding() { compile_should_fail_with(r#"enum E{A{t:Task<int>}} fn task()int{return 1} fn main(){match E.A{t:spawn task()}{E.A{t}{let x=t.get() let y=t.get()}}}"#, "wrap it in parentheses"); }

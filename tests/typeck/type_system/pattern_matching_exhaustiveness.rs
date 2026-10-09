@@ -21,11 +21,11 @@ fn match_arm_type_mismatch() { compile_should_fail_with(r#"enum E{A B} fn f()int
 
 // Match binding type error
 #[test]
-fn match_binding_type_error() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:1}{E.A{x}{let y:string=x}}}"#, "expected ., found :"); }
+fn match_binding_type_error() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match (E.A{x:1}){E.A{x}{let y:string=x}}}"#, "type mismatch: expected string, found int"); }
 
 // Match with generic enum wrong type
 #[test]
-fn match_generic_wrong_type() { compile_should_fail_with(r#"enum Opt<T>{Some{val:T}None} fn main(){match Opt<int>.Some{val:1}{Opt<string>.Some{val}{}Opt<int>.None{}}}"#, "expected ., found :"); }
+fn match_generic_wrong_type() { compile_should_fail_with(r#"enum Opt<T>{Some{val:T}None} fn main(){match Opt<int>.Some{val:1}{Opt<string>.Some{val}{}Opt<int>.None{}}}"#, "wrap it in parentheses"); }
 
 // Nested match exhaustiveness
 #[test]
@@ -37,7 +37,7 @@ fn match_arm_shadowing() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(
 
 // Match with non-enum type
 #[test]
-fn match_non_enum() { compile_should_fail_with(r#"class C{x:int} fn main(){match C{x:1}{C{x}{}}}"#, "expected ., found :"); }
+fn match_non_enum() { compile_should_fail_with(r#"class C{x:int} fn main(){match C{x:1}{C{x}{}}}"#, "wrap it in parentheses"); }
 
 // Match unreachable arm
 #[test]
