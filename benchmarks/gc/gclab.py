@@ -51,11 +51,18 @@ TIMEOUT_S = 60
 
 def run_once(binary, env=None):
     t0 = time.perf_counter()
+    # Own process group, so a timeout kills the benchmark itself and not
+    # just the /usr/bin/time wrapper (an orphaned benchmark would keep
+    # burning CPU and skew every later measurement).
+    p = subprocess.Popen(["/usr/bin/time", "-l", binary], stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True, env=env, start_new_session=True)
     try:
-        r = subprocess.run(["/usr/bin/time", "-l", binary], capture_output=True, text=True,
-                           env=env, timeout=TIMEOUT_S)
+        stdout, stderr = p.communicate(timeout=TIMEOUT_S)
     except subprocess.TimeoutExpired:
+        os.killpg(p.pid, 9)
+        p.communicate()
         return None, None, "TIMEOUT", "", -1
+    r = subprocess.CompletedProcess(p.args, p.returncode, stdout, stderr)
     wall = time.perf_counter() - t0
     m = re.search(r"(\d+)\s+maximum resident set size", r.stderr)
     rss = int(m.group(1)) / (1024 * 1024) if m else None

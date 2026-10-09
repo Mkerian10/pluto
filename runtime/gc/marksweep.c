@@ -1263,7 +1263,8 @@ static void gc_worklist_push(void *ptr) {
 // lazily (cores - 1, at most GC_PM_MAX_HELPERS, or PLUTO_GC_THREADS - 1),
 // park between collections, and are never registered as mutator threads.
 #define GC_PM_MAX_HELPERS 7
-#define GC_PM_SHARE 128       // spill when a stack is deeper than this...
+#define GC_PM_SHARE 4         // spill when a stack is deeper than this (DFS keeps
+                              // stacks near tree depth, so this must be small)...
 #define GC_PM_BATCH 64        // ...and take this many from the shared stack
 typedef struct { void **items; size_t count, cap; } GCMarkStack;
 static __thread GCMarkStack *gc_pm_local = NULL;   // set while marking in parallel
@@ -1529,7 +1530,16 @@ static void gc_pm_start_helpers(void) {
 }
 
 // Drain the serial worklist (filled by root scanning) in parallel.
+// Below this much allocated heap a mark finishes in a millisecond or two,
+// and waking and synchronizing helpers costs more than it saves: mark
+// serially.
+#define GC_PM_MIN_HEAP ((size_t)32 << 20)
+
 static void gc_pm_drain(void) {
+    if (gc_bytes_allocated < GC_PM_MIN_HEAP) {
+        while (gc_worklist_count > 0) gc_trace_object(gc_worklist[--gc_worklist_count]);
+        return;
+    }
     gc_pm_start_helpers();
     if (gc_pm_nhelpers == 0) {
         while (gc_worklist_count > 0) gc_trace_object(gc_worklist[--gc_worklist_count]);
