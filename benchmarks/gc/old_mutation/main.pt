@@ -1,0 +1,38 @@
+// Generational worst case: a large, long-lived population of holder
+// objects whose fields are continually overwritten with freshly allocated
+// objects, so old objects keep pointing at young ones.
+class Box {
+    v: int
+}
+
+class Holder {
+    id: int
+    item: Box?
+}
+
+fn main() {
+    let n = 200000
+    let mut holders: [Holder] = []
+    let mut i = 0
+    while i < n {
+        holders.push(Holder { id: i, item: none })
+        i = i + 1
+    }
+    let mut step = 0
+    while step < 3000000 {
+        let idx = (step * 7919) % n
+        let mut h = holders[idx]
+        h.item = Box { v: step }
+        step = step + 1
+    }
+    let mut acc = 0
+    i = 0
+    while i < n {
+        let b = holders[i].item
+        if b != none {
+            acc = acc + b.v
+        }
+        i = i + 1
+    }
+    print(f"check={acc}")
+}

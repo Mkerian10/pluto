@@ -1,0 +1,48 @@
+// Container-heavy retained heap: 40k records, each owning an array of 8
+// child objects (array handles + separately allocated backing stores).
+class Item {
+    k: int
+    v: int
+}
+
+class Rec {
+    id: int
+    items: [Item]
+}
+
+fn mk(id: int) Rec {
+    let mut items: [Item] = []
+    let mut j = 0
+    while j < 8 {
+        items.push(Item { k: j, v: id + j })
+        j = j + 1
+    }
+    return Rec { id: id, items: items }
+}
+
+fn main() {
+    let mut keep: [Rec] = []
+    let mut i = 0
+    while i < 40000 {
+        keep.push(mk(i))
+        i = i + 1
+    }
+    let mut acc = 0
+    let mut r = 0
+    while r < 300 {
+        let mut g: [Rec] = []
+        let mut j = 0
+        while j < 300 {
+            g.push(mk(j))
+            j = j + 1
+        }
+        acc = acc + g.len()
+        r = r + 1
+    }
+    let mut n = 0
+    while n < keep.len() {
+        acc = acc + keep[n].items[7].v
+        n = n + 1
+    }
+    print(f"check={acc}")
+}

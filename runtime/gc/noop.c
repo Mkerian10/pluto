@@ -17,6 +17,7 @@
 
 static GCHeader *gc_head = NULL;
 static size_t gc_bytes_allocated = 0;
+static void noop_index(void *user);
 
 // TLS variables used by threading.c and builtins.c — must be defined by the GC module
 __thread void *__pluto_current_error = NULL;
@@ -47,7 +48,11 @@ void __pluto_safepoint(void) {
 }
 
 void *__pluto_alloc(long size) {
-    return gc_alloc((size_t)size, GC_TAG_OBJECT, 0);
+    // field_count must match the mark-sweep backend: structural equality
+    // and deep copy walk field_count slots (0 would make every pair of
+    // same-class objects compare equal).
+    if (size == 0) size = 8;
+    return gc_alloc((size_t)size, GC_TAG_OBJECT, (uint16_t)(size / 8));
 }
 
 void *__pluto_alloc_entity(long size) {
@@ -55,7 +60,7 @@ void *__pluto_alloc_entity(long size) {
     // __pluto_entity_rdlock/wrlock in threading.c). Never freed here — the
     // noop backend never collects.
     if (size == 0) size = 8;
-    long *ptr = (long *)gc_alloc((size_t)size + 8, GC_TAG_ENTITY, 0);
+    long *ptr = (long *)gc_alloc((size_t)size + 8, GC_TAG_ENTITY, (uint16_t)(size / 8));
     // Both modes: test mode carries a real fiber-aware lock too
     // (rfc-test-harness phase 4 — lock sites are preemption points).
     ptr[size / 8] = __pluto_rwlock_init();
@@ -77,6 +82,7 @@ void *gc_alloc(size_t user_size, uint8_t type_tag, uint16_t field_count) {
     gc_bytes_allocated += user_size + sizeof(GCHeader);
     void *user_data = (void *)(header + 1);
     memset(user_data, 0, user_size);
+    noop_index(user_data);
     return user_data;
 }
 
@@ -89,12 +95,49 @@ void __pluto_gc_maybe_collect(void) {
 }
 
 
-// The noop backend keeps no index; exact-start linear scan (benchmark-only).
-GCHeader *__pluto_gc_find_object(void *p) {
-    for (GCHeader *h = gc_head; h; h = h->next) {
-        if ((void *)(h + 1) == p) return h;
+// Insert-only exact-start hash (objects are never freed here), so pointer
+// lookups (deep copy / structural equality) stay O(1) and the noop backend
+// remains an honest "no collection" floor. Grown before load exceeds 1/2.
+static void **noop_tab = NULL;
+static size_t noop_cap = 0, noop_count = 0;
+
+static size_t noop_hash(void *p) {
+    uint64_t x = (uint64_t)(uintptr_t)p >> 4;
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33;
+    return (size_t)x;
+}
+
+static void noop_insert_raw(void **tab, size_t cap, void *p) {
+    size_t i = noop_hash(p) & (cap - 1);
+    while (tab[i]) i = (i + 1) & (cap - 1);
+    tab[i] = p;
+}
+
+static void noop_index(void *user) {
+    if ((noop_count + 1) * 2 > noop_cap) {
+        size_t cap = noop_cap ? noop_cap * 2 : 4096;
+        void **t = (void **)calloc(cap, sizeof(void *));
+        if (!t) { fprintf(stderr, "noop gc: out of memory\n"); exit(1); }
+        for (size_t k = 0; k < noop_cap; k++) if (noop_tab[k]) noop_insert_raw(t, cap, noop_tab[k]);
+        free(noop_tab);
+        noop_tab = t;
+        noop_cap = cap;
     }
-    return NULL;
+    noop_insert_raw(noop_tab, noop_cap, user);
+    noop_count++;
+}
+
+GCHeader *__pluto_gc_find_object(void *p) {
+    if (!noop_cap) return NULL;
+    size_t i = noop_hash(p) & (noop_cap - 1);
+    for (;;) {
+        void *e = noop_tab[i];
+        if (!e) return NULL;
+        if (e == p) return (GCHeader *)((char *)e - sizeof(GCHeader));
+        i = (i + 1) & (noop_cap - 1);
+    }
 }
 
 // ── Thread/Fiber API Stubs ───────────────────────────────────────────────────
