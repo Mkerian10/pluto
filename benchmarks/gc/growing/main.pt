@@ -1,0 +1,22 @@
+// Monotonically growing heap: 2M objects, all retained. Every collection
+// re-marks an ever larger, entirely live heap (no garbage to find).
+class Node {
+    v: int
+    next: Node?
+}
+
+fn main() {
+    let mut keep: Node? = none
+    let mut i = 0
+    while i < 2000000 {
+        keep = Node { v: i, next: keep }
+        i = i + 1
+    }
+    let mut acc = 0
+    let mut cur = keep
+    while cur != none {
+        acc = acc + cur.v % 11
+        cur = cur.next
+    }
+    print(f"check={acc}")
+}
