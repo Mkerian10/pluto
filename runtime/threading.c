@@ -790,11 +790,21 @@ static int test_run_single(long fn_ptr, Strategy strategy, uint64_t run_seed) {
     int had_deadlock = g_scheduler->deadlock;
     int fiber_count = g_scheduler->fiber_count;
 
+    // An uncaught error that escaped the test body (fiber 0) is saved on the
+    // fiber when it completes; the fiber stacks are about to be freed, so lift
+    // it back into the thread-local error slot. Callers (and ultimately
+    // __pluto_test_finish) treat a set error slot as a test failure (#496).
+    // The error object lives in the GC heap, not on the fiber stack, so it
+    // stays valid after the stacks are freed.
+    void *test_body_error = g_scheduler->fibers[0].saved_error;
+
     for (int i = 0; i < fiber_count; i++)
         free(g_scheduler->fibers[i].stack);
     __pluto_gc_set_scheduler_region(NULL, 0);
     free(g_scheduler);
     g_scheduler = NULL;
+
+    __pluto_current_error = test_body_error;
 
     return had_deadlock;
 }
@@ -880,6 +890,18 @@ void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations, lo
             es->fiber_count_snapshot = 0;  // infer from depth info
             g_exhaustive = NULL;
 
+            // An uncaught error escaped the test body in this schedule — a test
+            // failure. Print the pin for the schedule that raised (the trace
+            // buffer still holds it) and stop; the harness reports the failure
+            // from the TLS error slot (#496).
+            if (__pluto_current_error != NULL) {
+                fprintf(stderr, "  failing schedule %d: ", es->schedules_explored);
+                trace_print_token(stderr);
+                fprintf(stderr, "\n");
+                free(es);
+                return;
+            }
+
             // Collect failure info. The trace buffer still holds THIS
             // schedule's decisions — print the pin now, because no seed can
             // regenerate an exhaustive-found schedule.
@@ -957,6 +979,12 @@ void __pluto_test_run(long fn_ptr, long strategy, long seed, long iterations, lo
         if (had_deadlock) {
             __pluto_test_print_repro();
             exit(1);
+        }
+        // An uncaught error escaped the test body on this run — stop and let
+        // the harness report the failure (the error is in the TLS slot). (#496)
+        if (__pluto_current_error != NULL) {
+            __pluto_test_print_repro();
+            return;
         }
     }
 }

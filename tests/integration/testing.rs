@@ -572,6 +572,75 @@ fn main(){
 "#, "seed it inside a test body for a test-local override");
 }
 
+// ── uncaught errors fail the test (#496) ──────────────────────────────────────
+
+#[test]
+fn test_uncaught_raise_fails_test() {
+    let (stdout, _, code) = compile_test_and_run(r#"
+error Boom {
+    message: string
+}
+
+fn boom() int {
+    raise Boom { message: "should fail the test" }
+}
+
+test "a propagated raise should FAIL this test" {
+    let x = boom()!
+    expect(x).to_equal(1)
+}
+
+test "a plain passing test" {
+    expect(1).to_equal(1)
+}
+"#);
+    // The raising test must fail, be reported as FAILED (naming the error
+    // type), and the run must exit non-zero; the clean test still passes.
+    assert_ne!(code, 0, "a test with an uncaught raise must exit non-zero");
+    assert!(
+        stdout.contains("a propagated raise should FAIL this test ... FAILED"),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("uncaught Boom"), "stdout: {stdout}");
+    assert!(stdout.contains("a plain passing test ... ok"), "stdout: {stdout}");
+    assert!(stdout.contains("1 passed, 1 failed"), "stdout: {stdout}");
+    // The error is consumed, so the old post-summary "escaped main" line is gone.
+    assert!(!stdout.contains("escaped main"), "stdout: {stdout}");
+}
+
+#[test]
+fn test_uncaught_raise_under_scheduler_fails_test() {
+    // The same must hold under a concurrency strategy, where the test body runs
+    // on a scheduler fiber rather than the main thread.
+    let (stdout, _, code) = compile_test_and_run(r#"
+error Boom {
+    message: string
+}
+
+fn boom() int {
+    raise Boom { message: "kaboom" }
+}
+
+tests[scheduler: RoundRobin] {
+    test "raises under scheduler should fail" {
+        let x = boom()!
+        expect(x).to_equal(1)
+    }
+
+    test "clean under scheduler" {
+        expect(1).to_equal(1)
+    }
+}
+"#);
+    assert_ne!(code, 0);
+    assert!(
+        stdout.contains("raises under scheduler should fail ... FAILED"),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("clean under scheduler ... ok"), "stdout: {stdout}");
+    assert!(stdout.contains("1 passed, 1 failed"), "stdout: {stdout}");
+}
+
 // ── expect_raises ─────────────────────────────────────────────────────────────
 
 #[test]
