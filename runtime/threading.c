@@ -2777,6 +2777,11 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                                           : now_ns + timeout_ms * 1000000L;
     }
 
+    /* On a green fiber, the inter-poll wait must yield the scheduler (park on
+     * the cp6 timer wheel), not usleep the scheduler thread and stall every
+     * peer fiber. Off the scheduler thread, usleep is correct. */
+    void *self = __pluto_green_self();
+
     /* Spin-poll loop */
     long spin_us = 100;  /* start at 100 microseconds */
     for (;;) {
@@ -2852,7 +2857,11 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
             if (remaining_us < 1) remaining_us = 1;
             if (nap_us > remaining_us) nap_us = remaining_us;
         }
-        usleep((useconds_t)nap_us);
+        if (self) {
+            __pluto_green_sleep_ns((long)nap_us * 1000L);  // cooperative yield
+        } else {
+            usleep((useconds_t)nap_us);
+        }
         if (spin_us < 1000) spin_us = spin_us * 2;
         if (spin_us > 1000) spin_us = 1000;
     }

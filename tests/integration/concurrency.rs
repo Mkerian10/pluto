@@ -1862,3 +1862,59 @@ fn green_recv_timeout_receives() {
     );
     assert_eq!(out.trim(), "99");
 }
+
+#[test]
+fn green_select_yields() {
+    // A green fiber in select yields the scheduler rather than spin-blocking it
+    // (#369 cp6): a peer fiber completes while the select waits out its `after`
+    // arm, which then fires. If select blocked the scheduler, worker() could not
+    // run until the after elapsed.
+    let out = compile_and_run_stdout(
+        r#"
+        fn waiter(rx: Receiver<int>) int {
+            select {
+                v = rx.recv() { return v }
+                after(150) { return -1 }
+            }
+            return -2
+        }
+        fn worker() int { return 42 }
+        fn main() {
+            let (tx, rx) = chan<int>(1)
+            let w = green waiter(rx)
+            let k = green worker()
+            print(k.get())
+            print(w.get() catch -9)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42\n-1");
+}
+
+#[test]
+fn green_select_receives() {
+    // select from a fiber picks a ready arm: a peer sends, the select receives.
+    let out = compile_and_run_stdout(
+        r#"
+        fn producer(tx: Sender<int>) int {
+            tx.send(77)!
+            return 0
+        }
+        fn consumer(rx: Receiver<int>) int {
+            select {
+                v = rx.recv() { return v }
+                after(2000) { return -1 }
+            }
+            return -2
+        }
+        fn main() {
+            let (tx, rx) = chan<int>(1)
+            let p = green producer(tx)
+            let c = green consumer(rx)
+            print(c.get() catch -9)
+            p.get() catch 0
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "77");
+}
