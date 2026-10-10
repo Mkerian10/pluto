@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <time.h>
@@ -42,6 +43,15 @@ extern void __pluto_gc_unregister_green_context(void *handle);
 extern void __pluto_gc_register_thread_stack(void *lo, void *hi);
 extern void __pluto_gc_enter_safe_region(void);
 extern void __pluto_gc_leave_safe_region(void);
+
+// Per-task runtime state that lives in THREAD-LOCAL storage (set by green_run_cb
+// and read by the channel ops' cancellation check). A fiber that migrates
+// between scheduler threads must carry these with it, or the origin thread is
+// left pointing at a freed task. The scheduler saves/restores them around every
+// fiber run (mirrors the test-mode fiber scheduler's saved_current_task).
+extern __thread void *__pluto_current_error;
+extern __thread void *__pluto_current_error_type;
+extern __thread long *__pluto_current_task;
 
 // Fiber lifecycle state, read by the scheduler after each swap-back.
 enum { GRUN = 0, GDONE, GYIELD, GPARK };
@@ -67,7 +77,12 @@ typedef struct GProdTask {
     void *gc_ctx;           // GC green-context handle (held across parks)
     long deadline_ns;       // cp6: CLOCK_REALTIME wake deadline when timer-parked
     struct GProdTask *timer_next; // cp6: link in the sorted timer list
-    GProdSched *home;       // scheduler this task is pinned to (shared-nothing)
+    GProdSched *home;       // scheduler this task currently lives on
+    // Per-fiber copy of the thread-local runtime state, so it follows the fiber
+    // across scheduler threads (migration safety).
+    long *sv_task;
+    void *sv_error;
+    void *sv_error_type;
     // Submit path (__pluto_green_submit): when submit_run != NULL the fiber
     // calls submit_run(submit_job) and the callback owns result delivery; the
     // scheduler then frees the whole GProdTask.
@@ -95,6 +110,18 @@ static int g_nsched = 0;                 // number of live schedulers
 static int g_started = 0;
 static pthread_mutex_t g_start_mu = PTHREAD_MUTEX_INITIALIZER;
 static unsigned long g_rr = 0;           // round-robin assignment counter
+// EXPERIMENTAL (default off): wake-locality / fiber migration. When set, a
+// woken fiber moves to the waker's scheduler so communicating partners
+// converge. INCOMPLETE: the first blocker (a SEGV from stale thread-local
+// current_task after migration) is fixed by the per-fiber TLS save/restore in
+// the scheduler loop, but a second channel-migration issue remains (the Pluto
+// ping-pong exits with an uncaught error), so this stays off. See
+// __pluto_green_wake and rfc-green-tasks.md.
+static int g_wake_local = 0;
+// DEBUG (default off): assert a task's saved sp lies within its own stack
+// before swapping into it — catches a corrupt/migrated context at the swap
+// instead of as a jump to a garbage address.
+static int g_sp_check = 0;
 
 // The scheduler this thread IS, or NULL on a non-scheduler thread (main/spawn).
 // Replaces the old gt_on_sched flag and names the running scheduler for the
@@ -202,16 +229,22 @@ void __pluto_green_sleep_ns(long ns) {
 // migration): that is what keeps thread-local runtime state, pthread-mutex
 // ownership, and the single-writer GC live_sp invariant valid.
 //
-// (Wake-locality — moving a woken fiber onto the waker's scheduler so
-// communicating partners converge — was tried and reverted: migrating a parked
-// fiber across OS threads segfaults here, so some context/thread-affinity
-// assumption is violated. The proper fix is a work-stealing design with safe
-// migration; see rfc-green-tasks.md. Until then, co-location is achieved
-// statically via parent-locality placement at spawn.)
+// Wake-locality (migrate the woken fiber to the waker's scheduler so
+// communicating partners converge) is available behind PLUTO_GREEN_WAKE_LOCALITY
+// but OFF by default and INCOMPLETE. Investigation so far: the first crash was a
+// stale thread-local current_task left on the origin thread after migration —
+// fixed by the per-fiber TLS save/restore around each run in the scheduler
+// loop. A second channel-migration bug remains (the ping-pong exits with an
+// uncaught error), so for now a fiber stays on its home and co-location is
+// achieved statically via parent-locality placement at spawn. Finishing
+// wake-locality (or a full work-stealing design) is the path to making
+// multi-scheduler the default; see rfc-green-tasks.md.
 void __pluto_green_wake(void *fiber) {
     GProdTask *t = (GProdTask *)fiber;
     t->state = GRUN;
-    sched_push(t->home, t);
+    GProdSched *w = cur_sched;
+    if (g_wake_local && w) { t->home = w; sched_push(w, t); }
+    else                   { sched_push(t->home, t); }
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
@@ -281,11 +314,30 @@ static void *gprod_scheduler(void *arg) {
 
         s->current = t;
         int is_submit = (t->submit_run != NULL);
+        if (g_sp_check && ((char *)t->sp < t->stack || (char *)t->sp > t->stack + t->stack_size)) {
+            fprintf(stderr, "green: BAD sp %p not in [%p,%p) task=%p state=%d gc_ctx=%p\n",
+                    t->sp, (void *)t->stack, (void *)(t->stack + t->stack_size), (void *)t, t->state, t->gc_ctx);
+            abort();
+        }
         // Running: sp moves, so scan the whole stack conservatively (plain
         // store — single writer, read only during STW).
         if (t->gc_ctx) __pluto_gc_green_set_live_sp(t->gc_ctx, t->stack);
+        // Load this fiber's thread-local runtime state onto the current thread,
+        // so cancellation checks etc. see its task even after a migration.
+        __pluto_current_task = t->sv_task;
+        __pluto_current_error = t->sv_error;
+        __pluto_current_error_type = t->sv_error_type;
         pluto_ctx_swap(&s->sched_sp, t->sp);   // run until yield/park/finish
         s->current = NULL;
+        // Save the fiber's thread-local state back onto the fiber and clear it
+        // from this thread, so nothing leaks to the next fiber or is left stale
+        // for another thread after the fiber migrates away.
+        t->sv_task = __pluto_current_task;
+        t->sv_error = __pluto_current_error;
+        t->sv_error_type = __pluto_current_error_type;
+        __pluto_current_task = NULL;
+        __pluto_current_error = NULL;
+        __pluto_current_error_type = NULL;
         // Suspended: only [t->sp, top) is live — scan precisely so idle fibers
         // do not fault in their whole stack.
         if (t->gc_ctx && t->state != GDONE) __pluto_gc_green_set_live_sp(t->gc_ctx, t->sp);
@@ -332,6 +384,8 @@ static void gprod_ensure_started(void) {
     pthread_mutex_lock(&g_start_mu);
     if (!g_started) {
         g_started = 1;
+        g_wake_local = getenv("PLUTO_GREEN_WAKE_LOCALITY") != NULL;
+        g_sp_check = getenv("PLUTO_GREEN_SP_CHECK") != NULL;
         g_nsched = desired_nsched();
         for (int i = 0; i < g_nsched; i++) {
             GProdSched *s = &g_scheds[i];
