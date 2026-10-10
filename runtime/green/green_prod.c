@@ -1,9 +1,20 @@
-// Production green scheduler skeleton (#369 integration checkpoint 1): a single
-// scheduler pthread with a thread-safe ready queue, lazy startup, and
-// cross-thread result delivery. Runs tasks to completion over the register-only
-// context switch. GC-context registration, real Pluto closures, cooperative
-// park/wake and codegen wiring come in later checkpoints; this proves the
-// cross-thread spawn/await skeleton in isolation.
+// Production green scheduler (#369). A single scheduler pthread with a
+// thread-safe ready queue, lazy startup, and cross-thread result delivery,
+// running fibers over the register-only context switch.
+//
+// cp3b: run-to-completion submit path (real Pluto closures via a callback).
+// cp4: cooperative PARK / YIELD / WAKE so a fiber that awaits a task or blocks
+// on a channel suspends the FIBER (yielding the scheduler to its peers) instead
+// of blocking the whole scheduler thread. Wakes are thread-safe: a pthread or
+// the main thread completing an awaited task re-readies the parked fiber.
+//
+// Race-freedom (the gopark pattern): a parking fiber records NOTHING about
+// itself before it switches out. It stashes a handoff fn + arg, sets state
+// PARK, and swaps to the scheduler. The scheduler — with the fiber fully
+// switched out — runs the handoff on its OWN stack. Only the handoff publishes
+// the fiber as a waiter (under the awaited object's lock). So a wake can never
+// reach a fiber that has not finished switching out, which would otherwise run
+// one fiber on two contexts.
 //
 // Production only — uses pthreads. Under PLUTO_TEST_MODE green routes to the
 // DPOR fiber scheduler instead (see rfc-green-tasks.md), so this file is inert
@@ -23,6 +34,9 @@ extern void __pluto_gc_register_thread_stack(void *lo, void *hi);
 extern void __pluto_gc_enter_safe_region(void);
 extern void __pluto_gc_leave_safe_region(void);
 
+// Fiber lifecycle state, read by the scheduler after each swap-back.
+enum { GRUN = 0, GDONE, GYIELD, GPARK };
+
 typedef struct GProdTask {
     long (*fn)(void *);     // cp1 self-contained path (result via result/cv below)
     void *arg;
@@ -34,6 +48,10 @@ typedef struct GProdTask {
     char *stack;
     size_t stack_size;
     void *sp;               // saved fiber sp
+    int state;              // GRUN / GDONE / GYIELD / GPARK (cp4)
+    void (*park_fn)(void *);// cp4: handoff run on the scheduler stack after the
+    void *park_arg;         //      fiber parks (publishes it as a waiter)
+    void *gc_ctx;           // GC green-context handle (held across parks)
     // Submit path (__pluto_green_submit): when submit_run != NULL the fiber
     // calls submit_run(submit_job) and the callback owns result delivery (e.g.
     // into a Pluto Task<T>); the scheduler then frees the whole GProdTask.
@@ -51,6 +69,19 @@ static int gq_started = 0;
 // so a single pair suffices; thread-local would generalize to N schedulers).
 static void *gsched_sp;
 static GProdTask *gsched_current;
+// Set on the scheduler thread only, so __pluto_green_self() can tell a fiber
+// (running on the scheduler thread) from an ordinary pthread / the main thread.
+static __thread int gt_on_sched = 0;
+
+// Enqueue onto the ready queue. Caller must NOT hold gq_mu.
+static void gq_push(GProdTask *t) {
+    pthread_mutex_lock(&gq_mu);
+    t->next = NULL;
+    if (gq_tail) gq_tail->next = t; else gq_head = t;
+    gq_tail = t;
+    pthread_cond_signal(&gq_wake);
+    pthread_mutex_unlock(&gq_mu);
+}
 
 static void *prime_ctx(char *stack_top, void (*entry)(void)) {
     uintptr_t top = (uintptr_t)stack_top & ~(uintptr_t)15;
@@ -65,31 +96,75 @@ static void *prime_ctx(char *stack_top, void (*entry)(void)) {
 #endif
 }
 
+// ── Cooperative primitives (called from fiber context) ───────────────────────
+
+// The currently-running fiber, or NULL if the caller is not a scheduler fiber
+// (an ordinary pthread or the main thread). Lets await/channel ops choose
+// between parking (fiber) and a blocking cond wait (pthread/main).
+void *__pluto_green_self(void) {
+    return gt_on_sched ? (void *)gsched_current : NULL;
+}
+
+// Yield the scheduler to ready peers, then resume. No-op cost beyond two
+// register-only switches when the fiber is the only one ready.
+void __pluto_green_yield(void) {
+    GProdTask *t = gsched_current;
+    if (!t) return;
+    t->state = GYIELD;
+    pluto_ctx_swap(&t->sp, gsched_sp);
+}
+
+// Suspend the current fiber. After it has fully switched out, the scheduler
+// runs handoff(arg) on its own stack; handoff publishes this fiber as a waiter
+// on whatever it is blocked on (under that object's lock), or re-readies it at
+// once if the event already happened. The fiber resumes here once woken.
+void __pluto_green_park(void (*handoff)(void *), void *arg) {
+    GProdTask *t = gsched_current;
+    t->park_fn = handoff;
+    t->park_arg = arg;
+    t->state = GPARK;
+    pluto_ctx_swap(&t->sp, gsched_sp);
+}
+
+// Re-ready a parked fiber. Thread-safe — called from the completer's thread
+// (a pthread finishing a spawn task, a peer fiber, or the main thread). The
+// handoff that published `fiber` as a waiter ran before any wake could see it,
+// so `fiber` is guaranteed fully switched out here.
+void __pluto_green_wake(void *fiber) {
+    GProdTask *t = (GProdTask *)fiber;
+    t->state = GRUN;
+    gq_push(t);
+}
+
+// ── Scheduler ────────────────────────────────────────────────────────────────
+
 static void gprod_trampoline(void) {
     GProdTask *t = gsched_current;
     // Running fiber: register its context with live_sp = stack base, so a
     // collection mid-run conservatively scans the WHOLE fiber stack and never
-    // misses a live frame (cp2 running-fiber resolution).
-    void *gc_ctx = __pluto_gc_register_green_context(t->stack + t->stack_size, t->stack);
+    // misses a live frame (cp2 running-fiber resolution). Held across parks so
+    // a suspended fiber's stack stays scannable; torn down only at finish.
+    t->gc_ctx = __pluto_gc_register_green_context(t->stack + t->stack_size, t->stack);
     if (t->submit_run) {
-        // Submit path: the callback runs the closure and delivers its own
-        // result; nothing to store here.
         t->submit_run(t->submit_job);
-        __pluto_gc_unregister_green_context(gc_ctx);
+        __pluto_gc_unregister_green_context(t->gc_ctx);
+        t->state = GDONE;
         pluto_ctx_swap(&t->sp, gsched_sp);   // back to scheduler, no return
     }
     long r = t->fn(t->arg);
-    __pluto_gc_unregister_green_context(gc_ctx);
+    __pluto_gc_unregister_green_context(t->gc_ctx);
     pthread_mutex_lock(&t->mu);
     t->result = r;
     t->done = 1;
     pthread_cond_signal(&t->cv);
     pthread_mutex_unlock(&t->mu);
+    t->state = GDONE;
     pluto_ctx_swap(&t->sp, gsched_sp);   // back to scheduler, no return
 }
 
 static void *gprod_scheduler(void *_unused) {
     (void)_unused;
+    gt_on_sched = 1;
     // Register the scheduler thread's own C stack so the collector scans the
     // scheduler loop's frames (and any suspended-at-swap state) as roots.
     {
@@ -120,14 +195,34 @@ static void *gprod_scheduler(void *_unused) {
 
         gsched_current = t;
         int is_submit = (t->submit_run != NULL);
-        pluto_ctx_swap(&gsched_sp, t->sp);   // run until it finishes
+        pluto_ctx_swap(&gsched_sp, t->sp);   // run until it yields/parks/finishes
         gsched_current = NULL;
-        free(t->stack);
-        // Submit tasks have no awaiter on the GProdTask (delivery went through
-        // the callback), so the scheduler owns and frees the handle too. cp1
-        // tasks are read by their awaiter via __pluto_green_prod_get, so only
-        // their stack is freed here.
-        if (is_submit) free(t);
+
+        switch (t->state) {
+        case GYIELD:
+            t->state = GRUN;
+            gq_push(t);                      // round-robin: back of the queue
+            break;
+        case GPARK: {
+            // Fiber fully switched out: run its handoff on the scheduler stack.
+            // The handoff either re-readies t (event already happened) or
+            // records t as a waiter to be woken later. Until then t is off all
+            // queues — only a future __pluto_green_wake re-enqueues it.
+            void (*pf)(void *) = t->park_fn; void *pa = t->park_arg;
+            t->park_fn = NULL; t->park_arg = NULL;
+            if (pf) pf(pa);
+            break;
+        }
+        case GDONE:
+        default:
+            free(t->stack);
+            // Submit tasks have no awaiter on the GProdTask (delivery went
+            // through the callback), so the scheduler owns and frees the
+            // handle too. cp1 tasks are read via __pluto_green_prod_get, so
+            // only their stack is freed here.
+            if (is_submit) free(t);
+            break;
+        }
     }
     return NULL;
 }
@@ -141,21 +236,22 @@ static void gprod_ensure_started(void) {
     pthread_mutex_unlock(&gq_mu);
 }
 
-GProdTask *__pluto_green_prod_spawn(long (*fn)(void *), void *arg, size_t stack_size) {
-    gprod_ensure_started();
+static GProdTask *gprod_alloc(size_t stack_size) {
     GProdTask *t = (GProdTask *)calloc(1, sizeof(GProdTask));
-    t->fn = fn; t->arg = arg;
     t->stack = (char *)malloc(stack_size);
     t->stack_size = stack_size;
     t->sp = prime_ctx(t->stack + stack_size, gprod_trampoline);
+    t->state = GRUN;
+    return t;
+}
+
+GProdTask *__pluto_green_prod_spawn(long (*fn)(void *), void *arg, size_t stack_size) {
+    gprod_ensure_started();
+    GProdTask *t = gprod_alloc(stack_size);
+    t->fn = fn; t->arg = arg;
     pthread_mutex_init(&t->mu, NULL);
     pthread_cond_init(&t->cv, NULL);
-    pthread_mutex_lock(&gq_mu);
-    t->next = NULL;
-    if (gq_tail) gq_tail->next = t; else gq_head = t;
-    gq_tail = t;
-    pthread_cond_signal(&gq_wake);
-    pthread_mutex_unlock(&gq_mu);
+    gq_push(t);
     return t;
 }
 
@@ -173,17 +269,9 @@ long __pluto_green_prod_get(GProdTask *t) {
 // fiber. This is the entry point threading.c's __pluto_green_spawn uses.
 void __pluto_green_submit(void (*run)(void *), void *job, size_t stack_size) {
     gprod_ensure_started();
-    GProdTask *t = (GProdTask *)calloc(1, sizeof(GProdTask));
+    GProdTask *t = gprod_alloc(stack_size);
     t->submit_run = run;
     t->submit_job = job;
-    t->stack = (char *)malloc(stack_size);
-    t->stack_size = stack_size;
-    t->sp = prime_ctx(t->stack + stack_size, gprod_trampoline);
-    pthread_mutex_lock(&gq_mu);
-    t->next = NULL;
-    if (gq_tail) gq_tail->next = t; else gq_head = t;
-    gq_tail = t;
-    pthread_cond_signal(&gq_wake);
-    pthread_mutex_unlock(&gq_mu);
+    gq_push(t);
 }
 #endif
