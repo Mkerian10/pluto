@@ -105,3 +105,67 @@ the whole tier.
    context registry (GC_INTEGRATION.md) into the runtime build.
 5. Cross-tier channel (kind-tagged waiters); cross-tier await.
 6. kqueue readiness (sockets/timers leave the leaf set); fs/stdin offload.
+
+---
+
+## Production-scheduler integration plan (the remaining phase)
+
+The runtime core, GC registry, keyword, analysis and build-wiring are done. The
+remaining work is one tightly-coupled chunk; this sequences it with the hazards
+called out, so it is built carefully rather than dribbled.
+
+### Scheduler lifecycle (v1)
+- One global green scheduler, a pthread started **lazily** on the first `green`
+  spawn (double-checked init under a mutex — the init race is the first hazard).
+- A **thread-safe ready queue**: producers (`green f()` on any thread) lock,
+  enqueue, signal a wake condvar; the scheduler pops under the lock. (The
+  standalone prototype's lock-free queue assumed single-threaded; production is
+  multi-producer, so the queue gains a mutex — distinct from the per-fiber
+  cooperative switching, which stays lock-free *within* the scheduler thread.)
+- Idle scheduler (empty queue) waits on the wake condvar **inside a GC safe
+  region** (so STW converges) — not `green_run`'s "return on empty".
+
+### Running a real Pluto closure
+- A green task wraps a lifted Pluto closure `[fn_ptr, captures…]`. The fiber
+  entry trampoline calls `fn_ptr(closure)` — the SAME ABI closure-lift already
+  emits for `spawn`, so codegen reuses it. Result/error land in the task.
+
+### Cross-tier await (`.get()`)
+- Task handle layout matches today's `Task<T>` (result slot + error slot +
+  `TaskSync{mutex,cond}`) so `.get()` codegen is unchanged. The scheduler
+  signals that condvar on completion; a main/pthread `.get()` blocks on it; a
+  green-task `.get()` parks on the scheduler instead (cooperative). Hazard:
+  green-awaiting-green must park (not block the scheduler thread).
+
+### GC integration (wiring the already-landed registry)
+- The scheduler pthread registers as a GC thread (`__pluto_gc_register_thread_
+  stack`) like spawn trampolines. Each fiber registers a green context
+  (`__pluto_gc_register_green_context(stack_top, sp)`) on first run; updates
+  `live_sp` on every switch-out; unregisters on finish.
+- **Running-fiber-at-STW (the sharpest hazard):** when STW hits while a fiber
+  runs, that fiber's live_sp must be the thread's current sp. Handle by having
+  the scheduler thread's safepoint handler publish the running context's
+  live_sp = current sp before it parks (reuse `gc_record_park`'s stack_cur).
+
+### Test-mode routing
+- Under `PLUTO_TEST_MODE`, `green` routes to the EXISTING DPOR fiber scheduler
+  (threading.c test-mode path) — same cooperative model, with interleaving
+  exploration. So codegen lowers `green` to a `__pluto_green_spawn` symbol that
+  has a production impl (new scheduler) and a test-mode impl (DPOR fibers). This
+  is the unification the RFC's "test-mode gift" promised.
+
+### Codegen
+- `Expr::Spawn { green: true }` lowers to `__pluto_green_spawn(closure)` instead
+  of `__pluto_task_spawn`; everything else (closure lift, Task<T>, `.get()`)
+  is shared with `spawn`. One new runtime symbol, two impls (prod / test).
+
+### Checkpoints (each must pass before the next)
+1. Production scheduler skeleton (thread + locked queue + lazy init), C-tested:
+   spawn C tasks from a producer thread, await results. No GC/closures yet.
+2. GC-context registration + a forced-collection C test: green tasks that
+   `gc_alloc` survive a collection (the real scheduler+GC proof).
+3. Codegen lowers `green` → `__pluto_green_spawn`; `green f()` runs on the
+   scheduler (not a thread); green integration tests pass.
+4. Cross-tier channel (kind-tagged waiters) + green-awaiting-green parking.
+5. Guardrail enforcement at the `green` boundary (consume `green_illegal_fns`).
+6. kqueue readiness (sockets/timers leave the leaf set) → fs/stdin offload.
