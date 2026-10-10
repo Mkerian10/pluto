@@ -144,8 +144,9 @@ typedef struct GCTrace {
     unsigned tenure_age;          // hybrid local mark: local survivals before promotion
     size_t trace_work;
     struct GCMarkStack *pm_local;   // parallel marking: this worker's stack
+    int root_check;               // PLUTO_GC_VERIFY: root scan checks instead of marking
 } GCTrace;
-static __thread GCTrace gc_tr_tls = { &gc_global_ctx, GC_MARK_LOCAL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL };
+static __thread GCTrace gc_tr_tls = { &gc_global_ctx, GC_MARK_LOCAL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, 0 };
 #define GC_TR() (&gc_tr_tls)
 #define GC_MARKED(h) ((h)->mark & T->mark_bit)
 #if defined(GC_HYBRID)
@@ -697,8 +698,6 @@ typedef struct GCThreadHeap {
     long local_count;
 #endif
 #if defined(GC_HYBRID)
-    int marks_valid;           // a global cycle started and this heap has not
-                               // yet applied its result (owner sweep pending)
     int shared_sweep_pending;  // the cycle finished: free dead shared objects
     size_t swept_promoted;     // bytes the running local sweep promoted
     // Old generation (private objects tenured in place, header next ==
@@ -2614,7 +2613,7 @@ static void gc_tlh_promote_visit(GCTrace *T, GCHeader *h) {
     // would skip the shared objects only it reaches. Once the cycle is done
     // but this heap has not applied the result, it is simply live.
     if (gc_incr_marking) gc_satb_push(&gc_satb_local, (long)(h + 1));
-    else if (H->marks_valid) h->mark |= GC_MARK_GLOBAL;
+    else if (H->shared_sweep_pending) h->mark |= GC_MARK_GLOBAL;
 #endif
     gc_worklist_push(T, (char *)h + sizeof(GCHeader));
 }
@@ -2740,7 +2739,16 @@ void __pluto_gc_store_slow(long obj, long value) { (void)obj; (void)value; }
 
 // A root word: mark the object it points into, if any (a pointer into a
 // backing store marks the buffer, whose trace marks its handle).
+#if defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE)
+static void gc_root_check(void *candidate);
+#endif
 static void gc_mark_candidate(GCTrace *T, void *candidate) {
+#if defined(GC_HYBRID) && !defined(PLUTO_TEST_MODE)
+    if (__builtin_expect(T->root_check, 0)) {
+        gc_root_check(candidate);
+        return;
+    }
+#endif
     GCHeader *h = gc_find_object(T, candidate);
     if (h && !GC_MARKED(h)) gc_mark_object(T, (char *)h + sizeof(GCHeader));
 }
@@ -3331,7 +3339,6 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
 #if defined(GC_HYBRID)
     if (H->shared_sweep_pending) {   // the last cycle's result is applied
         H->shared_sweep_pending = 0;
-        H->marks_valid = 0;
     }
 #endif
     return freed;
@@ -4449,6 +4456,18 @@ static void gc_hyb_check_slot(GCHeader *parent, long word, const char *where) {
     abort();
 }
 
+static void gc_root_check(void *candidate) {
+    GCHeader *c = gc_lookup(candidate, 1);
+    if (!c || (c->mark & GC_MARK_GLOBAL)) return;
+    GCBlock *cb = gc_pagemap_get((uintptr_t)c);
+    if (c->next != GC_SHARED_TAG && cb && cb->owner) return;   // private: not this cycle's
+    fprintf(stderr, "pluto: PLUTO_GC_VERIFY: root reference %p to unmarked %s object %p "
+            "(tag %d, size %u, next %p, mark %x) at the end of a global cycle\n",
+            candidate, cb && cb->owner ? "shared" : "unowned", (void *)(c + 1), c->type_tag,
+            c->size, (void *)c->next, c->mark);
+    abort();
+}
+
 // PLUTO_GC_VERIFY at the end of a global cycle: every shared object that a
 // marked object references is marked (otherwise the sweep would free a
 // reachable object), and invariant I holds.
@@ -4466,6 +4485,14 @@ static void gc_hyb_check(void) {
         if (h->type_tag != GC_TAG_FREE && (h->mark & GC_MARK_GLOBAL)) gc_check_children(h, gc_hyb_check_slot);
     }
     gc_tlh_check_invariant();
+    // Snapshot-at-the-beginning: whatever a root reaches now was reachable
+    // at the snapshot or became shared during the cycle (and was logged), so
+    // a root-referenced shared object, or any object of an unowned block,
+    // must be marked.
+    GCTrace *T = GC_TR();
+    T->root_check = 1;
+    gc_scan_roots(T);
+    T->root_check = 0;
 }
 
 
@@ -4635,7 +4662,6 @@ static void gc_hyb_start(int complete) {
     }
     gc_incr_marking = 1;
     __pluto_gc_barrier_mode = 3;
-    for (size_t i = 0; i < gc_tlh_heap_count; i++) gc_tlh_heaps[i]->marks_valid = 1;
     gc_hyb_steps = 0;
     gc_hyb_cycle_us = 0;
     gc_hyb_cycle_max_us = 0;
