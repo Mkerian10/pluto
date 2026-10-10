@@ -2405,6 +2405,45 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
         deadline.tv_nsec -= 1000000000L;
     }
 
+    // On a green fiber, a cond wait would block the scheduler thread (and every
+    // peer fiber) for up to the whole timeout. Instead poll cooperatively: check
+    // readiness under the lock, then cooperatively sleep (parking on the cp6
+    // timer wheel, which yields the scheduler) until the next slice or the
+    // deadline. Costs up to one slice of latency on arrival/timeout — acceptable
+    // on a timeout path; an event-driven dual-register (channel waiter + timer
+    // with wake-once) is the follow-up optimization (#369 cp6).
+    if (__pluto_green_self()) {
+        long deadline_ns = (long)deadline.tv_sec * 1000000000L + deadline.tv_nsec;
+        const long SLICE_NS = 1000000L;   // 1 ms poll granularity
+        for (;;) {
+            chan_lock(sync);
+            if (ch[3] > 0) {
+                long *buf = (long *)ch[1];
+                long val = buf[ch[4]];
+                ch[4] = (ch[4] + 1) % ch[2];
+                ch[3]--;
+                chan_wake_one_send(sync);
+                pthread_mutex_unlock(&sync->mutex);
+                return val;
+            }
+            if (ch[6]) {   // closed and drained
+                pthread_mutex_unlock(&sync->mutex);
+                chan_raise_error_typed("ChannelClosed", "channel closed");
+                return 0;
+            }
+            pthread_mutex_unlock(&sync->mutex);
+            struct timespec now;
+            clock_gettime(CLOCK_REALTIME, &now);
+            long now_ns = (long)now.tv_sec * 1000000000L + now.tv_nsec;
+            long remaining = deadline_ns - now_ns;
+            if (remaining <= 0) {
+                chan_raise_error_typed("TimedOut", "timed out waiting on channel");
+                return 0;
+            }
+            __pluto_green_sleep_ns(remaining < SLICE_NS ? remaining : SLICE_NS);
+        }
+    }
+
     chan_lock(sync);
     while (ch[3] == 0 && !ch[6]) {
         sync->recv_waiters++;

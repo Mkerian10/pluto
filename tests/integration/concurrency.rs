@@ -1818,3 +1818,47 @@ fn spawn_allows_blocking_op() {
     );
     assert_eq!(out.trim(), "7");
 }
+
+#[test]
+fn green_recv_timeout_yields() {
+    // A green fiber in recv_timeout yields the scheduler rather than blocking it
+    // (#369 cp6): a peer fiber completes while the waiter is timing out, and the
+    // waiter then returns the timeout sentinel. If recv_timeout blocked the
+    // scheduler, worker() could not run until the timeout elapsed.
+    let out = compile_and_run_stdout(
+        r#"
+        fn waiter(rx: Receiver<int>) int { return rx.recv_timeout(100) catch -1 }
+        fn worker() int { return 42 }
+        fn main() {
+            let (tx, rx) = chan<int>(1)
+            let w = green waiter(rx)
+            let k = green worker()
+            print(k.get())
+            print(w.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42\n-1");
+}
+
+#[test]
+fn green_recv_timeout_receives() {
+    // recv_timeout from a fiber returns an item that arrives before the deadline.
+    let out = compile_and_run_stdout(
+        r#"
+        fn producer(tx: Sender<int>) int {
+            tx.send(99)!
+            return 0
+        }
+        fn consumer(rx: Receiver<int>) int { return rx.recv_timeout(500) catch -1 }
+        fn main() {
+            let (tx, rx) = chan<int>(1)
+            let p = green producer(tx)
+            let c = green consumer(rx)
+            print(c.get())
+            p.get() catch 0
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "99");
+}
