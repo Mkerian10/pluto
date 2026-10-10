@@ -1558,38 +1558,64 @@ static inline int socket_would_block(int e) {
     return e == EAGAIN || e == EWOULDBLOCK;
 }
 
-#ifndef PLUTO_TEST_MODE
-// Clear O_NONBLOCK (idempotent). A green fiber doing a *timed* read wants
-// kernel SO_RCVTIMEO semantics, which do not apply to a non-blocking fd, so the
-// timed path forces the fd back to blocking even if an earlier cooperative op
-// left it non-blocking.
-static void socket_set_blocking(int fd) {
-    int fl = fcntl(fd, F_GETFL, 0);
-    if (fl >= 0 && (fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
-}
+// A green read's cooperative wait plan, decided once before the syscall loop:
+//   mode 0 = blocking: a non-green caller — the read blocks the thread, and a
+//            receive deadline (SO_RCVTIMEO) fires in the kernel as before.
+//   mode 1 = untimed cooperative: a green caller with no deadline; park on
+//            fd-readiness (zero latency; the scheduler serves peers meanwhile).
+//   mode 2 = timed cooperative: a green caller with a deadline; poll the
+//            non-blocking fd, yielding via the scheduler timer between tries,
+//            until data arrives or the deadline passes. We track the deadline
+//            ourselves — SO_RCVTIMEO cannot fire on a non-blocking fd — so the
+//            fiber yields instead of blocking the scheduler for the timeout.
+typedef struct { int mode; long deadline_ns; } CoopRead;
 
-// Does this fd carry a receive deadline (SO_RCVTIMEO != 0)?
-static int socket_rcvtimeo_set(int fd) {
+#ifndef PLUTO_TEST_MODE
+static long coop_now_ns(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000000000L + (long)ts.tv_nsec;
+}
+// SO_RCVTIMEO as nanoseconds, or 0 if no receive deadline is set.
+static long socket_rcvtimeo_ns(int fd) {
     struct timeval tv; socklen_t len = sizeof(tv);
     if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, &len) < 0) return 0;
-    return tv.tv_sec != 0 || tv.tv_usec != 0;
+    return (long)tv.tv_sec * 1000000000L + (long)tv.tv_usec * 1000L;
 }
 #endif
 
-// Decide how a read on `fd` should wait:
-//   1 = cooperative — fd set non-blocking, park on EWOULDBLOCK (green, no
-//       deadline: the scheduler stays free for other fibers);
-//   0 = blocking — a green fiber with a receive deadline (force fd blocking so
-//       SO_RCVTIMEO fires) or any non-fiber caller (unchanged behavior).
-static int socket_read_coop(int fd) {
+// Decide the wait plan for a read on `fd` (see CoopRead) and ready the fd.
+static CoopRead socket_read_begin(int fd) {
+    CoopRead c = {0, 0};
 #ifndef PLUTO_TEST_MODE
-    if (!socket_is_green()) return 0;
-    if (socket_rcvtimeo_set(fd)) { socket_set_blocking(fd); return 0; }
+    if (!socket_is_green()) return c;
+    long timeout_ns = socket_rcvtimeo_ns(fd);
     socket_set_nonblocking(fd);
-    return 1;
+    if (timeout_ns > 0) { c.mode = 2; c.deadline_ns = coop_now_ns() + timeout_ns; }
+    else { c.mode = 1; }
 #else
-    (void)fd; return 0;
+    (void)fd;
 #endif
+    return c;
+}
+
+// Called on EWOULDBLOCK. Returns 1 = retry the read, 0 = stop (a blocking
+// caller, or a timed cooperative read whose deadline has passed — the caller
+// then flags timed-out). Untimed cooperative parks on fd-readiness; timed
+// cooperative yields a <=1ms scheduler slice until the deadline.
+static int socket_read_wait(int fd, CoopRead *c) {
+#ifndef PLUTO_TEST_MODE
+    if (c->mode == 1) { __pluto_green_prod_wait_fd(fd, 0); return 1; }
+    if (c->mode == 2) {
+        long rem = c->deadline_ns - coop_now_ns();
+        if (rem <= 0) return 0;                        // deadline reached
+        long slice = rem < 1000000L ? rem : 1000000L;  // <=1ms cooperative yield
+        __pluto_green_sleep_ns(slice);
+        return 1;
+    }
+#else
+    (void)fd; (void)c;
+#endif
+    return 0;
 }
 
 // Park the current fiber until `fd` is ready (for_write: 1 = writable, 0 =
@@ -1690,7 +1716,7 @@ void *__pluto_socket_read(long fd, long max_bytes) {
     if (max_bytes > 1048576) max_bytes = 1048576;
     char *buf = (char *)malloc(max_bytes);
     if (!buf) return __pluto_string_new("", 0);
-    int coop = socket_read_coop((int)fd);
+    CoopRead coop = socket_read_begin((int)fd);
     ssize_t n;
     for (;;) {
         __pluto_gc_enter_safe_region();
@@ -1698,8 +1724,8 @@ void *__pluto_socket_read(long fd, long max_bytes) {
         int read_errno = errno;
         __pluto_gc_leave_safe_region();
         if (n < 0 && socket_would_block(read_errno)) {
-            if (coop) { socket_park_fd((int)fd, 0); continue; }  // yield, retry
-            socket_read_timed_out = 1;   // blocking timed read: deadline expired
+            if (socket_read_wait((int)fd, &coop)) continue;   // parked/yielded, retry
+            socket_read_timed_out = 1;   // deadline reached (blocking or cooperative)
         }
         break;
     }
@@ -1747,13 +1773,13 @@ long __pluto_socket_read_bytes(long fd, long max_bytes) {
         if (max_bytes > 1048576) max_bytes = 1048576;
         buf = (char *)malloc((size_t)max_bytes);
         if (buf) {
-            int coop = socket_read_coop((int)fd);
+            CoopRead coop = socket_read_begin((int)fd);
             for (;;) {
                 __pluto_gc_enter_safe_region();
                 n = read((int)fd, buf, (size_t)max_bytes);
                 int e = errno;
                 __pluto_gc_leave_safe_region();
-                if (coop && n < 0 && socket_would_block(e)) { socket_park_fd((int)fd, 0); continue; }
+                if (n < 0 && socket_would_block(e) && socket_read_wait((int)fd, &coop)) continue;
                 break;
             }
         }
@@ -1860,7 +1886,7 @@ static __thread int framed_read_timed_out = 0;
 // Read a length-framed message into a pluto string. Returns NULL on failure.
 void *__pluto_read_framed(long fd) {
     framed_read_timed_out = 0;
-    int coop = socket_read_coop((int)fd);
+    CoopRead coop = socket_read_begin((int)fd);   // one deadline for the whole message
     unsigned char hdr[4];
     long got = 0;
     while (got < 4) {
@@ -1869,8 +1895,8 @@ void *__pluto_read_framed(long fd) {
         int read_errno = errno;
         __pluto_gc_leave_safe_region();
         if (n < 0 && socket_would_block(read_errno)) {
-            if (coop) { socket_park_fd((int)fd, 0); continue; }  // yield, retry
-            framed_read_timed_out = 1;   // blocking timed read: deadline expired
+            if (socket_read_wait((int)fd, &coop)) continue;   // parked/yielded, retry
+            framed_read_timed_out = 1;   // deadline reached (blocking or cooperative)
         }
         if (n <= 0) return NULL;
         got += n;
@@ -1886,7 +1912,7 @@ void *__pluto_read_framed(long fd) {
         int read_errno = errno;
         __pluto_gc_leave_safe_region();
         if (n < 0 && socket_would_block(read_errno)) {
-            if (coop) { socket_park_fd((int)fd, 0); continue; }
+            if (socket_read_wait((int)fd, &coop)) continue;
             framed_read_timed_out = 1;
         }
         if (n <= 0) {
