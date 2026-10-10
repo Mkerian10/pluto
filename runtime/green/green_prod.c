@@ -97,7 +97,13 @@ typedef struct GProdTask {
 struct GProdSched {
     pthread_mutex_t mu;
     pthread_cond_t  wake;
-    GProdTask *head, *tail;     // ready queue (guarded by mu)
+    GProdTask *head, *tail;     // REMOTE ready queue: cross-thread wakes push
+                                //   here under `mu`; the scheduler drains it.
+    GProdTask *local_head, *local_tail; // LOCAL ready queue: touched ONLY by
+                                //   this scheduler's own thread (yields, and
+                                //   same-thread wakes), so NO lock — the hot
+                                //   path for channel handoffs / await on one
+                                //   scheduler avoids the mutex entirely.
     GProdTask *timer_head;      // sorted-by-deadline timer list (guarded by mu)
     void *sched_sp;             // the scheduler loop's own saved context
     GProdTask *current;         // the fiber it is currently running
@@ -155,15 +161,24 @@ static void timer_fire_expired(GProdSched *s, long now) {
     }
 }
 
-// Enqueue onto scheduler s's ready queue. Caller must NOT hold s->mu. Safe to
-// call from any thread (that is how a cross-scheduler wake re-readies a fiber).
-static void sched_push(GProdSched *s, GProdTask *t) {
+// Enqueue onto scheduler s's REMOTE ready queue under its lock + wake it. Used
+// for cross-thread wakes (a different scheduler or a non-scheduler thread
+// re-readying a fiber whose home is s).
+static void sched_push_remote(GProdSched *s, GProdTask *t) {
     pthread_mutex_lock(&s->mu);
     t->next = NULL;
     if (s->tail) s->tail->next = t; else s->head = t;
     s->tail = t;
     pthread_cond_signal(&s->wake);
     pthread_mutex_unlock(&s->mu);
+}
+
+// Enqueue onto s's LOCAL ready queue with NO lock. ONLY valid on s's own
+// scheduler thread (a yield, or a wake whose waker runs on s's thread).
+static void sched_push_local(GProdSched *s, GProdTask *t) {
+    t->next = NULL;
+    if (s->local_tail) s->local_tail->next = t; else s->local_head = t;
+    s->local_tail = t;
 }
 
 static void *prime_ctx(char *stack_top, void (*entry)(void)) {
@@ -243,8 +258,11 @@ void __pluto_green_wake(void *fiber) {
     GProdTask *t = (GProdTask *)fiber;
     t->state = GRUN;
     GProdSched *w = cur_sched;
-    if (g_wake_local && w) { t->home = w; sched_push(w, t); }
-    else                   { sched_push(t->home, t); }
+    if (g_wake_local && w) { t->home = w; }  // experimental migration (off)
+    // Fast path: the waker runs on the fiber's home scheduler thread, so the
+    // local (lockless) queue is safe. Otherwise it's a cross-thread wake.
+    if (w == t->home) sched_push_local(t->home, t);
+    else              sched_push_remote(t->home, t);
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
@@ -291,26 +309,35 @@ static void *gprod_scheduler(void *arg) {
         __pluto_gc_register_thread_stack(lo, hi);
     }
     for (;;) {
-        pthread_mutex_lock(&s->mu);
-        timer_fire_expired(s, gprod_now_ns());
-        // Idle wait is a GC-safe region so stop-the-world converges while the
-        // scheduler sleeps. With timers pending, wait only to the nearest one.
-        while (!s->head) {
-            __pluto_gc_enter_safe_region();
-            if (s->timer_head) {
-                long d = s->timer_head->deadline_ns;
-                struct timespec ts = { (time_t)(d / 1000000000L), (long)(d % 1000000000L) };
-                pthread_cond_timedwait(&s->wake, &s->mu, &ts);
-            } else {
-                pthread_cond_wait(&s->wake, &s->mu);
+        // Fast path: run the local queue (no lock) until it drains. Only when
+        // it is empty do we take the lock to pull in remote wakes / fire timers
+        // / idle-wait. For a workload whose fibers hand off among themselves on
+        // one scheduler (channels, await, yield), the mutex is never touched.
+        if (!s->local_head) {
+            pthread_mutex_lock(&s->mu);
+            timer_fire_expired(s, gprod_now_ns());   // fires into the remote queue
+            // Idle wait is a GC-safe region so stop-the-world converges while
+            // the scheduler sleeps. With timers pending, wait to the nearest.
+            while (!s->head) {
+                __pluto_gc_enter_safe_region();
+                if (s->timer_head) {
+                    long d = s->timer_head->deadline_ns;
+                    struct timespec ts = { (time_t)(d / 1000000000L), (long)(d % 1000000000L) };
+                    pthread_cond_timedwait(&s->wake, &s->mu, &ts);
+                } else {
+                    pthread_cond_wait(&s->wake, &s->mu);
+                }
+                __pluto_gc_leave_safe_region();
+                timer_fire_expired(s, gprod_now_ns());
             }
-            __pluto_gc_leave_safe_region();
-            timer_fire_expired(s, gprod_now_ns());
+            // Move the whole remote chain into the local queue in one shot.
+            s->local_head = s->head; s->local_tail = s->tail;
+            s->head = s->tail = NULL;
+            pthread_mutex_unlock(&s->mu);
         }
-        GProdTask *t = s->head;
-        s->head = t->next;
-        if (!s->head) s->tail = NULL;
-        pthread_mutex_unlock(&s->mu);
+        GProdTask *t = s->local_head;
+        s->local_head = t->next;
+        if (!s->local_head) s->local_tail = NULL;
 
         s->current = t;
         int is_submit = (t->submit_run != NULL);
@@ -345,7 +372,7 @@ static void *gprod_scheduler(void *arg) {
         switch (t->state) {
         case GYIELD:
             t->state = GRUN;
-            sched_push(s, t);                // back of this scheduler's queue
+            sched_push_local(s, t);          // same thread → lockless local queue
             break;
         case GPARK: {
             void (*pf)(void *) = t->park_fn; void *pa = t->park_arg;
@@ -392,6 +419,7 @@ static void gprod_ensure_started(void) {
             pthread_mutex_init(&s->mu, NULL);
             pthread_cond_init(&s->wake, NULL);
             s->head = s->tail = s->timer_head = NULL;
+            s->local_head = s->local_tail = NULL;
             s->sched_sp = NULL; s->current = NULL;
             pthread_create(&s->thread, NULL, gprod_scheduler, s);
         }
@@ -440,7 +468,7 @@ GProdTask *__pluto_green_prod_spawn(long (*fn)(void *), void *arg, size_t stack_
     pthread_mutex_init(&t->mu, NULL);
     pthread_cond_init(&t->cv, NULL);
     t->home = pick_sched();
-    sched_push(t->home, t);
+    sched_push_remote(t->home, t);
     return t;
 }
 
@@ -461,6 +489,6 @@ void __pluto_green_submit(void (*run)(void *), void *job, size_t stack_size) {
     t->submit_run = run;
     t->submit_job = job;
     t->home = pick_sched();
-    sched_push(t->home, t);
+    sched_push_remote(t->home, t);
 }
 #endif

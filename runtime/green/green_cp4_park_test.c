@@ -32,6 +32,9 @@ void __pluto_green_wake(void *fiber);
 
 // ── GC stubs (this test has no collector) ────────────────────────────────────
 void *__pluto_gc_register_green_context(void *top, void *sp) { (void)top; (void)sp; return (void *)1; }
+__thread void *__pluto_current_error = 0;
+__thread void *__pluto_current_error_type = 0;
+__thread long *__pluto_current_task = 0;
 void __pluto_gc_green_set_live_sp(void *h, void *sp) { (void)h; (void)sp; }
 void __pluto_gc_unregister_green_context(void *h) { (void)h; }
 void __pluto_gc_register_thread_stack(void *lo, void *hi) { (void)lo; (void)hi; }
