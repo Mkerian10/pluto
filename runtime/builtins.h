@@ -85,6 +85,7 @@ int sendfile(int, int, off_t, off_t *, struct sf_hdtr *, int);
 #define GC_TAG_STRING_SLICE 10 // [backing_ptr][offset][len]; lightweight view into owned string
 #define GC_TAG_ENTITY 11  // object (entity) instance: identity semantics — never deep-copied, never structurally compared (rfc-objects.md)
 #define GC_TAG_HANDLE 12  // foreign-entity handle stub: [home_str][type_str][id] (rfc-objects.md phase 2)
+#define GC_TAG_BUFFER 13  // container backing store (marksweep family): [owner handle][payload...]
 
 // ── Thread-Local Storage ─────────────────────────────────────────────────────
 
@@ -104,6 +105,93 @@ typedef struct GCHeader {
     uint8_t  type_tag;        // 1B: object kind
     uint16_t field_count;     // 2B: number of 8-byte slots to scan
 } GCHeader;
+
+// ── Write barriers ────────────────────────────────────────────────────────────
+//
+// __pluto_gc_barrier_mode, defined by every GC backend, is a bit set
+// selecting which barriers are live:
+//
+//   bit 0 (1)  thread-local heaps. A live object whose header `next` word
+//              is GC_SHARED_TAG is shared between threads: storing a pointer
+//              into it must first promote the stored value. One whose `next`
+//              is GC_OLD_TAG is in its thread's old generation: the store is
+//              recorded. Both go through __pluto_gc_store_slow.
+//   bit 1 (2)  snapshot-at-the-beginning logging (incremental marking, only
+//              while a cycle is marking). A reference that is overwritten in,
+//              or removed from, a heap object is logged
+//              (__pluto_gc_log_deleted) so marking still finds everything
+//              that was reachable when the cycle began.
+//
+// PLUTO_GC_STORE(obj, old, value) guards a store of `value` into `obj` over
+// `old` (0 for a fresh slot); PLUTO_GC_DELETE(old) guards a removal. Codegen
+// emits the same logic before non-scalar field stores (class fields: never a
+// container, so never GC_MARK_CLEAN). Neither macro may be separated from
+// its store by anything that can reach a safepoint.
+#define GC_SHARED_TAG ((GCHeader *)(uintptr_t)1)
+// Hybrid: a private object that has been tenured into its thread's old
+// generation (_REM: and is on the thread's remembered set). A store into an
+// old object must be recorded so the next minor collection, which does not
+// trace the old generation, still finds the young objects it now holds.
+#define GC_OLD_TAG     ((GCHeader *)(uintptr_t)2)
+#define GC_OLD_REM_TAG ((GCHeader *)(uintptr_t)3)
+// Hybrid: a private container whose elements were all shared when a local
+// collection last scanned it. Local collections skip its elements until a
+// store into it (which always goes through PLUTO_GC_STORE) clears the bit.
+#define GC_MARK_CLEAN 0x20
+extern int __pluto_gc_barrier_mode;
+void __pluto_gc_promote_store(long value);
+// A store of `value` into `obj` whose header says shared or old (next 1 or
+// 2): promotes the value (shared) or records the store (old).
+void __pluto_gc_store_slow(long obj, long value);
+void __pluto_gc_log_deleted(long old);
+#define PLUTO_GC_STORE(obj, old, value)                                           \
+    do {                                                                          \
+        int m_ = __pluto_gc_barrier_mode;                                         \
+        if (__builtin_expect(m_ != 0, 0)) {                                       \
+            if (m_ & 1) {                                                         \
+                GCHeader *h_ = (GCHeader *)((char *)(obj) - sizeof(GCHeader));    \
+                if ((uintptr_t)h_->next - 1 < 2)                                  \
+                    __pluto_gc_store_slow((long)(obj), (long)(value));            \
+                else if (h_->mark & GC_MARK_CLEAN)                                \
+                    h_->mark &= (uint8_t)~GC_MARK_CLEAN;                          \
+            }                                                                     \
+            if ((m_ & 2) && (old) != 0) __pluto_gc_log_deleted((long)(old));      \
+        }                                                                         \
+    } while (0)
+#define PLUTO_GC_DELETE(old)                                                      \
+    do {                                                                          \
+        if (__builtin_expect(__pluto_gc_barrier_mode & 2, 0))                     \
+            __pluto_gc_log_deleted((long)(old));                                  \
+    } while (0)
+
+// ── Container backing stores ─────────────────────────────────────────────────
+//
+// The element storage of arrays, bytes, maps and sets comes from the GC
+// backend. __pluto_gc_buf_new(owner, bytes) returns a zeroed payload of
+// `bytes` bytes for the container handle `owner`; __pluto_gc_buf_drop(p)
+// says a payload has been replaced and is no longer used by its handle.
+//
+// The marksweep family allocates backing stores in the GC heap as
+// GC_TAG_BUFFER objects whose first word names their handle. An interior
+// pointer into a payload then resolves through the page map like any other
+// object and keeps the handle alive, so collections need no side table of
+// buffer extents; dropping is a no-op (the old buffer is garbage). noop and
+// legacy return malloc'd memory, free it in their finalizers, and free a
+// dropped payload at once.
+//
+// A payload is installed in its handle with PLUTO_GC_SET_BUF, never a plain
+// store: the allocation may have run a collection that made the handle
+// shared, and a shared handle must not point at a private backing store.
+// Like the other barriers, nothing that can reach a safepoint may separate
+// it from the allocation it installs.
+void *__pluto_gc_buf_new(void *owner, long bytes);
+void __pluto_gc_buf_own(void *payload, void *owner);   // name the owner of a buffer made with NULL
+void __pluto_gc_buf_drop(void *payload);
+#define PLUTO_GC_SET_BUF(handle, slot, payload)                                   \
+    do {                                                                          \
+        PLUTO_GC_STORE((handle), 0, (payload));                                   \
+        ((long *)(handle))[(slot)] = (long)(payload);                             \
+    } while (0)
 
 // ── Channel Sync (Production Mode Only) ──────────────────────────────────────
 

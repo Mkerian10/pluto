@@ -666,27 +666,115 @@ fn compile_file_for_tests_impl(
 }
 
 /// Which garbage collector backend to use.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GcBackend {
-    /// Conservative mark-and-sweep collector (default).
-    #[default]
+    /// Conservative mark-and-sweep over a size-class block heap (default).
     MarkSweep,
     /// No-op allocator that never collects. Useful for benchmarking.
     Noop,
+    /// The pre-2026-10 collector (malloc per object, interval tables);
+    /// a historical baseline for benchmarks.
+    Legacy,
+    /// Mark-sweep with lazy sweeping: blocks are swept on demand by the
+    /// allocator instead of in the pause.
+    Lazy,
+    /// Generational non-moving mark-sweep: sticky mark bits, minor
+    /// collections over a remembered set, mprotect write barrier.
+    Gen,
+    /// Mark-sweep with parallel marking on helper threads.
+    ParMark,
+    /// Mark-sweep with thread-local allocation: each thread allocates from
+    /// blocks it owns without taking the global lock.
+    Tlab,
+    /// Shared-nothing heaps: private per-thread heaps, objects promoted to
+    /// shared when they cross a thread boundary or are stored into a shared
+    /// object.
+    Tlh,
+    /// Incremental mark-sweep: snapshot-at-the-beginning marking in short
+    /// stop-the-world steps paced by allocation, with a deletion write
+    /// barrier, followed by lazy sweeping. Bounds pauses independently of
+    /// heap size.
+    Incr,
+    /// Generational shared-nothing heaps: thread-local heaps with tenuring
+    /// (survivors are promoted, so local collections stay proportional to
+    /// young data) and an incremental snapshot-at-the-beginning collector
+    /// for the shared heap.
+    Hybrid,
+}
+
+/// The default backend is mark-sweep; PLUTO_GC_BACKEND=<name> overrides it
+/// (lets whole test suites run under an alternative collector).
+impl Default for GcBackend {
+    fn default() -> Self {
+        std::env::var("PLUTO_GC_BACKEND")
+            .ok()
+            .and_then(|n| GcBackend::from_name(&n))
+            .unwrap_or(GcBackend::MarkSweep)
+    }
 }
 
 impl GcBackend {
-    fn name(&self) -> &'static str {
+    /// Every backend, in a stable order (index = position).
+    pub const ALL: [GcBackend; 10] = [
+        GcBackend::MarkSweep,
+        GcBackend::Noop,
+        GcBackend::Legacy,
+        GcBackend::Lazy,
+        GcBackend::Gen,
+        GcBackend::ParMark,
+        GcBackend::Tlab,
+        GcBackend::Tlh,
+        GcBackend::Incr,
+        GcBackend::Hybrid,
+    ];
+
+    fn index(&self) -> usize {
+        GcBackend::ALL.iter().position(|b| b == self).unwrap()
+    }
+
+    pub fn name(&self) -> &'static str {
         match self {
             GcBackend::MarkSweep => "marksweep",
             GcBackend::Noop => "noop",
+            GcBackend::Legacy => "legacy",
+            GcBackend::Lazy => "lazy",
+            GcBackend::Gen => "gen",
+            GcBackend::ParMark => "parmark",
+            GcBackend::Tlab => "tlab",
+            GcBackend::Tlh => "tlh",
+            GcBackend::Incr => "incr",
+            GcBackend::Hybrid => "hybrid",
         }
+    }
+
+    pub fn from_name(name: &str) -> Option<GcBackend> {
+        GcBackend::ALL.iter().copied().find(|b| b.name() == name)
     }
 
     fn gc_source(&self) -> &'static str {
         match self {
             GcBackend::MarkSweep => include_str!("../runtime/gc/marksweep.c"),
             GcBackend::Noop => include_str!("../runtime/gc/noop.c"),
+            GcBackend::Legacy => include_str!("../runtime/gc/legacy.c"),
+            GcBackend::Lazy | GcBackend::Gen | GcBackend::ParMark | GcBackend::Tlab | GcBackend::Tlh
+            | GcBackend::Incr | GcBackend::Hybrid => {
+                include_str!("../runtime/gc/marksweep.c")
+            }
+        }
+    }
+
+    /// Extra preprocessor defines for the GC translation unit, used by
+    /// backends that are compile-time variants of a shared source.
+    fn gc_defines(&self) -> &'static [&'static str] {
+        match self {
+            GcBackend::MarkSweep | GcBackend::Noop | GcBackend::Legacy => &[],
+            GcBackend::Lazy => &["-DGC_LAZY_SWEEP"],
+            GcBackend::Gen => &["-DGC_GENERATIONAL"],
+            GcBackend::ParMark => &["-DGC_PARALLEL_MARK"],
+            GcBackend::Tlab => &["-DGC_TLAB"],
+            GcBackend::Tlh => &["-DGC_TLH"],
+            GcBackend::Incr => &["-DGC_INCREMENTAL", "-DGC_LAZY_SWEEP"],
+            GcBackend::Hybrid => &["-DGC_HYBRID"],
         }
     }
 }
@@ -720,6 +808,7 @@ fn runtime_cache_key(test_mode: bool, gc: GcBackend) -> String {
 
     let mut hasher = DefaultHasher::new();
     gc.gc_source().hash(&mut hasher);
+    gc.gc_defines().hash(&mut hasher);
     include_str!("../runtime/threading.c").hash(&mut hasher);
     include_str!("../runtime/builtins.c").hash(&mut hasher);
     include_str!("../runtime/builtins.h").hash(&mut hasher);
@@ -849,6 +938,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
         cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
     }
     cmd.arg("-I").arg(&dir);
+    cmd.args(gc.gc_defines());
     cmd.arg(&gc_c).arg("-o").arg(&gc_o);
     #[cfg(target_os = "linux")]
     if !test_mode {
@@ -1023,30 +1113,16 @@ fn memoized_runtime_object(
 
 /// Compile the runtime once per process (per backend) and cache the resulting .o path.
 fn cached_runtime_object(gc: GcBackend) -> Result<PathBuf, CompileError> {
-    match gc {
-        GcBackend::MarkSweep => {
-            static CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
-            memoized_runtime_object(&CACHE, false, gc)
-        }
-        GcBackend::Noop => {
-            static CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
-            memoized_runtime_object(&CACHE, false, gc)
-        }
-    }
+    static CACHES: [Mutex<Option<PathBuf>>; GcBackend::ALL.len()] =
+        [const { Mutex::new(None) }; GcBackend::ALL.len()];
+    memoized_runtime_object(&CACHES[gc.index()], false, gc)
 }
 
 /// Compile the test runtime once per process (per backend) and cache the resulting .o path.
 fn cached_test_runtime_object(gc: GcBackend) -> Result<PathBuf, CompileError> {
-    match gc {
-        GcBackend::MarkSweep => {
-            static CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
-            memoized_runtime_object(&CACHE, true, gc)
-        }
-        GcBackend::Noop => {
-            static CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
-            memoized_runtime_object(&CACHE, true, gc)
-        }
-    }
+    static CACHES: [Mutex<Option<PathBuf>>; GcBackend::ALL.len()] =
+        [const { Mutex::new(None) }; GcBackend::ALL.len()];
+    memoized_runtime_object(&CACHES[gc.index()], true, gc)
 }
 
 struct LinkConfig {

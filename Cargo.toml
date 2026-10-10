@@ -137,6 +137,10 @@ name = "gc"
 path = "tests/integration/gc.rs"
 
 [[test]]
+name = "gc_backends"
+path = "tests/integration/gc_backends.rs"
+
+[[test]]
 name = "maps"
 path = "tests/integration/maps.rs"
 

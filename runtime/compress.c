@@ -46,17 +46,16 @@ long __pluto_compress_last_error(void) {
 
 // Build a fresh GC bytes handle holding a copy of `buf[0..n)`. Mirrors the
 // layout of __pluto_bytes_new / __pluto_fs_bytes_from_scratch in builtins.c:
-// a 24-byte handle [len][cap][data_ptr] tagged GC_TAG_BYTES, whose data buffer
-// is a plain malloc the GC frees on sweep.
+// a 24-byte handle [len][cap][data_ptr] tagged GC_TAG_BYTES, whose data
+// buffer comes from the GC backend (see __pluto_gc_buf_new in builtins.h).
 static long bytes_from_raw(const unsigned char *buf, long n) {
     long *handle = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
     long cap = n > 16 ? n : 16;
-    unsigned char *data = (unsigned char *)malloc((size_t)cap);
-    if (!data) { fprintf(stderr, "pluto: out of memory\n"); exit(1); }
+    unsigned char *data = (unsigned char *)__pluto_gc_buf_new(handle, cap);
     if (n > 0 && buf) memcpy(data, buf, (size_t)n);
-    handle[0] = n;
+    PLUTO_GC_SET_BUF(handle, 2, data);
     handle[1] = cap;
-    handle[2] = (long)data;
+    handle[0] = n;
     return (long)handle;
 }
 

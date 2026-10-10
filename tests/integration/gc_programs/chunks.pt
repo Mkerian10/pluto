@@ -1,0 +1,45 @@
+// Large containers scanned in chunks while their elements move: remove_at
+// shifts every later element one slot toward the front (behind an
+// in-progress scan cursor), and map deletions shift probe chains back.
+// Under incr every moved element must be logged or it is lost.
+class Item {
+    v: int
+}
+
+fn main() {
+    let mut arr: [Item] = []
+    let mut i = 0
+    while i < 60000 {
+        arr.push(Item { v: i })
+        i = i + 1
+    }
+    let mut m: Map<int, Item> = Map<int, Item> {}
+    let mut k = 0
+    while k < 40000 {
+        m[k] = Item { v: k }
+        k = k + 1
+    }
+    let mut j = 0
+    let mut acc = 0
+    while j < 4000 {
+        let first = arr.remove_at(0)
+        acc = acc + first.v % 3
+        arr.push(Item { v: j })
+        m.remove(j * 7 % 40000)
+        m[40000 + j] = Item { v: j }
+        let mut g = 0
+        while g < 40 {
+            let junk = Item { v: g }
+            g = g + 1
+        }
+        j = j + 1
+    }
+    let mut sum = 0
+    for it in arr {
+        sum = sum + it.v
+    }
+    for key in m.keys() {
+        sum = sum + m[key].v
+    }
+    print(f"sum={sum} acc={acc} len={arr.len()} m={m.len()}")
+}

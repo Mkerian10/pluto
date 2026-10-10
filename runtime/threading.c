@@ -638,9 +638,11 @@ static void fiber_entry_fn(int fiber_id) {
 
     // Store result or error in task handle
     if (__pluto_current_error) {
+        PLUTO_GC_STORE(task, 0, __pluto_current_error);
         task[2] = (long)__pluto_current_error;
         __pluto_current_error = NULL;
     } else {
+        PLUTO_GC_STORE(task, 0, result);
         task[1] = result;
     }
     task[3] = 1;  // done
@@ -995,6 +997,9 @@ static long task_spawn_sequential(long closure_ptr) {
     // Phase A inline behavior (for sequential strategy or no scheduler)
     long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
     task[0] = closure_ptr;
+    // From here the task handle is reachable from two threads: share it (and,
+    // transitively, the closure and its captures).
+    __pluto_gc_promote_store((long)task);
     task[1] = 0;  task[2] = 0;  task[3] = 0;
     task[4] = 0;  task[5] = 0;  task[6] = 0;
 
@@ -1007,9 +1012,11 @@ static long task_spawn_sequential(long closure_ptr) {
     long result = ((long(*)(long))fn_ptr)(closure_ptr);
 
     if (__pluto_current_error) {
+        PLUTO_GC_STORE(task, 0, __pluto_current_error);
         task[2] = (long)__pluto_current_error;
         __pluto_current_error = NULL;
     } else {
+        PLUTO_GC_STORE(task, 0, result);
         task[1] = result;
     }
     task[3] = 1;
@@ -1033,6 +1040,9 @@ static long task_spawn_fiber(long closure_ptr) {
     // Create a new fiber for the spawned task
     long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
     task[0] = closure_ptr;
+    // From here the task handle is reachable from two threads: share it (and,
+    // transitively, the closure and its captures).
+    __pluto_gc_promote_store((long)task);
     task[1] = 0;  task[2] = 0;  task[3] = 0;
     task[4] = 0;  task[5] = 0;  task[6] = 0;
 
@@ -1205,6 +1215,8 @@ void __pluto_serve_handler_spawn(long svc, long conn, long handler_fn) {
     a->svc = svc;
     a->conn = conn;
     a->handler = (long (*)(long, long))handler_fn;
+    // The service instance is reachable from the handler thread from now on.
+    __pluto_gc_promote_store(svc);
     pthread_t tid;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -1252,9 +1264,11 @@ static void *__pluto_spawn_trampoline(void *arg) {
     TaskSync *sync = (TaskSync *)task[4];
     pthread_mutex_lock(&sync->mutex);
     if (__pluto_current_error) {
+        PLUTO_GC_STORE(task, 0, __pluto_current_error);
         task[2] = (long)__pluto_current_error;
         __pluto_current_error = NULL;
     } else {
+        PLUTO_GC_STORE(task, 0, result);
         task[1] = result;
     }
     task[3] = 1;  // done
@@ -1283,6 +1297,9 @@ static void *__pluto_spawn_trampoline(void *arg) {
 long __pluto_task_spawn(long closure_ptr) {
     long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
     task[0] = closure_ptr;
+    // From here the task handle is reachable from two threads: share it (and,
+    // transitively, the closure and its captures).
+    __pluto_gc_promote_store((long)task);
     task[1] = 0;  task[2] = 0;  task[3] = 0;
     task[5] = 0;  task[6] = 0;  // detached, cancelled
 
@@ -1480,14 +1497,19 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
 
         long *copy = (long *)gc_alloc(24, GC_TAG_ARRAY, 3);
         dc_visited_insert(visited, orig, copy);
-        copy[0] = len;
+        long *new_data = (long *)__pluto_gc_buf_new(copy, cap * 8);
+        PLUTO_GC_SET_BUF(copy, 2, new_data);
         copy[1] = cap;
-        // Allocate new data buffer (raw malloc, like __pluto_array_new)
-        long *new_data = (long *)calloc((size_t)cap, sizeof(long));
-        copy[2] = (long)new_data;
-        // Deep-copy each element
+        // Deep-copy each element. Copying an element allocates, so a
+        // collection can see this array half-filled: every store goes
+        // through the barrier like any other container store (it keeps a
+        // hybrid local collection's "all elements shared" verdict honest),
+        // and the length grows with the elements actually stored.
         for (long i = 0; i < len; i++) {
-            new_data[i] = dc_copy_slot(src_data[i], visited);
+            long v = dc_copy_slot(src_data[i], visited);
+            PLUTO_GC_STORE(copy, 0, v);
+            new_data[i] = v;
+            copy[0] = i + 1;
         }
         return (long)copy;
     }
@@ -1501,11 +1523,11 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
 
         long *copy = (long *)gc_alloc(24, GC_TAG_BYTES, 3);
         dc_visited_insert(visited, orig, copy);
-        copy[0] = len;
-        copy[1] = cap;
-        unsigned char *new_data = (unsigned char *)calloc((size_t)cap, 1);
+        unsigned char *new_data = (unsigned char *)__pluto_gc_buf_new(copy, cap);
         memcpy(new_data, src_data, (size_t)len);
-        copy[2] = (long)new_data;
+        PLUTO_GC_SET_BUF(copy, 2, new_data);
+        copy[1] = cap;
+        copy[0] = len;
         return (long)copy;
     }
 
@@ -1530,21 +1552,24 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
 
         long *copy = (long *)gc_alloc(40, GC_TAG_MAP, 5);
         dc_visited_insert(visited, orig, copy);
-        copy[0] = count;
+        long *new_keys = (long *)__pluto_gc_buf_new(copy, cap * 8);
+        PLUTO_GC_SET_BUF(copy, 2, new_keys);
+        long *new_vals = (long *)__pluto_gc_buf_new(copy, cap * 8);
+        PLUTO_GC_SET_BUF(copy, 3, new_vals);
+        unsigned char *new_meta = (unsigned char *)__pluto_gc_buf_new(copy, cap);
+        memcpy(new_meta, src_meta, (size_t)cap);   // live slots read as null until filled
+        PLUTO_GC_SET_BUF(copy, 4, new_meta);
         copy[1] = cap;
-
-        long *new_keys = (long *)calloc((size_t)cap, sizeof(long));
-        long *new_vals = (long *)calloc((size_t)cap, sizeof(long));
-        unsigned char *new_meta = (unsigned char *)calloc((size_t)cap, 1);
-        memcpy(new_meta, src_meta, (size_t)cap);
-        copy[2] = (long)new_keys;
-        copy[3] = (long)new_vals;
-        copy[4] = (long)new_meta;
+        copy[0] = count;
 
         for (long i = 0; i < cap; i++) {
-            if (src_meta[i] >= 0x80) {
-                new_keys[i] = dc_copy_slot(src_keys[i], visited);
-                new_vals[i] = dc_copy_slot(src_vals[i], visited);
+            if (src_meta[i] >= 0x80) {   // stores barriered: see the array case
+                long k = dc_copy_slot(src_keys[i], visited);
+                PLUTO_GC_STORE(copy, 0, k);
+                new_keys[i] = k;
+                long v = dc_copy_slot(src_vals[i], visited);
+                PLUTO_GC_STORE(copy, 0, v);
+                new_vals[i] = v;
             }
         }
         return (long)copy;
@@ -1560,18 +1585,19 @@ static long dc_deep_copy_impl(long ptr, DeepCopyVisited *visited) {
 
         long *copy = (long *)gc_alloc(32, GC_TAG_SET, 4);
         dc_visited_insert(visited, orig, copy);
-        copy[0] = count;
-        copy[1] = cap;
-
-        long *new_keys = (long *)calloc((size_t)cap, sizeof(long));
-        unsigned char *new_meta = (unsigned char *)calloc((size_t)cap, 1);
+        long *new_keys = (long *)__pluto_gc_buf_new(copy, cap * 8);
+        PLUTO_GC_SET_BUF(copy, 2, new_keys);
+        unsigned char *new_meta = (unsigned char *)__pluto_gc_buf_new(copy, cap);
         memcpy(new_meta, src_meta, (size_t)cap);
-        copy[2] = (long)new_keys;
-        copy[3] = (long)new_meta;
+        PLUTO_GC_SET_BUF(copy, 3, new_meta);
+        copy[1] = cap;
+        copy[0] = count;
 
         for (long i = 0; i < cap; i++) {
-            if (src_meta[i] >= 0x80) {
-                new_keys[i] = dc_copy_slot(src_keys[i], visited);
+            if (src_meta[i] >= 0x80) {   // stores barriered: see the array case
+                long k = dc_copy_slot(src_keys[i], visited);
+                PLUTO_GC_STORE(copy, 0, k);
+                new_keys[i] = k;
             }
         }
         return (long)copy;
@@ -1833,6 +1859,7 @@ long __pluto_chan_send(long handle, long value) {
             if (ch[3] < ch[2]) {
                 // Space available — push value
                 long *buf = (long *)ch[1];
+                PLUTO_GC_STORE(ch, 0, value);
                 buf[ch[5]] = value;
                 ch[5] = (ch[5] + 1) % ch[2];
                 ch[3]++;
@@ -1860,6 +1887,7 @@ long __pluto_chan_send(long handle, long value) {
         seq_test_blocked_abort("channel send on full buffer");
     }
     long *buf = (long *)ch[1];
+    PLUTO_GC_STORE(ch, 0, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -1879,6 +1907,7 @@ long __pluto_chan_recv(long handle) {
                 // Data available — pop value
                 long *buf = (long *)ch[1];
                 long val = buf[ch[4]];
+                PLUTO_GC_DELETE(val);   // leaves the buffer
                 ch[4] = (ch[4] + 1) % ch[2];
                 ch[3]--;
                 // Wake any fibers waiting to send on this channel
@@ -1909,6 +1938,7 @@ long __pluto_chan_recv(long handle) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     return val;
@@ -1941,6 +1971,7 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
                 cur->has_timeout = 0;
                 long *buf = (long *)ch[1];
                 long val = buf[ch[4]];
+                PLUTO_GC_DELETE(val);   // leaves the buffer
                 ch[4] = (ch[4] + 1) % ch[2];
                 ch[3]--;
                 wake_fibers_blocked_on_chan(ch);
@@ -1974,6 +2005,7 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     return val;
@@ -1990,6 +2022,7 @@ long __pluto_chan_try_send(long handle, long value) {
         return 0;
     }
     long *buf = (long *)ch[1];
+    PLUTO_GC_STORE(ch, 0, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -2012,6 +2045,7 @@ long __pluto_chan_try_recv(long handle) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     if (g_scheduler && g_scheduler->strategy != STRATEGY_SEQUENTIAL) {
@@ -2127,6 +2161,7 @@ long __pluto_chan_send(long handle, long value) {
         return 0;
     }
     long *buf = (long *)ch[1];
+    PLUTO_GC_STORE(ch, 0, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -2156,6 +2191,7 @@ long __pluto_chan_recv(long handle) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     pthread_cond_signal(&sync->not_full);
@@ -2210,6 +2246,7 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     pthread_cond_signal(&sync->not_full);
@@ -2233,6 +2270,7 @@ long __pluto_chan_try_send(long handle, long value) {
         return 0;
     }
     long *buf = (long *)ch[1];
+    PLUTO_GC_STORE(ch, 0, value);
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
@@ -2258,6 +2296,7 @@ long __pluto_chan_try_recv(long handle) {
     }
     long *buf = (long *)ch[1];
     long val = buf[ch[4]];
+    PLUTO_GC_DELETE(val);   // leaves the buffer
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
     pthread_cond_signal(&sync->not_full);
@@ -2344,9 +2383,11 @@ static long select_fire_arm(long *handles, long *ops, long *values, int i) {
     long *cbuf = (long *)ch[1];
     if (ops[i] == 0) {
         values[i] = cbuf[ch[4]];
+        PLUTO_GC_DELETE(values[i]);   // leaves the buffer
         ch[4] = (ch[4] + 1) % ch[2];
         ch[3]--;
     } else {
+        PLUTO_GC_STORE(ch, 0, values[i]);
         cbuf[ch[5]] = values[i];
         ch[5] = (ch[5] + 1) % ch[2];
         ch[3]++;
@@ -2535,6 +2576,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                     /* data available */
                     long *cbuf = (long *)ch[1];
                     long val = cbuf[ch[4]];
+                    PLUTO_GC_DELETE(val);   // leaves the buffer
                     ch[4] = (ch[4] + 1) % ch[2];
                     ch[3]--;
                     pthread_cond_signal(&sync->not_full);
@@ -2550,6 +2592,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                 if (!ch[6] && ch[3] < ch[2]) {
                     /* space available */
                     long *cbuf = (long *)ch[1];
+                    PLUTO_GC_STORE(ch, 0, values[i]);
                     cbuf[ch[5]] = values[i];
                     ch[5] = (ch[5] + 1) % ch[2];
                     ch[3]++;
