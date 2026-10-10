@@ -127,6 +127,10 @@ typedef struct {
     // one green_send; close wakes them all.
     GreenWaiter *green_recv_head, *green_recv_tail;
     GreenWaiter *green_send_head, *green_send_tail;
+    // One-slot cache of a freed GreenWaiter node (guarded by `mutex`), so a
+    // park/wake cycle on this channel reuses a node instead of malloc/free each
+    // time — the hot path for channel handoffs. Retains at most one node.
+    GreenWaiter *gw_cache;
 } ChannelSync;
 #endif
 

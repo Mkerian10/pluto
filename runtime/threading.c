@@ -1164,7 +1164,13 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     GreenWaiter *green_waiters;   // guarded by `mutex`
+    GreenWaiter *gw_cache;        // one-slot node cache (see gw_alloc/gw_free)
 } TaskSync;
+
+// GreenWaiter node (de)allocation via a one-slot cache; defined with the
+// channel code below, used here too to avoid a malloc/free per await.
+static GreenWaiter *gw_alloc(GreenWaiter **cache);
+static void gw_free(GreenWaiter **cache, GreenWaiter *w);
 
 // Re-ready every green fiber parked on this task. Caller holds sync->mutex;
 // the list is detached first, then the wakes run (each takes the scheduler's
@@ -1175,8 +1181,9 @@ static void task_wake_green_waiters(TaskSync *sync) {
     sync->green_waiters = NULL;
     while (w) {
         GreenWaiter *n = w->next;
-        __pluto_green_wake(w->fiber);
-        free(w);
+        void *f = w->fiber;
+        gw_free(&sync->gw_cache, w);
+        __pluto_green_wake(f);
         w = n;
     }
 }
@@ -1192,7 +1199,7 @@ static void task_await_handoff(void *p) {
         pthread_mutex_unlock(&a->sync->mutex);
         __pluto_green_wake(a->self);
     } else {
-        GreenWaiter *w = (GreenWaiter *)malloc(sizeof(GreenWaiter));
+        GreenWaiter *w = gw_alloc(&a->sync->gw_cache);
         w->fiber = a->self;
         w->next = a->sync->green_waiters;
         a->sync->green_waiters = w;
@@ -2256,6 +2263,17 @@ static int chan_cond_timedwait(pthread_cond_t *cond, ChannelSync *sync,
 // (a peer can consume/produce between wake and resume), so the caller re-checks
 // under the lock in its wait loop, exactly like chan_cond_wait.
 
+// GreenWaiter node (de)allocation via a one-slot per-channel cache. Both run
+// under the channel mutex. Reuse avoids a malloc/free on every park/wake.
+static GreenWaiter *gw_alloc(GreenWaiter **cache) {
+    GreenWaiter *w = *cache;
+    if (w) { *cache = NULL; return w; }
+    return (GreenWaiter *)malloc(sizeof(GreenWaiter));
+}
+static void gw_free(GreenWaiter **cache, GreenWaiter *w) {
+    if (!*cache) *cache = w; else free(w);   // retain at most one
+}
+
 // Park handoff: runs on the scheduler stack with the channel mutex still held
 // by this (scheduler) thread. Enqueues the fiber on `*tail` FIFO, then releases
 // the mutex — publishing the waiter atomically w.r.t. any waker, which must
@@ -2263,7 +2281,7 @@ static int chan_cond_timedwait(pthread_cond_t *cond, ChannelSync *sync,
 typedef struct { ChannelSync *sync; GreenWaiter **head; GreenWaiter **tail; void *self; } ChanPark;
 static void chan_green_handoff(void *p) {
     ChanPark *cp = (ChanPark *)p;
-    GreenWaiter *w = (GreenWaiter *)malloc(sizeof(GreenWaiter));
+    GreenWaiter *w = gw_alloc(&cp->sync->gw_cache);
     w->fiber = cp->self; w->next = NULL;
     if (*cp->tail) (*cp->tail)->next = w; else *cp->head = w;
     *cp->tail = w;
@@ -2281,12 +2299,13 @@ static void chan_green_park(ChannelSync *sync, GreenWaiter **head, GreenWaiter *
 
 // Wake one waiter from a green queue (FIFO). Caller holds sync->mutex. Returns
 // 1 if a green fiber was woken, 0 if the queue was empty.
-static int chan_wake_one_green(GreenWaiter **head, GreenWaiter **tail) {
+static int chan_wake_one_green(ChannelSync *sync, GreenWaiter **head, GreenWaiter **tail) {
     GreenWaiter *w = *head;
     if (!w) return 0;
     *head = w->next;
     if (!*head) *tail = NULL;
-    void *f = w->fiber; free(w);
+    void *f = w->fiber;
+    gw_free(&sync->gw_cache, w);
     __pluto_green_wake(f);
     return 1;
 }
@@ -2295,11 +2314,11 @@ static int chan_wake_one_green(GreenWaiter **head, GreenWaiter **tail) {
 // waiter. Caller holds sync->mutex. (A woken loser simply re-checks and
 // re-waits, so waking the "wrong" tier is never incorrect, only wasteful.)
 static void chan_wake_one_recv(ChannelSync *sync) {
-    if (chan_wake_one_green(&sync->green_recv_head, &sync->green_recv_tail)) return;
+    if (chan_wake_one_green(sync, &sync->green_recv_head, &sync->green_recv_tail)) return;
     if (sync->recv_waiters > 0) pthread_cond_signal(&sync->not_empty);
 }
 static void chan_wake_one_send(ChannelSync *sync) {
-    if (chan_wake_one_green(&sync->green_send_head, &sync->green_send_tail)) return;
+    if (chan_wake_one_green(sync, &sync->green_send_head, &sync->green_send_tail)) return;
     if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
 }
 
@@ -2307,8 +2326,8 @@ static void chan_wake_one_send(ChannelSync *sync) {
 // sync->mutex. Used by close, which must wake all waiters so each re-checks and
 // sees the closed flag.
 static void chan_wake_all_green(ChannelSync *sync) {
-    while (chan_wake_one_green(&sync->green_recv_head, &sync->green_recv_tail)) {}
-    while (chan_wake_one_green(&sync->green_send_head, &sync->green_send_tail)) {}
+    while (chan_wake_one_green(sync, &sync->green_recv_head, &sync->green_recv_tail)) {}
+    while (chan_wake_one_green(sync, &sync->green_send_head, &sync->green_send_tail)) {}
 }
 
 long __pluto_chan_send(long handle, long value) {
