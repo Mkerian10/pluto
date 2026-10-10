@@ -677,6 +677,12 @@ typedef struct GCThreadHeap {
     size_t nblocks, cap;
     size_t unreported;         // slot bytes allocated since the last report
 #if defined(GC_TLH)
+    size_t room;               // bytes the fast path may still allocate before the
+    size_t room_base;          // next checkpoint (room_base: room at the last refill;
+                               // the difference is folded into unreported/local_alloc
+                               // at the checkpoint)
+#endif
+#if defined(GC_TLH)
     GCMarkCtx ctx;             // this thread's promotion / local-collection context
     size_t promoted_bytes;     // promoted to shared since the last report
     size_t local_alloc;        // private bytes allocated since the last local collection
@@ -792,9 +798,8 @@ static inline void *gc_tlh_alloc_fast(GCThreadHeap *H, size_t user_size, uint8_t
     h->type_tag = type_tag;
     h->field_count = field_count;
     if (gc_is_container_tag(type_tag)) b->has_containers = 1;
+#if !defined(GC_TLH)
     H->unreported += gc_class_sizes[cls];
-#if defined(GC_TLH)
-    H->local_alloc += gc_class_sizes[cls];
 #endif
 #if defined(GC_HYBRID)
     b->nprivate++;
@@ -812,7 +817,16 @@ static void *gc_tlh_alloc_slow(GCThreadHeap *H, size_t user_size, uint8_t type_t
     size_t total = sizeof(GCHeader) + user_size;
     if (total <= GC_SMALL_MAX) {
         void *u = gc_tlh_alloc_fast(H, user_size, type_tag, field_count);  // a sweep may have refilled
+#if defined(GC_TLH)
+        size_t sz = gc_class_sizes[gc_size_class[(total + 15) >> 4]];
+        if (u) {
+            H->unreported += sz;
+            H->local_alloc += sz;
+            return u;
+        }
+#else
         if (u) return u;
+#endif
         size_t cls = gc_size_class[(total + 15) >> 4];
 #if defined(GC_TLH)
         // Prefer a block this heap emptied itself (no pool traffic).
@@ -842,6 +856,10 @@ static void *gc_tlh_alloc_slow(GCThreadHeap *H, size_t user_size, uint8_t type_t
         gc_tlh_own(H, b);
         b->next = H->avail[cls];
         H->avail[cls] = b;
+#if defined(GC_TLH)
+        H->unreported += sz;
+        H->local_alloc += sz;
+#endif
         return gc_tlh_alloc_fast(H, user_size, type_tag, field_count);
     }
     size_t bytes;
@@ -1279,6 +1297,8 @@ static void gc_tlh_retire(GCThreadHeap *H) {
     free(H->remvals);
 #endif
 #if defined(GC_TLH)
+    H->unreported += H->room_base - H->room;
+    H->room = H->room_base = 0;
     gc_tlh_report(H);
 #else
     gc_bytes_allocated += H->unreported;
@@ -1636,6 +1656,30 @@ static int gc_tlh_global_due(void) {
     return gc_shared_growth > gc_shared_threshold || gc_bytes_allocated > 4 * gc_threshold;
 }
 
+// The fast path's budget until the next checkpoint: what is left of the
+// report budget and of the local collection trigger; nothing while torture
+// mode counts every allocation or a finished global cycle's result waits
+// to be applied (which also zeroes it: gc_tlh_drop_room).
+static inline void gc_tlh_refill_room(GCThreadHeap *H) {
+    size_t room = 0;
+    if (gc_torture_every <= 0
+#if defined(GC_HYBRID)
+        && !H->shared_sweep_pending
+#endif
+        && H->unreported < GC_TLAB_BUDGET && H->local_alloc < H->local_threshold) {
+        room = GC_TLAB_BUDGET - H->unreported;
+        if (H->local_threshold - H->local_alloc < room) room = H->local_threshold - H->local_alloc;
+    }
+    H->room = H->room_base = room;
+}
+
+// Under stop-the-world: end H's fast-path budget now (its consumption stays
+// accounted at the next checkpoint).
+static inline void gc_tlh_drop_room(GCThreadHeap *H) {
+    H->room_base -= H->room;
+    H->room = 0;
+}
+
 // Allocation for a thread with a heap. The fast path is lock-free; every
 // GC_TLAB_BUDGET bytes (or when a size class runs dry) the thread reaches a
 // checkpoint: it runs a local collection if its private allocation is due
@@ -1644,21 +1688,31 @@ static int gc_tlh_global_due(void) {
 // every N allocations and a global one every 8N.
 static void *gc_tlh_alloc(GCThreadHeap *H, size_t user_size, uint8_t type_tag,
                           uint16_t field_count) {
+    // Fast path: the heap has room before its next checkpoint (one budget
+    // covering the report budget, the local collection trigger, a pending
+    // global result and torture mode), and the size class has a slot.
+    size_t total = sizeof(GCHeader) + user_size;
+    if (total <= GC_SMALL_MAX) {
+        size_t sz = gc_class_sizes[gc_size_class[(total + 15) >> 4]];
+        if (sz <= H->room) {
+            void *u = gc_tlh_alloc_fast(H, user_size, type_tag, field_count);
+            if (u) {
+                H->room -= sz;
+                return u;
+            }
+        }
+    }
+    // Checkpoint: fold what the fast path allocated into the counters.
+    size_t used = H->room_base - H->room;
+    H->unreported += used;
+    H->local_alloc += used;
+    H->room = H->room_base = 0;
     int local_due = 0, global_due = 0;
     if (gc_torture_every < 0) (void)gc_torture_due();   // read PLUTO_GC_TORTURE once
     if (gc_torture_every > 0) {
         long n = ++H->torture_count;
         local_due = n % gc_torture_every == 0;
         global_due = n % (8 * gc_torture_every) == 0;
-    }
-    // Fast path: no checkpoint due, and the size class has room.
-    if (!local_due && !global_due && H->unreported < GC_TLAB_BUDGET
-#if defined(GC_HYBRID)
-        && !H->shared_sweep_pending
-#endif
-        ) {
-        void *u = gc_tlh_alloc_fast(H, user_size, type_tag, field_count);
-        if (u) return u;
     }
     // Checkpoint. Every collection runs BEFORE the object is allocated: an
     // object is never visible to a collection until the call that allocates
@@ -1697,6 +1751,7 @@ static void *gc_tlh_alloc(GCThreadHeap *H, size_t user_size, uint8_t type_tag,
 #endif
     void *u = gc_tlh_alloc_slow(H, user_size, type_tag, field_count);
     pthread_mutex_unlock(&gc_mutex);
+    gc_tlh_refill_room(H);
     return u;
 }
 #endif
@@ -1912,6 +1967,9 @@ static __attribute__((noinline, cold)) void gc_verify_lookup(void *candidate, GC
     }
     for (size_t k = 0; k < gc_large_count && !want; k++) {
         GCHeader *h = (GCHeader *)gc_large_blocks[k]->base;
+        // A dead large object stays in the table (tagged free) until its
+        // owner releases it at its next checkpoint.
+        if (h->type_tag == GC_TAG_FREE) continue;
         char *u = (char *)h + sizeof(GCHeader);
         if ((char *)candidate == u
             || ((char *)candidate > u && (char *)candidate < u + h->size)) {
@@ -1921,6 +1979,12 @@ static __attribute__((noinline, cold)) void gc_verify_lookup(void *candidate, GC
     if (want != found) {
         fprintf(stderr, "pluto: PLUTO_GC_VERIFY: lookup of %p returned %p, heap scan "
                 "found %p\n", candidate, (void *)found, (void *)want);
+        if (want) {
+            GCBlock *pb = gc_pagemap_get((uintptr_t)candidate);
+            fprintf(stderr, "  want tag=%u size=%u next=%p mark=%x pagemap=%p kind=%d\n",
+                    (unsigned)want->type_tag, (unsigned)want->size, (void *)want->next,
+                    (unsigned)want->mark, (void *)pb, pb ? (int)pb->kind : -1);
+        }
         abort();
     }
 }
@@ -2640,6 +2704,14 @@ static void gc_tlh_check_slot(GCHeader *parent, long word, const char *where) {
             "(tag %d, size %u) %s holds private object %p (tag %d, size %u)\n",
             (void *)(parent + 1), parent->type_tag, parent->size, where,
             (void *)(c + 1), c->type_tag, c->size);
+    GCBlock *pb = gc_pagemap_get((uintptr_t)parent);
+    fprintf(stderr, "  parent mark=%x owner=%p kind=%d; child mark=%x next=%p owner=%p\n",
+            parent->mark, pb ? (void *)pb->owner : NULL, pb ? pb->kind : -1,
+            c->mark, (void *)c->next, (void *)cb->owner);
+    if (parent->type_tag == GC_TAG_ARRAY) {
+        long *sl = (long *)(parent + 1);
+        fprintf(stderr, "  array len=%ld cap=%ld data=%p\n", sl[0], sl[1], (void *)sl[2]);
+    }
     abort();
 }
 
@@ -2857,6 +2929,23 @@ static void gc_hyb_park(GCThreadHeap *H, GCBlock *b) {
 
 #endif
 
+#if defined(GC_HYBRID)
+static void gc_hyb_log_child(GCHeader *parent, long word, const char *where) {
+    (void)parent; (void)where;
+    __pluto_gc_log_deleted(word);
+}
+
+// Freeing an object deletes all of its out-edges. While a global cycle
+// marks, that is a deletion like any overwrite and must be logged:
+// otherwise a shared object reachable at the snapshot only through this
+// (not yet traced) private object would be missed by the cycle and freed
+// while something allocated since still references it. (Found by
+// PLUTO_GC_VERIFY's clean-container check on the Kerberos SLT suite.)
+static inline void gc_hyb_log_dying(GCHeader *h) {
+    if (gc_incr_marking) gc_check_children(h, gc_hyb_log_child);
+}
+#endif
+
 // Sweep verdict for one allocated object of H: 1 keeps it. With
 // private_marked, a local mark has just run and private objects without
 // the local mark are dead; without it (an owner sweep after a global cycle)
@@ -2890,6 +2979,21 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
 #if defined(GC_HYBRID)
     int held = gc_incr_marking && (h->mark & GC_MARK_GLOBAL);
     if (!local && !held) return 0;
+    if (!local) {
+        // Dead here (no root of this thread reaches it, and by invariant I
+        // no other thread can), but the running cycle has marked it and may
+        // still have it on its worklist, so its memory stays. Its children
+        // are judged without it and may be freed by this very sweep: the
+        // cycle must not trace it later. Its edges are deleted (logged, as
+        // for any dying object) and it becomes a childless leaf until the
+        // next sweep frees it. (A dead task's array, kept this way while its
+        // backing store was freed and reused, ended up shared at retire and
+        // pointing into another thread's heap.)
+        gc_hyb_log_dying(h);
+        gc_finalize(h);
+        h->type_tag = GC_TAG_STRING;
+        h->mark &= (uint8_t)~GC_MARK_CLEAN;
+    }
     if (private_marked && (h->mark & GC_MARK_LOCAL)) {
         // An object referenced straight from a root may be half-built: code
         // (generated or runtime) can allocate an object, run more code that
@@ -2952,22 +3056,6 @@ static void gc_hyb_verify_no_private(GCBlock *b, int no_old) {
 }
 #endif
 
-#if defined(GC_HYBRID)
-static void gc_hyb_log_child(GCHeader *parent, long word, const char *where) {
-    (void)parent; (void)where;
-    __pluto_gc_log_deleted(word);
-}
-
-// Freeing an object deletes all of its out-edges. While a global cycle
-// marks, that is a deletion like any overwrite and must be logged:
-// otherwise a shared object reachable at the snapshot only through this
-// (not yet traced) private object would be missed by the cycle and freed
-// while something allocated since still references it. (Found by
-// PLUTO_GC_VERIFY's clean-container check on the Kerberos SLT suite.)
-static inline void gc_hyb_log_dying(GCHeader *h) {
-    if (gc_incr_marking) gc_check_children(h, gc_hyb_log_child);
-}
-#endif
 
 // Sweep one block of H. Returns what to do with it: 0 keep it in the
 // sweep set, 1 it was emptied (now a POOL block on H->empty) or freed (a
@@ -4459,7 +4547,10 @@ static void gc_hyb_finish(void) {
     gc_incr_marking = 0;
     size_t freed = gc_hyb_sweep_unowned();
     gc_bytes_allocated = freed < gc_bytes_allocated ? gc_bytes_allocated - freed : 0;
-    for (size_t i = 0; i < gc_tlh_heap_count; i++) gc_tlh_heaps[i]->shared_sweep_pending = 1;
+    for (size_t i = 0; i < gc_tlh_heap_count; i++) {
+        gc_tlh_heaps[i]->shared_sweep_pending = 1;
+        gc_tlh_drop_room(gc_tlh_heaps[i]);
+    }
     gc_shared_growth = 0;
     gc_shared_threshold = gc_hyb_marked_shared > GC_TLH_SHARED_FLOOR ? gc_hyb_marked_shared
                                                                      : GC_TLH_SHARED_FLOOR;
@@ -4660,6 +4751,7 @@ void __pluto_gc_collect(void) {
                               ? gc_sweep_shared_live : GC_TLH_SHARED_FLOOR;
     for (size_t i = 0; i < gc_tlh_heap_count; i++) {
         GCThreadHeap *H = gc_tlh_heaps[i];
+        gc_tlh_drop_room(H);
         H->local_alloc = 0;
         H->local_threshold = H->private_live * 2;
         if (H->local_threshold < GC_TLH_LOCAL_FLOOR) H->local_threshold = GC_TLH_LOCAL_FLOOR;
