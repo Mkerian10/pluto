@@ -1408,10 +1408,12 @@ static void green_run_cb(void *arg) {
     __pluto_gc_task_end();
 }
 
-// Green fiber stack size. NOTE (tuning/safety, tracked): malloc'd, no guard
-// page yet — a deeply recursive green fn could overflow silently. 512 KB
-// matches the pthread reserve for now; a later pass adds mmap+guard-page
-// stacks and right-sizes them for the idle-connection memory win.
+// Green fiber stack size. The scheduler (runtime/green/green_prod.c) allocates
+// each stack with mmap + a PROT_NONE guard page at the low end, so a deeply
+// recursive green fn faults immediately instead of overflowing silently. 512 KB
+// matches the pthread reserve; right-sizing for the idle-connection memory win
+// is a later tuning pass (the mmap'd pages are lazily backed, so an idle fiber
+// that never deep-recurses costs far less than 512 KB resident regardless).
 #define PLUTO_GREEN_STACK (512 * 1024)
 
 long __pluto_green_spawn(long closure_ptr) {

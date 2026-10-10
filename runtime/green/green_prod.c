@@ -24,6 +24,8 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 extern void pluto_ctx_swap(void **from_sp, void *to_sp);
 
@@ -45,8 +47,10 @@ typedef struct GProdTask {
     pthread_mutex_t mu;
     pthread_cond_t cv;
     struct GProdTask *next; // ready-queue link
-    char *stack;
+    char *stack;            // usable stack region [stack, stack+stack_size)
     size_t stack_size;
+    void *stack_map;        // mmap base (one guard page below `stack`)
+    size_t stack_map_size;  // guard + stack_size, for munmap
     void *sp;               // saved fiber sp
     int state;              // GRUN / GDONE / GYIELD / GPARK (cp4)
     void (*park_fn)(void *);// cp4: handoff run on the scheduler stack after the
@@ -215,7 +219,7 @@ static void *gprod_scheduler(void *_unused) {
         }
         case GDONE:
         default:
-            free(t->stack);
+            munmap(t->stack_map, t->stack_map_size);
             // Submit tasks have no awaiter on the GProdTask (delivery went
             // through the callback), so the scheduler owns and frees the
             // handle too. cp1 tasks are read via __pluto_green_prod_get, so
@@ -238,9 +242,21 @@ static void gprod_ensure_started(void) {
 
 static GProdTask *gprod_alloc(size_t stack_size) {
     GProdTask *t = (GProdTask *)calloc(1, sizeof(GProdTask));
-    t->stack = (char *)malloc(stack_size);
+    // Fiber stacks grow DOWN, so a one-page PROT_NONE guard at the LOW end
+    // turns a stack overflow (deep green recursion) into an immediate SIGSEGV
+    // instead of silent corruption of whatever the old malloc'd block abutted.
+    long pg = sysconf(_SC_PAGESIZE);
+    size_t guard = (pg > 0) ? (size_t)pg : 16384;
+    size_t total = guard + stack_size;
+    char *map = (char *)mmap(NULL, total, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (map == MAP_FAILED) { abort(); }
+    mprotect(map, guard, PROT_NONE);          // low guard page
+    t->stack_map = map;
+    t->stack_map_size = total;
+    t->stack = map + guard;                   // usable region above the guard
     t->stack_size = stack_size;
-    t->sp = prime_ctx(t->stack + stack_size, gprod_trampoline);
+    t->sp = prime_ctx(t->stack + stack_size, gprod_trampoline);  // top (high)
     t->state = GRUN;
     return t;
 }
