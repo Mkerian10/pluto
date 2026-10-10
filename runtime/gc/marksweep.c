@@ -1554,6 +1554,17 @@ void __pluto_gc_collect(void) {
         void *hi = gc_my_slot ? gc_my_slot->stack_hi
                               : gc_stack_bottom;  // fallback: unregistered/main
         void *lo = stack_top;
+        // Green-scheduler case (#369): if the collecting thread is running a
+        // green fiber, its current sp is in the fiber's malloc'd stack, OUTSIDE
+        // its registered pthread stack [stack_lo, stack_hi). Scanning
+        // [fiber_sp, pthread_hi) would cross unmapped memory → SEGFAULT. The
+        // fiber's roots are covered separately by its registered green context,
+        // so here scan the FULL pthread stack (the suspended scheduler-loop
+        // frames) instead of from the bogus fiber sp.
+        if (gc_my_slot
+            && (stack_top < gc_my_slot->stack_lo || stack_top >= gc_my_slot->stack_hi)) {
+            lo = gc_my_slot->stack_lo;
+        }
         // On most platforms stacks grow down, so stack_top < stack_hi.
         // Handle either direction just in case.
         if (lo > hi) { void *tmp = lo; lo = hi; hi = tmp; }

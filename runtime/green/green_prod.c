@@ -24,7 +24,7 @@ extern void __pluto_gc_enter_safe_region(void);
 extern void __pluto_gc_leave_safe_region(void);
 
 typedef struct GProdTask {
-    long (*fn)(void *);     // stand-in for a Pluto closure call
+    long (*fn)(void *);     // cp1 self-contained path (result via result/cv below)
     void *arg;
     long result;
     int done;
@@ -34,6 +34,11 @@ typedef struct GProdTask {
     char *stack;
     size_t stack_size;
     void *sp;               // saved fiber sp
+    // Submit path (__pluto_green_submit): when submit_run != NULL the fiber
+    // calls submit_run(submit_job) and the callback owns result delivery (e.g.
+    // into a Pluto Task<T>); the scheduler then frees the whole GProdTask.
+    void (*submit_run)(void *);
+    void *submit_job;
 } GProdTask;
 
 static pthread_mutex_t gq_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -66,6 +71,13 @@ static void gprod_trampoline(void) {
     // collection mid-run conservatively scans the WHOLE fiber stack and never
     // misses a live frame (cp2 running-fiber resolution).
     void *gc_ctx = __pluto_gc_register_green_context(t->stack + t->stack_size, t->stack);
+    if (t->submit_run) {
+        // Submit path: the callback runs the closure and delivers its own
+        // result; nothing to store here.
+        t->submit_run(t->submit_job);
+        __pluto_gc_unregister_green_context(gc_ctx);
+        pluto_ctx_swap(&t->sp, gsched_sp);   // back to scheduler, no return
+    }
     long r = t->fn(t->arg);
     __pluto_gc_unregister_green_context(gc_ctx);
     pthread_mutex_lock(&t->mu);
@@ -107,9 +119,15 @@ static void *gprod_scheduler(void *_unused) {
         pthread_mutex_unlock(&gq_mu);
 
         gsched_current = t;
+        int is_submit = (t->submit_run != NULL);
         pluto_ctx_swap(&gsched_sp, t->sp);   // run until it finishes
         gsched_current = NULL;
-        free(t->stack);   // task reaped by its awaiter via the handle; stack is ours
+        free(t->stack);
+        // Submit tasks have no awaiter on the GProdTask (delivery went through
+        // the callback), so the scheduler owns and frees the handle too. cp1
+        // tasks are read by their awaiter via __pluto_green_prod_get, so only
+        // their stack is freed here.
+        if (is_submit) free(t);
     }
     return NULL;
 }
@@ -147,5 +165,25 @@ long __pluto_green_prod_get(GProdTask *t) {
     long r = t->result;
     pthread_mutex_unlock(&t->mu);
     return r;
+}
+
+// Submit a green task that runs `run(job)` to completion on the scheduler, with
+// its fiber GC-context registered. Result delivery is the callback's job (e.g.
+// into a Pluto Task<T> via its TaskSync). The scheduler owns and frees the
+// fiber. This is the entry point threading.c's __pluto_green_spawn uses.
+void __pluto_green_submit(void (*run)(void *), void *job, size_t stack_size) {
+    gprod_ensure_started();
+    GProdTask *t = (GProdTask *)calloc(1, sizeof(GProdTask));
+    t->submit_run = run;
+    t->submit_job = job;
+    t->stack = (char *)malloc(stack_size);
+    t->stack_size = stack_size;
+    t->sp = prime_ctx(t->stack + stack_size, gprod_trampoline);
+    pthread_mutex_lock(&gq_mu);
+    t->next = NULL;
+    if (gq_tail) gq_tail->next = t; else gq_head = t;
+    gq_tail = t;
+    pthread_cond_signal(&gq_wake);
+    pthread_mutex_unlock(&gq_mu);
 }
 #endif

@@ -138,6 +138,17 @@ void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi) {
 
 void __pluto_gc_deregister_thread_stack(void) {}
 
+// Green-task context registry (#369): no-ops under the noop backend (nothing
+// is ever collected). The green scheduler calls these unconditionally, so they
+// must link in every GC backend.
+void *__pluto_gc_register_green_context(void *stack_top, void *live_sp) {
+    (void)stack_top; (void)live_sp; return (void *)0;
+}
+void __pluto_gc_green_set_live_sp(void *handle, void *live_sp) {
+    (void)handle; (void)live_sp;
+}
+void __pluto_gc_unregister_green_context(void *handle) { (void)handle; }
+
 int __pluto_gc_active_tasks(void) {
     return 0;
 }

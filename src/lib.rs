@@ -728,6 +728,7 @@ fn runtime_cache_key(test_mode: bool, gc: GcBackend) -> String {
     include_str!("../runtime/miniz.h").hash(&mut hasher);
     include_str!("../runtime/green/green_sched.c").hash(&mut hasher);
     include_str!("../runtime/green/green_chan.c").hash(&mut hasher);
+    include_str!("../runtime/green/green_prod.c").hash(&mut hasher);
     include_str!("../runtime/green/green_sched.h").hash(&mut hasher);
     include_str!("../runtime/green/green_chan.h").hash(&mut hasher);
     include_str!("../runtime/green/ctx_arm64.s").hash(&mut hasher);
@@ -813,6 +814,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     // compile modes.
     let green_sched_src = include_str!("../runtime/green/green_sched.c");
     let green_chan_src = include_str!("../runtime/green/green_chan.c");
+    let green_prod_src = include_str!("../runtime/green/green_prod.c");
     let green_sched_h_src = include_str!("../runtime/green/green_sched.h");
     let green_chan_h_src = include_str!("../runtime/green/green_chan.h");
     #[cfg(target_arch = "aarch64")]
@@ -855,6 +857,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     // Green scheduler sources (+ headers it includes, written into the -I dir).
     let green_sched_c = dir.join("green_sched.c");
     let green_chan_c = dir.join("green_chan.c");
+    let green_prod_c = dir.join("green_prod.c");
     let green_ctx_s = dir.join("green_ctx.s");
     std::fs::write(dir.join("green_sched.h"), green_sched_h_src)
         .map_err(|e| CompileError::link(format!("failed to write green_sched.h: {e}")))?;
@@ -864,6 +867,8 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
         .map_err(|e| CompileError::link(format!("failed to write green_sched.c: {e}")))?;
     std::fs::write(&green_chan_c, green_chan_src)
         .map_err(|e| CompileError::link(format!("failed to write green_chan.c: {e}")))?;
+    std::fs::write(&green_prod_c, green_prod_src)
+        .map_err(|e| CompileError::link(format!("failed to write green_prod.c: {e}")))?;
     std::fs::write(&green_ctx_s, green_ctx_src)
         .map_err(|e| CompileError::link(format!("failed to write green_ctx.s: {e}")))?;
 
@@ -874,6 +879,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     let compress_o = dir.join("compress.o");
     let miniz_o = dir.join("miniz.o");
     let green_sched_o = dir.join("green_sched.o");
+    let green_prod_o = dir.join("green_prod.o");
     let green_chan_o = dir.join("green_chan.o");
     let green_ctx_o = dir.join("green_ctx.o");
     let runtime_o = dir.join("runtime.o");
@@ -987,6 +993,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     for (src, obj, what) in [
         (&green_sched_c, &green_sched_o, "green_sched.c"),
         (&green_chan_c, &green_chan_o, "green_chan.c"),
+        (&green_prod_c, &green_prod_o, "green_prod.c"),
         (&green_ctx_s, &green_ctx_o, "green context switch (asm)"),
     ] {
         let mut cmd = std::process::Command::new("cc");
@@ -1008,7 +1015,7 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     cmd.arg("-r");
     cmd.arg(&gc_o).arg(&threading_o).arg(&builtins_o).arg(&coverage_o)
         .arg(&compress_o).arg(&miniz_o)
-        .arg(&green_sched_o).arg(&green_chan_o).arg(&green_ctx_o)
+        .arg(&green_sched_o).arg(&green_chan_o).arg(&green_prod_o).arg(&green_ctx_o)
         .arg("-o").arg(&runtime_o);
     let status = cmd.status()
         .map_err(|e| CompileError::link(format!("failed to link runtime: {e}")))?;

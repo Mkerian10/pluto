@@ -1319,12 +1319,78 @@ long __pluto_task_spawn(long closure_ptr) {
     return (long)task;
 }
 
-// Green executor (production). cp3a: delegates to the OS-thread spawn path
-// (proven, GC-correct) so `green` is a working distinct lowering. cp3b swaps
-// this body to enqueue on the green scheduler (runtime/green/), keeping the
-// same Task<T> handle + TaskSync so .get() stays unchanged.
+// Green executor (production, cp3b): build the same Task<T> handle as the
+// thread path, then submit the closure to the green scheduler (runtime/green)
+// instead of pthread_create. .get() is unchanged — the scheduler fiber
+// delivers the result into the task's TaskSync.
+typedef struct { long closure; long *task; } GreenJob;
+
+// Runs on a green scheduler fiber (GC-context registered by green_prod): invoke
+// the Pluto closure and deliver its result/error into the Task<T>'s TaskSync.
+static void green_run_cb(void *arg) {
+    GreenJob *j = (GreenJob *)arg;
+    long closure_ptr = j->closure;
+    long *task = j->task;
+    free(j);
+
+    __pluto_current_error = NULL;
+    __pluto_current_task = task;
+    // `task` is now live on this fiber's stack (GC-scanned via the fiber's
+    // green context), so the pre-submit pending root is no longer needed.
+    __pluto_gc_remove_pending_root(task);
+
+    long fn_ptr = *(long *)closure_ptr;
+    long result = ((long (*)(long))fn_ptr)(closure_ptr);
+
+    TaskSync *sync = (TaskSync *)task[4];
+    pthread_mutex_lock(&sync->mutex);
+    if (__pluto_current_error) {
+        task[2] = (long)__pluto_current_error;
+        __pluto_current_error = NULL;
+    } else {
+        task[1] = result;
+    }
+    task[3] = 1;  // done
+    if (task[5] && task[2]) {   // detached + errored → stderr (parity with spawn)
+        long *err_obj = (long *)task[2];
+        char *msg_ptr = (char *)err_obj[0];
+        if (msg_ptr) {
+            long len = *(long *)msg_ptr;
+            fprintf(stderr, "pluto: error in detached green task: %.*s\n", (int)len, msg_ptr + 8);
+        }
+    }
+    pthread_cond_signal(&sync->cond);
+    pthread_mutex_unlock(&sync->mutex);
+
+    __pluto_current_task = NULL;
+    __pluto_gc_task_end();
+}
+
+// Green fiber stack size. NOTE (tuning/safety, tracked): malloc'd, no guard
+// page yet — a deeply recursive green fn could overflow silently. 512 KB
+// matches the pthread reserve for now; a later pass adds mmap+guard-page
+// stacks and right-sizes them for the idle-connection memory win.
+#define PLUTO_GREEN_STACK (512 * 1024)
+
 long __pluto_green_spawn(long closure_ptr) {
-    return __pluto_task_spawn(closure_ptr);
+    long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
+    task[0] = closure_ptr;
+    task[1] = 0; task[2] = 0; task[3] = 0;
+    task[5] = 0; task[6] = 0;
+
+    TaskSync *sync = (TaskSync *)calloc(1, sizeof(TaskSync));
+    pthread_mutex_init(&sync->mutex, NULL);
+    pthread_cond_init(&sync->cond, NULL);
+    task[4] = (long)sync;
+
+    __pluto_gc_task_start();
+    __pluto_gc_add_pending_root(task);   // kept alive until the fiber holds it
+
+    GreenJob *j = (GreenJob *)malloc(sizeof(GreenJob));
+    j->closure = closure_ptr;
+    j->task = task;
+    __pluto_green_submit(green_run_cb, j, PLUTO_GREEN_STACK);
+    return (long)task;
 }
 
 long __pluto_task_get(long task_ptr) {

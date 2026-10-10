@@ -216,6 +216,8 @@ void __pluto_gc_deregister_thread_stack(void);
 // Green-task context registry (#369): the green scheduler registers each
 // fiber/scheduler stack so the collector scans [live_sp, stack_top) for roots.
 void *__pluto_gc_register_green_context(void *stack_top, void *live_sp);
+// Submit a run-callback to the production green scheduler (runtime/green).
+void __pluto_green_submit(void (*run)(void *), void *job, size_t stack_size);
 void __pluto_gc_green_set_live_sp(void *handle, void *live_sp);
 void __pluto_gc_unregister_green_context(void *handle);
 int __pluto_gc_active_tasks(void);
