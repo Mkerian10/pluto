@@ -169,3 +169,40 @@ called out, so it is built carefully rather than dribbled.
 4. Cross-tier channel (kind-tagged waiters) + green-awaiting-green parking.
 5. Guardrail enforcement at the `green` boundary (consume `green_illegal_fns`).
 6. kqueue readiness (sockets/timers leave the leaf set) → fs/stdin offload.
+
+## Implementation status (branch `green-cp4-park`, off `green-integration`)
+
+Checkpoints 1–5 are LANDED and staged (not merged). All on `green-cp4-park`.
+
+- **CP1–CP3 (scheduler + GC + codegen):** `green f()` lowers to
+  `__pluto_green_spawn`, builds a real `Task<T>`, and runs on a pthread-backed
+  cooperative scheduler over a register-only context switch (`runtime/green/
+  ctx_{arm64,amd64}.s`, ~30 ns). GC-correct on both the mark-sweep and noop
+  backends: the running fiber's stack is scanned conservatively, parked fibers
+  by saved sp; verified with `PLUTO_GC_VERIFY` under heavy allocation.
+- **CP4 (cooperative await + channels):** a fiber that awaits a task (`.get()`)
+  or blocks on a full/empty channel PARKS and yields the scheduler instead of
+  blocking the thread, via a race-free gopark handoff (the fiber switches out
+  first; the scheduler publishes it as a waiter on its own stack). Wakes work
+  within the green tier and cross-tier (a pthread/main completion re-readies a
+  parked fiber). Demonstrated ~19× over the pthread tier on a fiber-to-fiber
+  ping-pong (`benchmarks/concurrency/green_pingpong.pt`).
+- **CP5 (guardrail):** a `green f()` whose target reaches a blocking op with no
+  cooperative form (fs/stdin/sleep/blocking-sockets) is a compile error.
+- **Stacks:** fiber stacks are mmap'd with a `PROT_NONE` guard page — overflow
+  faults instead of corrupting the heap.
+
+Remaining / known gaps:
+
+- **CP6 (not started):** fs/stdin/sleep/sockets are *rejected* from green, not
+  yet *offloaded*. Making them usable needs a kqueue/epoll readiness loop +
+  a thread-pool offload for fs, and a scheduler timer wheel (which also lets
+  `recv_timeout` and `select` park a fiber instead of blocking — today those
+  take the cond path from a fiber).
+- **Opaque-target soundness:** a green fn that calls through a closure or a
+  trait-dynamic dispatch (`blocking_opaque_fns`) is NOT rejected, because that
+  would reject most legitimate green code. A call reached that way which turns
+  out to block would stall the scheduler. Closing this needs devirtualization
+  or a runtime guard.
+- **Single scheduler:** one scheduler thread for now; thread-per-core with
+  shared-nothing schedulers (no work-stealing in v1) is a later scaling lever.
