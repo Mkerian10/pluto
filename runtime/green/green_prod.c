@@ -26,6 +26,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <time.h>
 
 extern void pluto_ctx_swap(void **from_sp, void *to_sp);
 
@@ -56,6 +57,8 @@ typedef struct GProdTask {
     void (*park_fn)(void *);// cp4: handoff run on the scheduler stack after the
     void *park_arg;         //      fiber parks (publishes it as a waiter)
     void *gc_ctx;           // GC green-context handle (held across parks)
+    long deadline_ns;       // cp6: CLOCK_REALTIME wake deadline when timer-parked
+    struct GProdTask *timer_next; // cp6: link in the sorted timer list
     // Submit path (__pluto_green_submit): when submit_run != NULL the fiber
     // calls submit_run(submit_job) and the callback owns result delivery (e.g.
     // into a Pluto Task<T>); the scheduler then frees the whole GProdTask.
@@ -73,6 +76,40 @@ static int gq_started = 0;
 // so a single pair suffices; thread-local would generalize to N schedulers).
 static void *gsched_sp;
 static GProdTask *gsched_current;
+
+// cp6 timer wheel: fibers that sleep (and, later, time out on a channel) park
+// here instead of blocking the scheduler. Sorted ascending by deadline, guarded
+// by gq_mu. (A sorted list is O(n) insert — fine for modest timer counts; a
+// heap is the later optimization for many concurrent sleepers.)
+static GProdTask *timer_head;
+
+static long gprod_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (long)ts.tv_sec * 1000000000L + (long)ts.tv_nsec;
+}
+
+// Insert t into the sorted timer list. Caller holds gq_mu.
+static void timer_insert(GProdTask *t) {
+    GProdTask **pp = &timer_head;
+    while (*pp && (*pp)->deadline_ns <= t->deadline_ns) pp = &(*pp)->timer_next;
+    t->timer_next = *pp;
+    *pp = t;
+}
+
+// Move every timer whose deadline has passed onto the ready queue. Caller holds
+// gq_mu (so the inline enqueue is safe without gq_push's own lock).
+static void timer_fire_expired(long now) {
+    while (timer_head && timer_head->deadline_ns <= now) {
+        GProdTask *t = timer_head;
+        timer_head = t->timer_next;
+        t->timer_next = NULL;
+        t->state = GRUN;
+        t->next = NULL;
+        if (gq_tail) gq_tail->next = t; else gq_head = t;
+        gq_tail = t;
+    }
+}
 // Set on the scheduler thread only, so __pluto_green_self() can tell a fiber
 // (running on the scheduler thread) from an ordinary pthread / the main thread.
 static __thread int gt_on_sched = 0;
@@ -130,6 +167,25 @@ void __pluto_green_park(void (*handoff)(void *), void *arg) {
     pluto_ctx_swap(&t->sp, gsched_sp);
 }
 
+// cp6 sleep handoff: on the scheduler stack with the fiber switched out, insert
+// it into the timer list (under gq_mu). The scheduler fires it at its deadline.
+static void sleep_handoff(void *arg) {
+    GProdTask *t = (GProdTask *)arg;
+    pthread_mutex_lock(&gq_mu);
+    timer_insert(t);
+    pthread_mutex_unlock(&gq_mu);
+}
+
+// Cooperative sleep: park the current fiber until `ns` from now, yielding the
+// scheduler to its peers (instead of a nanosleep that would stall them all).
+// Caller must be a fiber (the runtime routes non-fiber sleep to nanosleep).
+void __pluto_green_sleep_ns(long ns) {
+    GProdTask *t = gsched_current;
+    if (!t) return;
+    t->deadline_ns = gprod_now_ns() + (ns > 0 ? ns : 0);
+    __pluto_green_park(sleep_handoff, t);   // resumes once the deadline fires
+}
+
 // Re-ready a parked fiber. Thread-safe — called from the completer's thread
 // (a pthread finishing a spawn task, a peer fiber, or the main thread). The
 // handoff that published `fiber` as a waiter ran before any wake could see it,
@@ -185,12 +241,21 @@ static void *gprod_scheduler(void *_unused) {
     }
     for (;;) {
         pthread_mutex_lock(&gq_mu);
+        timer_fire_expired(gprod_now_ns());
         // Idle wait counts as a GC-safe region so stop-the-world converges
         // while the scheduler sleeps (it holds no heap, like a channel wait).
+        // With timers pending, wait only until the nearest deadline, then fire.
         while (!gq_head) {
             __pluto_gc_enter_safe_region();
-            pthread_cond_wait(&gq_wake, &gq_mu);
+            if (timer_head) {
+                long d = timer_head->deadline_ns;
+                struct timespec ts = { (time_t)(d / 1000000000L), (long)(d % 1000000000L) };
+                pthread_cond_timedwait(&gq_wake, &gq_mu, &ts);
+            } else {
+                pthread_cond_wait(&gq_wake, &gq_mu);
+            }
             __pluto_gc_leave_safe_region();
+            timer_fire_expired(gprod_now_ns());
         }
         GProdTask *t = gq_head;
         gq_head = t->next;

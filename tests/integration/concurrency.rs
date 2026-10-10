@@ -1760,22 +1760,45 @@ fn green_channel_ping_pong() {
 
 #[test]
 fn green_rejects_blocking_op() {
-    // A green task that reaches a blocking op with no cooperative form (here
-    // sleep) is rejected at compile time (#369 cp5): it would stall the green
-    // scheduler. The identical function under `spawn` is fine.
+    // A green task that reaches a blocking op with no cooperative form (here a
+    // file read) is rejected at compile time (#369 cp5): it would stall the
+    // green scheduler. The identical function under `spawn` is fine.
     compile_should_fail_with(
         r#"
-        extern fn __pluto_time_sleep_ns(ns: int)
-        fn nap(ms: int) {
-            __pluto_time_sleep_ns(ms * 1000000)
+        extern fn __pluto_fs_read(fd: int) int
+        fn rd() int {
+            return __pluto_fs_read(3)
         }
         fn main() {
-            let t = green nap(5)
-            t.get()
+            let t = green rd()
+            print(t.get())
         }
         "#,
         "cannot run as a green task",
     );
+}
+
+#[test]
+fn green_sleep_is_cooperative() {
+    // Sleep is legal in a green task (#369 cp6): it parks on the scheduler's
+    // timer wheel instead of blocking the thread, so two green sleeps overlap.
+    // The result proves it compiled (sleep is no longer green-illegal) and both
+    // tasks completed.
+    let out = compile_and_run_stdout(
+        r#"
+        extern fn __pluto_time_sleep_ns(ns: int)
+        fn napper(id: int, ms: int) int {
+            __pluto_time_sleep_ns(ms * 1000000)
+            return id
+        }
+        fn main() {
+            let a = green napper(1, 100)
+            let b = green napper(2, 50)
+            print(a.get() + b.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "3");
 }
 
 #[test]

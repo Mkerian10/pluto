@@ -45,9 +45,13 @@ pub const BLOCKING_EXTERN_LEAVES: &[&str] = &[
     "__pluto_socket_read", "__pluto_socket_read_bytes",
     "__pluto_socket_write", "__pluto_socket_write_bytes",
     "__pluto_write_framed", "__pluto_read_framed",
-    // stdin / sleep / http
-    "__pluto_io_read_line", "__pluto_time_sleep_ns",
+    // stdin / http
+    "__pluto_io_read_line",
     "__pluto_http_read_request",
+    // NOTE: __pluto_time_sleep_ns is deliberately NOT here. Under the green
+    // scheduler it is a cooperative yield (the cp6 timer wheel), so it blocks a
+    // plain thread but is legal in green — handled as `coop` in the collector,
+    // like channel/task ops (feeds blocking_fns, not green_illegal_fns).
 ];
 
 /// Is this method resolution a blocking leaf? Channel recv/send and task join
@@ -198,14 +202,23 @@ impl Visitor for BlockingCollector<'_> {
         match &expr.node {
             Expr::Call { name, .. } => {
                 let n = name.node.clone();
-                // An extern blocking leaf is caught by the fixpoint through this
-                // edge + the leaf set (no direct flag needed). A target that is
-                // not a known function/extern/builtin is a call through a
-                // closure or fn-ref variable we cannot inspect — opaque.
-                if !self.known_bare.contains(&n) {
-                    self.opaque = true;
+                if n == "__pluto_time_sleep_ns" {
+                    // Sleep blocks a plain thread but is a cooperative yield
+                    // under the green scheduler (cp6 timer wheel): like
+                    // channel/task, it feeds blocking_fns but NOT
+                    // green_illegal_fns. (Args still recurse via walk_expr.)
+                    self.coop = true;
+                } else {
+                    // An extern blocking leaf is caught by the fixpoint through
+                    // this edge + the leaf set (no direct flag needed). A target
+                    // that is not a known function/extern/builtin is a call
+                    // through a closure or fn-ref variable we cannot inspect —
+                    // opaque.
+                    if !self.known_bare.contains(&n) {
+                        self.opaque = true;
+                    }
+                    self.edges.insert(n);
                 }
-                self.edges.insert(n);
             }
             Expr::MethodCall { method, .. } => {
                 let key = (self.current_fn.to_string(), method.span.start);

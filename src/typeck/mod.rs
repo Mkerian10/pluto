@@ -224,8 +224,9 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // the OS thread, transitively.
     blocking::infer_blocking_effects(program, &mut env);
     // Green-task boundary (#369 cp5): a `green f()` whose target reaches a
-    // blocking op with NO cooperative form (fs, stdin, sleep, blocking sockets)
-    // would stall the single-threaded green scheduler and every fiber on it.
+    // blocking op with NO cooperative form (fs, stdin, blocking sockets; sleep
+    // is cooperative under the cp6 timer wheel and NOT here) would stall the
+    // single-threaded green scheduler and every fiber on it.
     // Reject it at compile time — the author must use `spawn` (a dedicated OS
     // thread) for that work. Channel/task/lock/select do NOT trigger this:
     // under the green scheduler they are cooperative yields, so they are absent
@@ -237,7 +238,7 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
             let bare = target.rsplit('$').next().unwrap_or(target);
             return Err(CompileError::type_err(
                 format!(
-                    "'{bare}' performs a blocking operation (file/stdin/sleep/blocking socket) \
+                    "'{bare}' performs a blocking operation (file/stdin/blocking socket) \
                      with no cooperative form, so it cannot run as a green task — it would stall \
                      the green scheduler and every fiber on it. Use `spawn` (a dedicated OS \
                      thread) for this work instead of `green`."

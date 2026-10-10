@@ -238,6 +238,9 @@ void __pluto_green_submit(void (*run)(void *), void *job, size_t stack_size);
 void *__pluto_green_self(void);
 void __pluto_green_park(void (*handoff)(void *), void *arg);
 void __pluto_green_wake(void *fiber);
+// cp6: cooperative sleep — park the current fiber for `ns`, yielding the
+// scheduler to its peers. Only valid on a fiber (the runtime guards the call).
+void __pluto_green_sleep_ns(long ns);
 void __pluto_gc_green_set_live_sp(void *handle, void *live_sp);
 void __pluto_gc_unregister_green_context(void *handle);
 int __pluto_gc_active_tasks(void);
