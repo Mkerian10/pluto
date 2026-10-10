@@ -569,7 +569,7 @@ pub(crate) fn infer_expr(
             }
             Ok(PlutoType::Set(Box::new(et)))
         }
-        Expr::Spawn { call, .. } => {
+        Expr::Spawn { call, green } => {
             // After desugaring, call is a Closure wrapping the original function call.
             // Infer the closure type to get the return type.
             let closure_type = infer_expr(&call.node, call.span, env, None)?;
@@ -592,6 +592,9 @@ pub(crate) fn infer_expr(
                                     (span.start, span.end),
                                     name.node.clone(),
                                 );
+                                if *green {
+                                    env.green_spawn_sites.push((name.node.clone(), name.span));
+                                }
                             }
                             Expr::MethodCall { object, method, .. } => {
                                 let obj_type = infer_expr(&object.node, object.span, env, None)?;
@@ -599,8 +602,11 @@ pub(crate) fn infer_expr(
                                     let mangled = super::env::mangle_method(class_name, &method.node);
                                     env.spawn_target_fns.insert(
                                         (span.start, span.end),
-                                        mangled,
+                                        mangled.clone(),
                                     );
+                                    if *green {
+                                        env.green_spawn_sites.push((mangled, method.span));
+                                    }
                                 }
                                 // Non-class targets → None → conservatively fallible
                             }

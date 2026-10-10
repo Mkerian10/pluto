@@ -1757,3 +1757,41 @@ fn green_channel_ping_pong() {
     );
     assert_eq!(out.trim(), "5050");
 }
+
+#[test]
+fn green_rejects_blocking_op() {
+    // A green task that reaches a blocking op with no cooperative form (here
+    // sleep) is rejected at compile time (#369 cp5): it would stall the green
+    // scheduler. The identical function under `spawn` is fine.
+    compile_should_fail_with(
+        r#"
+        extern fn __pluto_time_sleep_ns(ns: int)
+        fn nap(ms: int) {
+            __pluto_time_sleep_ns(ms * 1000000)
+        }
+        fn main() {
+            let t = green nap(5)
+            t.get()
+        }
+        "#,
+        "cannot run as a green task",
+    );
+}
+
+#[test]
+fn spawn_allows_blocking_op() {
+    // The same blocking function is legal under `spawn` (a dedicated OS thread).
+    let out = compile_and_run_stdout(
+        r#"
+        extern fn __pluto_time_sleep_ns(ns: int)
+        fn nap(ms: int) {
+            __pluto_time_sleep_ns(ms * 1000000)
+        }
+        fn main() {
+            spawn nap(1).detach()
+            print(7)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "7");
+}

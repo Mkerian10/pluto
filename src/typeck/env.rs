@@ -237,6 +237,11 @@ pub struct TypeEnv {
     /// (rfc-green-tasks.md). The green-task boundary check rejects a `green f()`
     /// whose target is in `green_illegal_fns ∪ blocking_opaque_fns`.
     pub green_illegal_fns: HashSet<String>,
+    /// Green-spawn sites collected during body checking: (target fn/method name,
+    /// span of the spawned call). Enforced AFTER blocking-effect inference
+    /// (which runs post-body-check), rejecting any whose target reaches a
+    /// green-illegal blocking op (#369 cp5).
+    pub green_spawn_sites: Vec<(String, crate::span::Span)>,
     /// Per-function error sets: maps function name to set of error type names it can raise.
     /// Populated by the error inference pass. Also holds per-closure nodes
     /// keyed as `<closure@span>` for closures bound to local variables.
@@ -598,6 +603,7 @@ impl TypeEnv {
             blocking_fns: HashSet::new(),
             blocking_opaque_fns: HashSet::new(),
             green_illegal_fns: HashSet::new(),
+            green_spawn_sites: Vec::new(),
             fn_errors: HashMap::new(),
             closure_call_sites: HashMap::new(),
             fallible_value_calls: HashSet::new(),
