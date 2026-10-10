@@ -25,6 +25,11 @@
 // Production only — uses pthreads. Under PLUTO_TEST_MODE green routes to the
 // DPOR fiber scheduler instead, so this file is inert there.
 #ifndef PLUTO_TEST_MODE
+// pthread_getattr_np (Linux thread-stack bounds) and eventfd are GNU
+// extensions — request them before the first system header. Harmless on macOS.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -33,12 +38,25 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <time.h>
-#include <sys/event.h>   // kqueue: scheduler idle-wait + socket readiness
-
-// EVFILT_USER ident the scheduler registers on its kqueue so cross-thread wakes
-// (a remote enqueue) can break it out of kevent — the kqueue analogue of the
-// old ready-queue condvar signal.
+// ── Readiness reactor ────────────────────────────────────────────────────────
+// Each scheduler blocks its idle-wait on an OS readiness object that multiplexes
+// three sources: a cross-thread wake (a remote enqueue), socket fd readiness,
+// and a timeout (the nearest timer). macOS uses kqueue + EVFILT_USER for the
+// wake; Linux uses epoll + an eventfd. The scheduler loop calls only the
+// portable reactor_* helpers below — no kqueue/epoll types leak into it.
+#if defined(__APPLE__)
+#include <sys/event.h>
+typedef struct kevent REvent;
+// EVFILT_USER ident for the cross-thread wake — the kqueue analogue of the old
+// ready-queue condvar signal.
 #define SCHED_WAKE_IDENT 1
+#elif defined(__linux__)
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+typedef struct epoll_event REvent;
+#else
+#error "green scheduler: no readiness reactor for this platform"
+#endif
 
 extern void pluto_ctx_swap(void **from_sp, void *to_sp);
 
@@ -102,9 +120,13 @@ typedef struct GProdTask {
 // wakes push onto under `mu`.
 struct GProdSched {
     pthread_mutex_t mu;
-    int kq;                     // kqueue: idle-wait wakes on EVFILT_USER (a
-                                //   cross-thread enqueue), a timer timeout, or
-                                //   socket fd readiness (EVFILT_READ/WRITE).
+    int kq;                     // readiness reactor fd: a kqueue (macOS) or an
+                                //   epoll instance (Linux). The idle-wait blocks
+                                //   here on a cross-thread wake, socket fd
+                                //   readiness, or a timer timeout.
+    int wake_fd;                // Linux: the eventfd the cross-thread wake writes
+                                //   (registered EPOLLIN on `kq`). Unused (-1) on
+                                //   macOS, where EVFILT_USER carries the wake.
     GProdTask *head, *tail;     // REMOTE ready queue: cross-thread wakes push
                                 //   here under `mu`; the scheduler drains it.
     int fd_waiters;             // fibers currently parked on socket readiness
@@ -173,6 +195,109 @@ static void timer_fire_expired(GProdSched *s, long now) {
     }
 }
 
+static void sched_push_local(GProdSched *s, GProdTask *t);  // fwd (reactor_drain)
+
+// ── Reactor helpers (kqueue on macOS, epoll + eventfd on Linux) ──────────────
+
+// Create the scheduler's reactor + register its cross-thread wake channel.
+static void reactor_init(GProdSched *s) {
+#if defined(__APPLE__)
+    s->kq = kqueue();
+    s->wake_fd = -1;
+    // EV_CLEAR = edge-latched: a NOTE_TRIGGER racing the empty-queue check is
+    // returned by the next kevent, so a cross-thread wake is never lost.
+    struct kevent ev;
+    EV_SET(&ev, SCHED_WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    kevent(s->kq, &ev, 1, NULL, 0, NULL);
+#elif defined(__linux__)
+    s->kq = epoll_create1(0);
+    s->wake_fd = eventfd(0, EFD_NONBLOCK);
+    // Level-triggered, data.ptr == NULL so the drain tells it apart from
+    // fd-waiters (whose data.ptr is a fiber). A write racing the empty-queue
+    // check stays readable until drained, so the wake is never lost.
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.ptr = NULL;
+    epoll_ctl(s->kq, EPOLL_CTL_ADD, s->wake_fd, &ev);
+#endif
+}
+
+// Wake scheduler s out of its idle-wait (cross-thread safe).
+static void reactor_wake(GProdSched *s) {
+#if defined(__APPLE__)
+    struct kevent ev;
+    EV_SET(&ev, SCHED_WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    kevent(s->kq, &ev, 1, NULL, 0, NULL);
+#elif defined(__linux__)
+    uint64_t one = 1;
+    ssize_t r = write(s->wake_fd, &one, sizeof one);
+    (void)r;
+#endif
+}
+
+// Arm ONE-SHOT interest in `fd` becoming readable (for_write=0) / writable
+// (for_write=1) on s's reactor, carrying `fiber` as the wake payload. One-shot:
+// the registration fires once then is disarmed, so each wait re-arms fresh.
+static void reactor_arm_fd(GProdSched *s, int fd, int for_write, void *fiber) {
+#if defined(__APPLE__)
+    struct kevent ev;
+    EV_SET(&ev, fd, for_write ? EVFILT_WRITE : EVFILT_READ,
+           EV_ADD | EV_ONESHOT, 0, 0, fiber);
+    kevent(s->kq, &ev, 1, NULL, 0, NULL);
+#elif defined(__linux__)
+    struct epoll_event ev;
+    ev.events = (uint32_t)(for_write ? EPOLLOUT : EPOLLIN) | EPOLLONESHOT;
+    ev.data.ptr = fiber;
+    // EPOLLONESHOT disables (not removes) the fd after it fires, so a re-arm is
+    // a MOD; a fresh fd is an ADD. close() auto-removes from the epoll set, so
+    // after a close MOD gives ENOENT and we fall back to ADD.
+    if (epoll_ctl(s->kq, EPOLL_CTL_MOD, fd, &ev) < 0)
+        epoll_ctl(s->kq, EPOLL_CTL_ADD, fd, &ev);
+#endif
+}
+
+// Block up to timeout_ns (negative = forever) for reactor events into
+// evs[0..max); return how many fired.
+static int reactor_wait(GProdSched *s, REvent *evs, int max, long timeout_ns) {
+#if defined(__APPLE__)
+    struct timespec ts, *tsp = NULL;
+    if (timeout_ns >= 0) {
+        ts.tv_sec = (time_t)(timeout_ns / 1000000000L);
+        ts.tv_nsec = (long)(timeout_ns % 1000000000L);
+        tsp = &ts;
+    }
+    return kevent(s->kq, NULL, 0, evs, max, tsp);
+#elif defined(__linux__)
+    int ms;
+    if (timeout_ns < 0) ms = -1;
+    else if (timeout_ns == 0) ms = 0;
+    else { long m = timeout_ns / 1000000L; ms = (int)(m > 0 ? m : 1); }  // sub-ms -> 1ms
+    return epoll_wait(s->kq, evs, max, ms);
+#endif
+}
+
+// Re-ready any fiber whose fd became ready in evs[0..n); drain the wake
+// channel. The cross-thread wake / timer timeouts carry no fiber and simply
+// mean "loop again".
+static void reactor_drain(GProdSched *s, REvent *evs, int n) {
+    for (int i = 0; i < n; i++) {
+#if defined(__APPLE__)
+        if (evs[i].filter == EVFILT_READ || evs[i].filter == EVFILT_WRITE) {
+            GProdTask *w = (GProdTask *)evs[i].udata;
+            if (w) { w->state = GRUN; sched_push_local(s, w); if (s->fd_waiters) s->fd_waiters--; }
+        }
+#elif defined(__linux__)
+        void *p = evs[i].data.ptr;
+        if (p == NULL) {                       // the wake eventfd
+            uint64_t buf; ssize_t r = read(s->wake_fd, &buf, sizeof buf); (void)r;
+        } else {
+            GProdTask *w = (GProdTask *)p;
+            w->state = GRUN; sched_push_local(s, w); if (s->fd_waiters) s->fd_waiters--;
+        }
+#endif
+    }
+}
+
 // Enqueue onto scheduler s's REMOTE ready queue under its lock + wake it. Used
 // for cross-thread wakes (a different scheduler or a non-scheduler thread
 // re-readying a fiber whose home is s).
@@ -182,11 +307,7 @@ static void sched_push_remote(GProdSched *s, GProdTask *t) {
     if (s->tail) s->tail->next = t; else s->head = t;
     s->tail = t;
     pthread_mutex_unlock(&s->mu);
-    // Break the scheduler out of kevent (EV_CLEAR makes a trigger that races
-    // the empty-check return immediately on the next kevent — no lost wakeup).
-    struct kevent ev;
-    EV_SET(&ev, SCHED_WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
-    kevent(s->kq, &ev, 1, NULL, 0, NULL);
+    reactor_wake(s);   // break the scheduler out of its idle-wait (no lost wakeup)
 }
 
 // Enqueue onto s's LOCAL ready queue with NO lock. ONLY valid on s's own
@@ -236,40 +357,23 @@ void __pluto_green_park(void (*handoff)(void *), void *arg) {
     pluto_ctx_swap(&t->sp, s->sched_sp);
 }
 
-// Cooperative socket readiness. Called from a running fiber: register one-shot
+// Cooperative socket readiness. Called from a running fiber: arm one-shot
 // interest in `fd` becoming readable (for_write=0) or writable (for_write=1) on
-// THIS scheduler's kqueue, with the fiber as udata, then park. When the fd is
-// ready the scheduler's event drain re-readies the fiber (sched_push_local),
-// and this returns so the caller can retry the syscall.
+// THIS scheduler's reactor, carrying the fiber, then park. When the fd is ready
+// the scheduler's event drain re-readies the fiber (sched_push_local), and this
+// returns so the caller can retry the syscall.
 //
 // No lost-wakeup window: the scheduler thread is single-threaded and is right
-// now executing this very fiber, so it cannot be servicing its own kqueue.
-// Registering before the swap is therefore race-free — the event can only be
-// observed after we have switched out. EV_ONESHOT auto-removes the filter once
-// it fires, so each wait registers fresh and nothing leaks across retries.
+// now executing this very fiber, so it cannot be servicing its own reactor.
+// Arming before the swap is therefore race-free — the event can only be
+// observed after we have switched out. The arm is one-shot, so each wait arms
+// fresh and nothing leaks across retries.
 void __pluto_green_prod_wait_fd(int fd, int for_write) {
     GProdSched *s = cur_sched;
     if (!s || !s->current) return;   // not on a scheduler fiber — caller handles
-    struct kevent ev;
-    EV_SET(&ev, fd, for_write ? EVFILT_WRITE : EVFILT_READ,
-           EV_ADD | EV_ONESHOT, 0, 0, s->current);
-    kevent(s->kq, &ev, 1, NULL, 0, NULL);
+    reactor_arm_fd(s, fd, for_write, s->current);
     s->fd_waiters++;
-    __pluto_green_park(NULL, NULL);  // the kqueue registration IS the waiter
-}
-
-// Service one batch of kqueue events: re-ready any fiber whose fd became
-// ready. EVFILT_USER (cross-thread wake) and timer timeouts carry no fiber and
-// simply mean "loop again" — the caller then drains the remote queue / fires
-// timers. Shared by the blocking idle-wait and the per-iteration non-blocking
-// poll so socket readiness is observed even when the scheduler is busy.
-static void drain_kq_events(GProdSched *s, struct kevent *evs, int n) {
-    for (int i = 0; i < n; i++) {
-        if (evs[i].filter == EVFILT_READ || evs[i].filter == EVFILT_WRITE) {
-            GProdTask *w = (GProdTask *)evs[i].udata;
-            if (w) { w->state = GRUN; sched_push_local(s, w); if (s->fd_waiters) s->fd_waiters--; }
-        }
-    }
+    __pluto_green_park(NULL, NULL);  // the reactor registration IS the waiter
 }
 
 // cp6 sleep handoff: on the scheduler stack with the fiber switched out, insert
@@ -376,42 +480,37 @@ static void *gprod_scheduler(void *arg) {
                     pthread_mutex_unlock(&s->mu);
                     break;
                 }
-                // Nothing ready: block in kevent until a cross-thread wake
-                // (EVFILT_USER), socket readiness, or the nearest timer. kevent
-                // must not hold s->mu (it blocks), so drop it first; a wake that
-                // races this gap triggers EVFILT_USER, which kevent returns
-                // immediately (EV_CLEAR). Timeout is RELATIVE (unlike the old
-                // absolute condvar deadline).
-                struct timespec ts, *tsp = NULL;
+                // Nothing ready: block in the reactor until a cross-thread wake,
+                // socket readiness, or the nearest timer. The reactor wait must
+                // not hold s->mu (it blocks), so drop it first; a wake that races
+                // this gap is latched and returned immediately (no lost wakeup).
+                // Timeout is RELATIVE, negative = block forever.
+                long timeout_ns = -1;
                 if (s->timer_head) {
-                    long rem = s->timer_head->deadline_ns - gprod_now_ns();
-                    if (rem < 0) rem = 0;
-                    ts.tv_sec = (time_t)(rem / 1000000000L);
-                    ts.tv_nsec = (long)(rem % 1000000000L);
-                    tsp = &ts;
+                    timeout_ns = s->timer_head->deadline_ns - gprod_now_ns();
+                    if (timeout_ns < 0) timeout_ns = 0;
                 }
                 pthread_mutex_unlock(&s->mu);
-                struct kevent evs[16];
+                REvent evs[16];
                 __pluto_gc_enter_safe_region();  // idle wait = GC-safe region
-                int n = kevent(s->kq, NULL, 0, evs, 16, tsp);
+                int n = reactor_wait(s, evs, 16, timeout_ns);
                 __pluto_gc_leave_safe_region();
-                drain_kq_events(s, evs, n);
-                // drain_kq_events re-readies socket fibers into the LOCAL queue,
+                reactor_drain(s, evs, n);
+                // reactor_drain re-readies socket fibers into the LOCAL queue,
                 // which the remote-queue check above does not see — so break out
-                // to run them. Without this the loop would re-enter kevent and
-                // strand the just-woken fibers (deadlock once the scheduler is
-                // otherwise idle).
+                // to run them. Without this the loop would re-enter the reactor
+                // and strand the just-woken fibers (deadlock once the scheduler
+                // is otherwise idle).
                 if (s->local_head) break;
             }
         } else if (s->fd_waiters) {
-            // Busy path WITH sockets parked: poll the kqueue non-blocking
+            // Busy path WITH sockets parked: poll the reactor non-blocking
             // (timeout 0) so a ready fd re-readies its fiber promptly instead of
             // starving behind a scheduler that never goes idle. Gated on
-            // fd_waiters so a socket-free workload never pays a kevent per run.
-            struct kevent evs[16];
-            struct timespec zero = {0, 0};
-            int n = kevent(s->kq, NULL, 0, evs, 16, &zero);
-            if (n > 0) drain_kq_events(s, evs, n);
+            // fd_waiters so a socket-free workload never pays a syscall per run.
+            REvent evs[16];
+            int n = reactor_wait(s, evs, 16, 0);
+            if (n > 0) reactor_drain(s, evs, n);
         }
         GProdTask *t = s->local_head;
         s->local_head = t->next;
@@ -495,14 +594,7 @@ static void gprod_ensure_started(void) {
         for (int i = 0; i < g_nsched; i++) {
             GProdSched *s = &g_scheds[i];
             pthread_mutex_init(&s->mu, NULL);
-            s->kq = kqueue();
-            // Register the user-filter wake channel once. EV_CLEAR makes it
-            // edge-triggered: a NOTE_TRIGGER that arrives between our empty-queue
-            // check and the kevent() is latched and returned immediately, so a
-            // cross-thread wake can never be lost in that gap.
-            struct kevent ev;
-            EV_SET(&ev, SCHED_WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
-            kevent(s->kq, &ev, 1, NULL, 0, NULL);
+            reactor_init(s);   // kqueue + EVFILT_USER / epoll + eventfd
             s->head = s->tail = s->timer_head = NULL;
             s->local_head = s->local_tail = NULL;
             s->fd_waiters = 0;
