@@ -1802,6 +1802,89 @@ fn green_sleep_is_cooperative() {
 }
 
 #[test]
+fn green_sockets_are_cooperative() {
+    // Socket I/O is legal in a green task (#369, kqueue reactor): a read/accept
+    // that would block parks the fiber on the scheduler's kqueue until the fd is
+    // ready, instead of stalling the thread. This runs an echo server, its
+    // per-connection handlers, and all clients as green fibers on ONE scheduler
+    // thread — impossible if any socket op blocked the thread. Proves the ops
+    // are no longer green-illegal AND that many connections interleave on one
+    // thread. (Externs inlined to keep the test stdlib-free.)
+    let out = compile_and_run_stdout(
+        r#"
+        extern fn __pluto_socket_create(domain: int, sock_type: int, protocol: int) int
+        extern fn __pluto_socket_bind(fd: int, host: string, port: int) int
+        extern fn __pluto_socket_listen(fd: int, backlog: int) int
+        extern fn __pluto_socket_accept(fd: int) int
+        extern fn __pluto_socket_connect(fd: int, host: string, port: int) int
+        extern fn __pluto_socket_read(fd: int, max_bytes: int) string
+        extern fn __pluto_socket_write(fd: int, data: string) int
+        extern fn __pluto_socket_close(fd: int) int
+        extern fn __pluto_socket_set_reuseaddr(fd: int) int
+        extern fn __pluto_socket_get_port(fd: int) int
+
+        fn handle(conn: int) int {
+            let msg = __pluto_socket_read(conn, 1024)
+            __pluto_socket_write(conn, msg)
+            __pluto_socket_close(conn)
+            return 0
+        }
+        fn server(listen_fd: int, n: int) int {
+            let mut i = 0
+            while i < n {
+                let conn = __pluto_socket_accept(listen_fd)
+                if conn >= 0 {
+                    green handle(conn).detach()
+                }
+                i = i + 1
+            }
+            return 0
+        }
+        fn client(port: int, id: int) int {
+            let fd = __pluto_socket_create(2, 1, 0)
+            if __pluto_socket_connect(fd, "127.0.0.1", port) < 0 {
+                __pluto_socket_close(fd)
+                return 0
+            }
+            let msg = f"m{id}"
+            __pluto_socket_write(fd, msg)
+            let reply = __pluto_socket_read(fd, 1024)
+            __pluto_socket_close(fd)
+            if reply == msg {
+                return 1
+            }
+            return 0
+        }
+        fn main() {
+            let n = 25
+            let listen_fd = __pluto_socket_create(2, 1, 0)
+            __pluto_socket_set_reuseaddr(listen_fd)
+            __pluto_socket_bind(listen_fd, "127.0.0.1", 0)
+            __pluto_socket_listen(listen_fd, 128)
+            let port = __pluto_socket_get_port(listen_fd)
+            let srv = green server(listen_fd, n)
+            let mut clients = [green client(port, 0)]
+            let mut i = 1
+            while i < n {
+                clients.push(green client(port, i))
+                i = i + 1
+            }
+            let mut ok = 0
+            let mut j = 0
+            while j < n {
+                ok = ok + (clients[j].get() catch 0)
+                j = j + 1
+            }
+            srv.get()
+            __pluto_socket_close(listen_fd)
+            print(ok)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "25");
+}
+
+#[test]
 fn spawn_allows_blocking_op() {
     // The same blocking function is legal under `spawn` (a dedicated OS thread).
     let out = compile_and_run_stdout(

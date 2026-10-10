@@ -40,18 +40,28 @@ pub const BLOCKING_EXTERN_LEAVES: &[&str] = &[
     "__pluto_fs_read", "__pluto_fs_write", "__pluto_fs_pread", "__pluto_fs_pwrite",
     "__pluto_fs_sync", "__pluto_fs_fsync", "__pluto_fs_fdatasync",
     "__pluto_fs_read_all", "__pluto_fs_write_all", "__pluto_fs_copy",
-    // sockets — kqueue-readiness convertible, but blocking today
+    // stdin / http — no cooperative form yet (stdin has no readiness model that
+    // composes with the scheduler; http_read_request layers on raw reads but is
+    // not yet converted).
+    "__pluto_io_read_line",
+    "__pluto_http_read_request",
+    // NOTE: __pluto_time_sleep_ns and the socket ops in COOPERATIVE_EXTERN_LEAVES
+    // are deliberately NOT here. Under the green scheduler they are cooperative
+    // yields (the timer wheel / the kqueue reactor), so they block a plain
+    // thread but are legal in green — handled as `coop` in the collector, like
+    // channel/task ops (feeds blocking_fns, not green_illegal_fns).
+];
+
+/// Extern leaves that BLOCK a plain thread but YIELD under the green scheduler:
+/// the socket ops park the fiber on the scheduler's kqueue until the fd is
+/// ready (runtime `socket_*` / `__pluto_green_prod_wait_fd`). Like
+/// `__pluto_time_sleep_ns`, they feed `blocking_fns` but NOT `green_illegal_fns`
+/// — reaching one does not make a function illegal to call from `green`.
+pub const COOPERATIVE_EXTERN_LEAVES: &[&str] = &[
     "__pluto_socket_accept", "__pluto_socket_connect",
     "__pluto_socket_read", "__pluto_socket_read_bytes",
     "__pluto_socket_write", "__pluto_socket_write_bytes",
     "__pluto_write_framed", "__pluto_read_framed",
-    // stdin / http
-    "__pluto_io_read_line",
-    "__pluto_http_read_request",
-    // NOTE: __pluto_time_sleep_ns is deliberately NOT here. Under the green
-    // scheduler it is a cooperative yield (the cp6 timer wheel), so it blocks a
-    // plain thread but is legal in green — handled as `coop` in the collector,
-    // like channel/task ops (feeds blocking_fns, not green_illegal_fns).
 ];
 
 /// Is this method resolution a blocking leaf? Channel recv/send and task join
@@ -202,11 +212,12 @@ impl Visitor for BlockingCollector<'_> {
         match &expr.node {
             Expr::Call { name, .. } => {
                 let n = name.node.clone();
-                if n == "__pluto_time_sleep_ns" {
-                    // Sleep blocks a plain thread but is a cooperative yield
-                    // under the green scheduler (cp6 timer wheel): like
-                    // channel/task, it feeds blocking_fns but NOT
-                    // green_illegal_fns. (Args still recurse via walk_expr.)
+                if n == "__pluto_time_sleep_ns" || COOPERATIVE_EXTERN_LEAVES.contains(&n.as_str()) {
+                    // Blocks a plain thread but is a cooperative yield under the
+                    // green scheduler: sleep via the timer wheel, sockets via the
+                    // kqueue reactor (park until fd-ready). Like channel/task, it
+                    // feeds blocking_fns but NOT green_illegal_fns. (Args still
+                    // recurse via walk_expr.)
                     self.coop = true;
                 } else {
                     // An extern blocking leaf is caught by the fixpoint through

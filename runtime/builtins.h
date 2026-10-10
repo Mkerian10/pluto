@@ -245,6 +245,11 @@ void __pluto_green_wake(void *fiber);
 // cp6: cooperative sleep — park the current fiber for `ns`, yielding the
 // scheduler to its peers. Only valid on a fiber (the runtime guards the call).
 void __pluto_green_sleep_ns(long ns);
+// Cooperative socket readiness — park the current fiber until `fd` is readable
+// (for_write=0) or writable (for_write=1), registering one-shot interest on the
+// scheduler's kqueue. Production green scheduler only; the socket intrinsics
+// gate the call behind __pluto_green_self().
+void __pluto_green_prod_wait_fd(int fd, int for_write);
 void __pluto_gc_green_set_live_sp(void *handle, void *live_sp);
 void __pluto_gc_unregister_green_context(void *handle);
 int __pluto_gc_active_tasks(void);

@@ -1526,6 +1526,82 @@ static void __pluto_ignore_sigpipe(void) {
     signal(SIGPIPE, SIG_IGN);
 }
 
+// ── Cooperative socket readiness ─────────────────────────────────────────────
+//
+// A socket op issued from a green fiber must not block the scheduler's OS
+// thread (one thread drives many fibers). Instead the op makes the fd
+// non-blocking, attempts the syscall, and on EWOULDBLOCK parks the fiber on the
+// scheduler's kqueue until the fd is ready — the thread runs other fibers
+// meanwhile. Off a fiber (a plain `spawn` thread or main) there is no
+// scheduler, so the op keeps its original blocking semantics: the fd stays
+// blocking and the syscall blocks the thread as before.
+//
+// Production only: in test mode (DST) there is no production scheduler and no
+// kqueue, so socket_is_green() is always false and every op blocks — the
+// pre-existing behavior.
+#ifndef PLUTO_TEST_MODE
+static int socket_is_green(void) { return __pluto_green_self() != NULL; }
+
+// Make fd non-blocking (idempotent). Needed before the first syscall on the
+// green path so EWOULDBLOCK surfaces instead of blocking the thread.
+static void socket_set_nonblocking(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+#else
+static int socket_is_green(void) { return 0; }
+static void socket_set_nonblocking(int fd) { (void)fd; }
+#endif
+
+// True if `e` is the would-block errno for a non-blocking socket.
+static inline int socket_would_block(int e) {
+    return e == EAGAIN || e == EWOULDBLOCK;
+}
+
+#ifndef PLUTO_TEST_MODE
+// Clear O_NONBLOCK (idempotent). A green fiber doing a *timed* read wants
+// kernel SO_RCVTIMEO semantics, which do not apply to a non-blocking fd, so the
+// timed path forces the fd back to blocking even if an earlier cooperative op
+// left it non-blocking.
+static void socket_set_blocking(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0 && (fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+}
+
+// Does this fd carry a receive deadline (SO_RCVTIMEO != 0)?
+static int socket_rcvtimeo_set(int fd) {
+    struct timeval tv; socklen_t len = sizeof(tv);
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, &len) < 0) return 0;
+    return tv.tv_sec != 0 || tv.tv_usec != 0;
+}
+#endif
+
+// Decide how a read on `fd` should wait:
+//   1 = cooperative — fd set non-blocking, park on EWOULDBLOCK (green, no
+//       deadline: the scheduler stays free for other fibers);
+//   0 = blocking — a green fiber with a receive deadline (force fd blocking so
+//       SO_RCVTIMEO fires) or any non-fiber caller (unchanged behavior).
+static int socket_read_coop(int fd) {
+#ifndef PLUTO_TEST_MODE
+    if (!socket_is_green()) return 0;
+    if (socket_rcvtimeo_set(fd)) { socket_set_blocking(fd); return 0; }
+    socket_set_nonblocking(fd);
+    return 1;
+#else
+    (void)fd; return 0;
+#endif
+}
+
+// Park the current fiber until `fd` is ready (for_write: 1 = writable, 0 =
+// readable). Only ever reached on the green path (socket_is_green() true).
+static inline void socket_park_fd(int fd, int for_write) {
+#ifndef PLUTO_TEST_MODE
+    __pluto_green_prod_wait_fd(fd, for_write);
+#else
+    (void)fd; (void)for_write;
+#endif
+}
+
 long __pluto_socket_create(long domain, long type, long protocol) {
     return (long)socket((int)domain, (int)type, (int)protocol);
 }
@@ -1547,10 +1623,17 @@ long __pluto_socket_listen(long fd, long backlog) {
 long __pluto_socket_accept(long fd) {
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
-    __pluto_gc_enter_safe_region();
-    long conn = (long)accept((int)fd, (struct sockaddr *)&client_addr, &client_len);
-    __pluto_gc_leave_safe_region();
-    return conn;
+    int green = socket_is_green();
+    if (green) socket_set_nonblocking((int)fd);
+    for (;;) {
+        client_len = sizeof(client_addr);
+        __pluto_gc_enter_safe_region();
+        long conn = (long)accept((int)fd, (struct sockaddr *)&client_addr, &client_len);
+        int e = errno;
+        __pluto_gc_leave_safe_region();
+        if (conn >= 0 || !green || !socket_would_block(e)) return conn;
+        socket_park_fd((int)fd, 0);   // wait until the listener is readable
+    }
 }
 
 long __pluto_socket_connect(long fd, void *host_str, long port) {
@@ -1560,10 +1643,23 @@ long __pluto_socket_connect(long fd, void *host_str, long port) {
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return -1;
+    int green = socket_is_green();
+    if (green) socket_set_nonblocking((int)fd);
     __pluto_gc_enter_safe_region();
     int rc = connect((int)fd, (struct sockaddr *)&addr, sizeof(addr));
+    int e = errno;
     __pluto_gc_leave_safe_region();
-    return rc == 0 ? 0 : -1;
+    if (rc == 0) return 0;
+    // Non-blocking connect returns -1/EINPROGRESS and completes asynchronously:
+    // wait for the socket to become writable, then read SO_ERROR to learn the
+    // real outcome (0 = connected, else the connect error).
+    if (green && (e == EINPROGRESS || socket_would_block(e))) {
+        socket_park_fd((int)fd, 1);   // wait until writable
+        int so_err = 0; socklen_t len = sizeof(so_err);
+        if (getsockopt((int)fd, SOL_SOCKET, SO_ERROR, &so_err, &len) < 0) return -1;
+        return so_err == 0 ? 0 : -1;
+    }
+    return -1;
 }
 
 // Read-deadline support (issue #370). SO_RCVTIMEO is the mechanism
@@ -1594,14 +1690,20 @@ void *__pluto_socket_read(long fd, long max_bytes) {
     if (max_bytes > 1048576) max_bytes = 1048576;
     char *buf = (char *)malloc(max_bytes);
     if (!buf) return __pluto_string_new("", 0);
-    __pluto_gc_enter_safe_region();
-    ssize_t n = read((int)fd, buf, (size_t)max_bytes);
-    int read_errno = errno;
-    __pluto_gc_leave_safe_region();
-    if (n <= 0) {
-        if (n < 0 && (read_errno == EAGAIN || read_errno == EWOULDBLOCK)) {
-            socket_read_timed_out = 1;
+    int coop = socket_read_coop((int)fd);
+    ssize_t n;
+    for (;;) {
+        __pluto_gc_enter_safe_region();
+        n = read((int)fd, buf, (size_t)max_bytes);
+        int read_errno = errno;
+        __pluto_gc_leave_safe_region();
+        if (n < 0 && socket_would_block(read_errno)) {
+            if (coop) { socket_park_fd((int)fd, 0); continue; }  // yield, retry
+            socket_read_timed_out = 1;   // blocking timed read: deadline expired
         }
+        break;
+    }
+    if (n <= 0) {
         free(buf);
         return __pluto_string_new("", 0);
     }
@@ -1614,7 +1716,24 @@ long __pluto_socket_write(long fd, void *data_str) {
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
-    return (long)write((int)fd, data, (size_t)len);
+    if (!socket_is_green()) {
+        return (long)write((int)fd, data, (size_t)len);
+    }
+    // Green: a full send buffer returns EWOULDBLOCK on a non-blocking fd, so
+    // park for writability and loop to completion rather than reporting a short
+    // write. Returns total bytes written (parity with a completed write()).
+    socket_set_nonblocking((int)fd);
+    long off = 0;
+    while (off < len) {
+        __pluto_gc_enter_safe_region();
+        ssize_t n = write((int)fd, data + off, (size_t)(len - off));
+        int e = errno;
+        __pluto_gc_leave_safe_region();
+        if (n > 0) { off += n; continue; }
+        if (n < 0 && socket_would_block(e)) { socket_park_fd((int)fd, 1); continue; }
+        return off > 0 ? off : n;   // real error (or 0)
+    }
+    return off;
 }
 
 // Bytes-typed socket I/O: identical syscall path to the string variants, only
@@ -1628,9 +1747,15 @@ long __pluto_socket_read_bytes(long fd, long max_bytes) {
         if (max_bytes > 1048576) max_bytes = 1048576;
         buf = (char *)malloc((size_t)max_bytes);
         if (buf) {
-            __pluto_gc_enter_safe_region();
-            n = read((int)fd, buf, (size_t)max_bytes);
-            __pluto_gc_leave_safe_region();
+            int coop = socket_read_coop((int)fd);
+            for (;;) {
+                __pluto_gc_enter_safe_region();
+                n = read((int)fd, buf, (size_t)max_bytes);
+                int e = errno;
+                __pluto_gc_leave_safe_region();
+                if (coop && n < 0 && socket_would_block(e)) { socket_park_fd((int)fd, 0); continue; }
+                break;
+            }
         }
     }
     if (n < 0) n = 0; // EOF and error both yield empty bytes (parity with read)
@@ -1650,7 +1775,21 @@ long __pluto_socket_write_bytes(long fd, long bytes_handle) {
     long *h = (long *)bytes_handle;
     long len = h[0];
     unsigned char *data = (unsigned char *)h[2];
-    return (long)write((int)fd, data, (size_t)len);
+    if (!socket_is_green()) {
+        return (long)write((int)fd, data, (size_t)len);
+    }
+    socket_set_nonblocking((int)fd);
+    long off = 0;
+    while (off < len) {
+        __pluto_gc_enter_safe_region();
+        ssize_t n = write((int)fd, data + off, (size_t)(len - off));
+        int e = errno;
+        __pluto_gc_leave_safe_region();
+        if (n > 0) { off += n; continue; }
+        if (n < 0 && socket_would_block(e)) { socket_park_fd((int)fd, 1); continue; }
+        return off > 0 ? off : n;
+    }
+    return off;
 }
 
 long __pluto_socket_close(long fd) {
@@ -1688,21 +1827,27 @@ long __pluto_write_framed(long fd, void *str) {
     hdr[1] = (unsigned char)((len >> 16) & 0xff);
     hdr[2] = (unsigned char)((len >> 8) & 0xff);
     hdr[3] = (unsigned char)(len & 0xff);
+    int green = socket_is_green();
+    if (green) socket_set_nonblocking((int)fd);
     long off = 0;
     while (off < 4) {
         __pluto_gc_enter_safe_region();
         ssize_t n = write((int)fd, hdr + off, (size_t)(4 - off));
+        int e = errno;
         __pluto_gc_leave_safe_region();
-        if (n <= 0) return -1;
-        off += n;
+        if (n > 0) { off += n; continue; }
+        if (green && n < 0 && socket_would_block(e)) { socket_park_fd((int)fd, 1); continue; }
+        return -1;
     }
     off = 0;
     while (off < len) {
         __pluto_gc_enter_safe_region();
         ssize_t n = write((int)fd, data + off, (size_t)(len - off));
+        int e = errno;
         __pluto_gc_leave_safe_region();
-        if (n <= 0) return -1;
-        off += n;
+        if (n > 0) { off += n; continue; }
+        if (green && n < 0 && socket_would_block(e)) { socket_park_fd((int)fd, 1); continue; }
+        return -1;
     }
     return 0;
 }
@@ -1715,6 +1860,7 @@ static __thread int framed_read_timed_out = 0;
 // Read a length-framed message into a pluto string. Returns NULL on failure.
 void *__pluto_read_framed(long fd) {
     framed_read_timed_out = 0;
+    int coop = socket_read_coop((int)fd);
     unsigned char hdr[4];
     long got = 0;
     while (got < 4) {
@@ -1722,11 +1868,11 @@ void *__pluto_read_framed(long fd) {
         ssize_t n = read((int)fd, hdr + got, (size_t)(4 - got));
         int read_errno = errno;
         __pluto_gc_leave_safe_region();
-        if (n <= 0) {
-            if (n < 0 && (read_errno == EAGAIN || read_errno == EWOULDBLOCK))
-                framed_read_timed_out = 1;
-            return NULL;
+        if (n < 0 && socket_would_block(read_errno)) {
+            if (coop) { socket_park_fd((int)fd, 0); continue; }  // yield, retry
+            framed_read_timed_out = 1;   // blocking timed read: deadline expired
         }
+        if (n <= 0) return NULL;
         got += n;
     }
     long len = ((long)hdr[0] << 24) | ((long)hdr[1] << 16) | ((long)hdr[2] << 8) | (long)hdr[3];
@@ -1739,9 +1885,11 @@ void *__pluto_read_framed(long fd) {
         ssize_t n = read((int)fd, buf + off, (size_t)(len - off));
         int read_errno = errno;
         __pluto_gc_leave_safe_region();
+        if (n < 0 && socket_would_block(read_errno)) {
+            if (coop) { socket_park_fd((int)fd, 0); continue; }
+            framed_read_timed_out = 1;
+        }
         if (n <= 0) {
-            if (n < 0 && (read_errno == EAGAIN || read_errno == EWOULDBLOCK))
-                framed_read_timed_out = 1;
             free(buf);
             return NULL;
         }

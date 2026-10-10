@@ -107,6 +107,10 @@ struct GProdSched {
                                 //   socket fd readiness (EVFILT_READ/WRITE).
     GProdTask *head, *tail;     // REMOTE ready queue: cross-thread wakes push
                                 //   here under `mu`; the scheduler drains it.
+    int fd_waiters;             // fibers currently parked on socket readiness
+                                //   (scheduler-thread-only). Gates the busy-path
+                                //   non-blocking kqueue poll so a socket-free
+                                //   workload never pays a kevent per fiber run.
     GProdTask *local_head, *local_tail; // LOCAL ready queue: touched ONLY by
                                 //   this scheduler's own thread (yields, and
                                 //   same-thread wakes), so NO lock — the hot
@@ -232,6 +236,42 @@ void __pluto_green_park(void (*handoff)(void *), void *arg) {
     pluto_ctx_swap(&t->sp, s->sched_sp);
 }
 
+// Cooperative socket readiness. Called from a running fiber: register one-shot
+// interest in `fd` becoming readable (for_write=0) or writable (for_write=1) on
+// THIS scheduler's kqueue, with the fiber as udata, then park. When the fd is
+// ready the scheduler's event drain re-readies the fiber (sched_push_local),
+// and this returns so the caller can retry the syscall.
+//
+// No lost-wakeup window: the scheduler thread is single-threaded and is right
+// now executing this very fiber, so it cannot be servicing its own kqueue.
+// Registering before the swap is therefore race-free — the event can only be
+// observed after we have switched out. EV_ONESHOT auto-removes the filter once
+// it fires, so each wait registers fresh and nothing leaks across retries.
+void __pluto_green_prod_wait_fd(int fd, int for_write) {
+    GProdSched *s = cur_sched;
+    if (!s || !s->current) return;   // not on a scheduler fiber — caller handles
+    struct kevent ev;
+    EV_SET(&ev, fd, for_write ? EVFILT_WRITE : EVFILT_READ,
+           EV_ADD | EV_ONESHOT, 0, 0, s->current);
+    kevent(s->kq, &ev, 1, NULL, 0, NULL);
+    s->fd_waiters++;
+    __pluto_green_park(NULL, NULL);  // the kqueue registration IS the waiter
+}
+
+// Service one batch of kqueue events: re-ready any fiber whose fd became
+// ready. EVFILT_USER (cross-thread wake) and timer timeouts carry no fiber and
+// simply mean "loop again" — the caller then drains the remote queue / fires
+// timers. Shared by the blocking idle-wait and the per-iteration non-blocking
+// poll so socket readiness is observed even when the scheduler is busy.
+static void drain_kq_events(GProdSched *s, struct kevent *evs, int n) {
+    for (int i = 0; i < n; i++) {
+        if (evs[i].filter == EVFILT_READ || evs[i].filter == EVFILT_WRITE) {
+            GProdTask *w = (GProdTask *)evs[i].udata;
+            if (w) { w->state = GRUN; sched_push_local(s, w); if (s->fd_waiters) s->fd_waiters--; }
+        }
+    }
+}
+
 // cp6 sleep handoff: on the scheduler stack with the fiber switched out, insert
 // it into its home scheduler's timer list.
 static void sleep_handoff(void *arg) {
@@ -355,17 +395,23 @@ static void *gprod_scheduler(void *arg) {
                 __pluto_gc_enter_safe_region();  // idle wait = GC-safe region
                 int n = kevent(s->kq, NULL, 0, evs, 16, tsp);
                 __pluto_gc_leave_safe_region();
-                // Socket-readiness events (EVFILT_READ/WRITE) carry the parked
-                // fiber in udata; re-ready it. EVFILT_USER / timeouts fall
-                // through to the next loop, which drains the remote queue and
-                // fires timers. (No fds are registered yet — inc 2 wires them.)
-                for (int i = 0; i < n; i++) {
-                    if (evs[i].filter == EVFILT_READ || evs[i].filter == EVFILT_WRITE) {
-                        GProdTask *w = (GProdTask *)evs[i].udata;
-                        if (w) { w->state = GRUN; sched_push_local(s, w); }
-                    }
-                }
+                drain_kq_events(s, evs, n);
+                // drain_kq_events re-readies socket fibers into the LOCAL queue,
+                // which the remote-queue check above does not see — so break out
+                // to run them. Without this the loop would re-enter kevent and
+                // strand the just-woken fibers (deadlock once the scheduler is
+                // otherwise idle).
+                if (s->local_head) break;
             }
+        } else if (s->fd_waiters) {
+            // Busy path WITH sockets parked: poll the kqueue non-blocking
+            // (timeout 0) so a ready fd re-readies its fiber promptly instead of
+            // starving behind a scheduler that never goes idle. Gated on
+            // fd_waiters so a socket-free workload never pays a kevent per run.
+            struct kevent evs[16];
+            struct timespec zero = {0, 0};
+            int n = kevent(s->kq, NULL, 0, evs, 16, &zero);
+            if (n > 0) drain_kq_events(s, evs, n);
         }
         GProdTask *t = s->local_head;
         s->local_head = t->next;
@@ -459,6 +505,7 @@ static void gprod_ensure_started(void) {
             kevent(s->kq, &ev, 1, NULL, 0, NULL);
             s->head = s->tail = s->timer_head = NULL;
             s->local_head = s->local_tail = NULL;
+            s->fd_waiters = 0;
             s->sched_sp = NULL; s->current = NULL;
             pthread_create(&s->thread, NULL, gprod_scheduler, s);
         }
