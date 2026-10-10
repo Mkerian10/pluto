@@ -1,0 +1,28 @@
+// Green-task spawn/join throughput: the green analogue of spawn_join.pt.
+// Serially launch N trivial green tasks, joining each before the next.
+// Isolates the cooperative scheduler's submit + run-callback + join cost
+// (register-only context switch, no pthread create/destroy per task).
+//
+// Compare directly against spawn_join.pt: same workload, `green` vs `spawn`.
+// The gap is the per-task cost the two-tier model buys back for fine-grained
+// concurrency (#369).
+
+fn tiny(x: int) int {
+    return x + 1
+}
+
+fn main() {
+    let n = 20000
+    let start = time_ns()
+    let mut i = 0
+    let mut acc = 0
+    while i < n {
+        let t = green tiny(i)
+        acc = acc + t.get()
+        i = i + 1
+    }
+    let ms = (time_ns() - start) / 1000000
+    print(f"tasks: {n}")
+    print(f"acc: {acc}")
+    print(f"elapsed: {ms} ms")
+}
