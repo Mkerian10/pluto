@@ -724,13 +724,19 @@ void *__pluto_gc_register_green_context(void *stack_top, void *live_sp) {
     return slot;
 }
 
-// Update the live stack pointer of a green context (called on switch-out, and
-// for the running context at a safepoint before STW scans it).
+// Update the live stack pointer of a green context (called on every fiber
+// swap-in = conservative base, and swap-out = precise saved sp). This is a
+// plain store, NOT gc_mutex-guarded, because it is on the scheduler's hot path:
+// live_sp is only READ by the collector during stop-the-world, when every
+// mutator (including the scheduler thread that writes this) is stopped, so the
+// STW barrier publishes the last write. Only the owning scheduler thread writes
+// its fibers' live_sp, so there is no writer/writer race either. (A future
+// multi-scheduler design keeps this invariant per-scheduler.) The `handle` is a
+// stable per-context malloc'd pointer, unaffected by the registry array's
+// realloc, so this never races register/unregister on the array itself.
 void __pluto_gc_green_set_live_sp(void *handle, void *live_sp) {
     if (!handle) return;
-    gc_heap_lock();
     ((GCGreenContext *)handle)->live_sp = live_sp;
-    pthread_mutex_unlock(&gc_mutex);
 }
 
 void __pluto_gc_unregister_green_context(void *handle) {

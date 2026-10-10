@@ -32,6 +32,7 @@ extern void pluto_ctx_swap(void **from_sp, void *to_sp);
 
 // GC coordination (marksweep.c in the real build; stubbed in standalone tests).
 extern void *__pluto_gc_register_green_context(void *stack_top, void *live_sp);
+extern void __pluto_gc_green_set_live_sp(void *handle, void *live_sp);
 extern void __pluto_gc_unregister_green_context(void *handle);
 extern void __pluto_gc_register_thread_stack(void *lo, void *hi);
 extern void __pluto_gc_enter_safe_region(void);
@@ -264,8 +265,18 @@ static void *gprod_scheduler(void *_unused) {
 
         gsched_current = t;
         int is_submit = (t->submit_run != NULL);
+        // About to run: the fiber's sp will move, so scan its whole stack
+        // conservatively (live_sp = base) for any collection while it runs.
+        // (On first run gc_ctx is NULL until the trampoline registers it, also
+        // at base.) A plain store — see __pluto_gc_green_set_live_sp.
+        if (t->gc_ctx) __pluto_gc_green_set_live_sp(t->gc_ctx, t->stack);
         pluto_ctx_swap(&gsched_sp, t->sp);   // run until it yields/parks/finishes
         gsched_current = NULL;
+        // Switched back out: unless finished, the fiber is suspended at t->sp,
+        // so only [t->sp, stack_top) is live — scan precisely. Without this a
+        // parked fiber would be scanned [base, top) every collection, faulting
+        // in its whole 512 KB stack (idle fibers must stay cheap).
+        if (t->gc_ctx && t->state != GDONE) __pluto_gc_green_set_live_sp(t->gc_ctx, t->sp);
 
         switch (t->state) {
         case GYIELD:
