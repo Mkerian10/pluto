@@ -16,6 +16,13 @@
 
 extern void pluto_ctx_swap(void **from_sp, void *to_sp);
 
+// GC coordination (marksweep.c in the real build; stubbed in standalone tests).
+extern void *__pluto_gc_register_green_context(void *stack_top, void *live_sp);
+extern void __pluto_gc_unregister_green_context(void *handle);
+extern void __pluto_gc_register_thread_stack(void *lo, void *hi);
+extern void __pluto_gc_enter_safe_region(void);
+extern void __pluto_gc_leave_safe_region(void);
+
 typedef struct GProdTask {
     long (*fn)(void *);     // stand-in for a Pluto closure call
     void *arg;
@@ -55,7 +62,12 @@ static void *prime_ctx(char *stack_top, void (*entry)(void)) {
 
 static void gprod_trampoline(void) {
     GProdTask *t = gsched_current;
+    // Running fiber: register its context with live_sp = stack base, so a
+    // collection mid-run conservatively scans the WHOLE fiber stack and never
+    // misses a live frame (cp2 running-fiber resolution).
+    void *gc_ctx = __pluto_gc_register_green_context(t->stack + t->stack_size, t->stack);
     long r = t->fn(t->arg);
+    __pluto_gc_unregister_green_context(gc_ctx);
     pthread_mutex_lock(&t->mu);
     t->result = r;
     t->done = 1;
@@ -66,9 +78,29 @@ static void gprod_trampoline(void) {
 
 static void *gprod_scheduler(void *_unused) {
     (void)_unused;
+    // Register the scheduler thread's own C stack so the collector scans the
+    // scheduler loop's frames (and any suspended-at-swap state) as roots.
+    {
+        pthread_t self = pthread_self();
+#ifdef __APPLE__
+        void *hi = pthread_get_stackaddr_np(self);
+        void *lo = (char *)hi - pthread_get_stacksize_np(self);
+#else
+        void *lo = NULL, *hi = NULL; size_t sz = 0;
+        pthread_attr_t a; pthread_getattr_np(self, &a);
+        pthread_attr_getstack(&a, &lo, &sz); hi = (char *)lo + sz; pthread_attr_destroy(&a);
+#endif
+        __pluto_gc_register_thread_stack(lo, hi);
+    }
     for (;;) {
         pthread_mutex_lock(&gq_mu);
-        while (!gq_head) pthread_cond_wait(&gq_wake, &gq_mu);
+        // Idle wait counts as a GC-safe region so stop-the-world converges
+        // while the scheduler sleeps (it holds no heap, like a channel wait).
+        while (!gq_head) {
+            __pluto_gc_enter_safe_region();
+            pthread_cond_wait(&gq_wake, &gq_mu);
+            __pluto_gc_leave_safe_region();
+        }
         GProdTask *t = gq_head;
         gq_head = t->next;
         if (!gq_head) gq_tail = NULL;
