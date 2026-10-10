@@ -726,6 +726,12 @@ fn runtime_cache_key(test_mode: bool, gc: GcBackend) -> String {
     include_str!("../runtime/compress.c").hash(&mut hasher);
     include_str!("../runtime/miniz.c").hash(&mut hasher);
     include_str!("../runtime/miniz.h").hash(&mut hasher);
+    include_str!("../runtime/green/green_sched.c").hash(&mut hasher);
+    include_str!("../runtime/green/green_chan.c").hash(&mut hasher);
+    include_str!("../runtime/green/green_sched.h").hash(&mut hasher);
+    include_str!("../runtime/green/green_chan.h").hash(&mut hasher);
+    include_str!("../runtime/green/ctx_arm64.s").hash(&mut hasher);
+    include_str!("../runtime/green/ctx_amd64.s").hash(&mut hasher);
     test_mode.hash(&mut hasher);
     RUNTIME_CFLAGS.hash(&mut hasher);
     gc.name().hash(&mut hasher);
@@ -801,6 +807,18 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     let miniz_src = include_str!("../runtime/miniz.c");
     let miniz_header_src = include_str!("../runtime/miniz.h");
     let header_src = include_str!("../runtime/builtins.h");
+    // Green-task scheduler (#369): cooperative scheduler + channel + the
+    // register-only context switch (arch-selected). Compiled and linked into
+    // every binary so `green` tasks can run; the switch is the same in both
+    // compile modes.
+    let green_sched_src = include_str!("../runtime/green/green_sched.c");
+    let green_chan_src = include_str!("../runtime/green/green_chan.c");
+    let green_sched_h_src = include_str!("../runtime/green/green_sched.h");
+    let green_chan_h_src = include_str!("../runtime/green/green_chan.h");
+    #[cfg(target_arch = "aarch64")]
+    let green_ctx_src = include_str!("../runtime/green/ctx_arm64.s");
+    #[cfg(target_arch = "x86_64")]
+    let green_ctx_src = include_str!("../runtime/green/ctx_amd64.s");
 
     let dir_suffix = if test_mode { "pluto_test_runtime" } else { "pluto_runtime" };
     let dir = std::env::temp_dir().join(format!("{}_{}_{}", dir_suffix, gc.name(), std::process::id()));
@@ -834,12 +852,30 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     std::fs::write(&miniz_h, miniz_header_src)
         .map_err(|e| CompileError::link(format!("failed to write miniz.h: {e}")))?;
 
+    // Green scheduler sources (+ headers it includes, written into the -I dir).
+    let green_sched_c = dir.join("green_sched.c");
+    let green_chan_c = dir.join("green_chan.c");
+    let green_ctx_s = dir.join("green_ctx.s");
+    std::fs::write(dir.join("green_sched.h"), green_sched_h_src)
+        .map_err(|e| CompileError::link(format!("failed to write green_sched.h: {e}")))?;
+    std::fs::write(dir.join("green_chan.h"), green_chan_h_src)
+        .map_err(|e| CompileError::link(format!("failed to write green_chan.h: {e}")))?;
+    std::fs::write(&green_sched_c, green_sched_src)
+        .map_err(|e| CompileError::link(format!("failed to write green_sched.c: {e}")))?;
+    std::fs::write(&green_chan_c, green_chan_src)
+        .map_err(|e| CompileError::link(format!("failed to write green_chan.c: {e}")))?;
+    std::fs::write(&green_ctx_s, green_ctx_src)
+        .map_err(|e| CompileError::link(format!("failed to write green_ctx.s: {e}")))?;
+
     let gc_o = dir.join("gc.o");
     let threading_o = dir.join("threading.o");
     let builtins_o = dir.join("builtins.o");
     let coverage_o = dir.join("coverage.o");
     let compress_o = dir.join("compress.o");
     let miniz_o = dir.join("miniz.o");
+    let green_sched_o = dir.join("green_sched.o");
+    let green_chan_o = dir.join("green_chan.o");
+    let green_ctx_o = dir.join("green_ctx.o");
     let runtime_o = dir.join("runtime.o");
 
     // Compile gc.c
@@ -946,11 +982,34 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
         return Err(CompileError::link("failed to compile compress.c"));
     }
 
+    // Compile the green scheduler (.c) and the register-only context switch
+    // (.s — cc assembles it). Same flags/mode as the rest of the runtime.
+    for (src, obj, what) in [
+        (&green_sched_c, &green_sched_o, "green_sched.c"),
+        (&green_chan_c, &green_chan_o, "green_chan.c"),
+        (&green_ctx_s, &green_ctx_o, "green context switch (asm)"),
+    ] {
+        let mut cmd = std::process::Command::new("cc");
+        cmd.arg("-c").args(RUNTIME_CFLAGS);
+        if test_mode {
+            cmd.arg("-DPLUTO_TEST_MODE").arg("-Wno-deprecated-declarations");
+        }
+        cmd.arg("-I").arg(&dir);
+        cmd.arg(src).arg("-o").arg(obj);
+        let status = cmd.status()
+            .map_err(|e| CompileError::link(format!("failed to compile {what}: {e}")))?;
+        if !status.success() {
+            return Err(CompileError::link(format!("failed to compile {what}")));
+        }
+    }
+
     // Link all object files into one
     let mut cmd = std::process::Command::new("ld");
     cmd.arg("-r");
     cmd.arg(&gc_o).arg(&threading_o).arg(&builtins_o).arg(&coverage_o)
-        .arg(&compress_o).arg(&miniz_o).arg("-o").arg(&runtime_o);
+        .arg(&compress_o).arg(&miniz_o)
+        .arg(&green_sched_o).arg(&green_chan_o).arg(&green_ctx_o)
+        .arg("-o").arg(&runtime_o);
     let status = cmd.status()
         .map_err(|e| CompileError::link(format!("failed to link runtime: {e}")))?;
     if !status.success() {
