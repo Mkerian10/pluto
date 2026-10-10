@@ -2985,14 +2985,16 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
         // still have it on its worklist, so its memory stays. Its children
         // are judged without it and may be freed by this very sweep: the
         // cycle must not trace it later. Its edges are deleted (logged, as
-        // for any dying object) and it becomes a childless leaf until the
-        // next sweep frees it. (A dead task's array, kept this way while its
+        // for any dying object) and its payload is zeroed until the next
+        // sweep frees it: the tag stays, since a container the cycle scans
+        // in chunks resumes by its tag, and a zero payload is empty under
+        // every tag (no length, capacity or pointers) and finalizes as a
+        // no-op. (A dead task's array, kept this way while its
         // backing store was freed and reused, ended up shared at retire and
         // pointing into another thread's heap.)
         gc_hyb_log_dying(h);
         gc_finalize(h);
-        h->type_tag = GC_TAG_STRING;
-        h->mark &= (uint8_t)~GC_MARK_CLEAN;
+        memset(h + 1, 0, h->size);
     }
     if (private_marked && (h->mark & GC_MARK_LOCAL)) {
         // An object referenced straight from a root may be half-built: code
