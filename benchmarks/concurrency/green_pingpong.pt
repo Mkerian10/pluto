@@ -1,0 +1,38 @@
+// Fiber-to-fiber ping-pong: two green tasks bounce a token over a pair of
+// cap-1 channels. Every exchange forces a cooperative context switch, so this
+// isolates the SWITCH cost — the register-only context switch (runtime/green/
+// ctx_*.s), ~30 ns — rather than spawn or memory cost. Compare directly to
+// spawn_pingpong.pt (same program, pthread tier): that gap is the two-tier
+// model's payoff on fine-grained message passing (#369).
+
+fn ping(tx: Sender<int>, rx: Receiver<int>, n: int) int {
+    let mut i = 0
+    while i < n {
+        tx.send(i)!
+        rx.recv() catch 0
+        i = i + 1
+    }
+    return 0
+}
+fn pong(rx: Receiver<int>, tx: Sender<int>, n: int) int {
+    let mut i = 0
+    while i < n {
+        let v = rx.recv() catch 0
+        tx.send(v)!
+        i = i + 1
+    }
+    return 0
+}
+fn main() {
+    let (atx, arx) = chan<int>(1)
+    let (btx, brx) = chan<int>(1)
+    let n = 200000
+    let start = time_ns()
+    let a = green ping(atx, brx, n)
+    let b = green pong(arx, btx, n)
+    a.get() catch 0
+    b.get() catch 0
+    let ms = (time_ns() - start) / 1000000
+    print(f"exchanges: {n}")
+    print(f"elapsed: {ms} ms")
+}

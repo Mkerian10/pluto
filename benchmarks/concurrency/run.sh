@@ -29,7 +29,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ ${#WORKLOADS[@]} -eq 0 ]; then
-    WORKLOADS=(scalar_baseline lock_class_single lock_entity_single spawn_join chan_throughput entity_uncontended entity_contended)
+    WORKLOADS=(scalar_baseline lock_class_single lock_entity_single spawn_join chan_throughput entity_uncontended entity_contended spawn_pingpong green_pingpong)
 fi
 
 echo "Building compiler (release)..."
