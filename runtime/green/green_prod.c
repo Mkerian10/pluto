@@ -33,6 +33,12 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/event.h>   // kqueue: scheduler idle-wait + socket readiness
+
+// EVFILT_USER ident the scheduler registers on its kqueue so cross-thread wakes
+// (a remote enqueue) can break it out of kevent — the kqueue analogue of the
+// old ready-queue condvar signal.
+#define SCHED_WAKE_IDENT 1
 
 extern void pluto_ctx_swap(void **from_sp, void *to_sp);
 
@@ -96,7 +102,9 @@ typedef struct GProdTask {
 // wakes push onto under `mu`.
 struct GProdSched {
     pthread_mutex_t mu;
-    pthread_cond_t  wake;
+    int kq;                     // kqueue: idle-wait wakes on EVFILT_USER (a
+                                //   cross-thread enqueue), a timer timeout, or
+                                //   socket fd readiness (EVFILT_READ/WRITE).
     GProdTask *head, *tail;     // REMOTE ready queue: cross-thread wakes push
                                 //   here under `mu`; the scheduler drains it.
     GProdTask *local_head, *local_tail; // LOCAL ready queue: touched ONLY by
@@ -169,8 +177,12 @@ static void sched_push_remote(GProdSched *s, GProdTask *t) {
     t->next = NULL;
     if (s->tail) s->tail->next = t; else s->head = t;
     s->tail = t;
-    pthread_cond_signal(&s->wake);
     pthread_mutex_unlock(&s->mu);
+    // Break the scheduler out of kevent (EV_CLEAR makes a trigger that races
+    // the empty-check return immediately on the next kevent — no lost wakeup).
+    struct kevent ev;
+    EV_SET(&ev, SCHED_WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    kevent(s->kq, &ev, 1, NULL, 0, NULL);
 }
 
 // Enqueue onto s's LOCAL ready queue with NO lock. ONLY valid on s's own
@@ -314,26 +326,46 @@ static void *gprod_scheduler(void *arg) {
         // / idle-wait. For a workload whose fibers hand off among themselves on
         // one scheduler (channels, await, yield), the mutex is never touched.
         if (!s->local_head) {
-            pthread_mutex_lock(&s->mu);
-            timer_fire_expired(s, gprod_now_ns());   // fires into the remote queue
-            // Idle wait is a GC-safe region so stop-the-world converges while
-            // the scheduler sleeps. With timers pending, wait to the nearest.
-            while (!s->head) {
-                __pluto_gc_enter_safe_region();
-                if (s->timer_head) {
-                    long d = s->timer_head->deadline_ns;
-                    struct timespec ts = { (time_t)(d / 1000000000L), (long)(d % 1000000000L) };
-                    pthread_cond_timedwait(&s->wake, &s->mu, &ts);
-                } else {
-                    pthread_cond_wait(&s->wake, &s->mu);
+            for (;;) {
+                pthread_mutex_lock(&s->mu);
+                timer_fire_expired(s, gprod_now_ns());  // fires into the remote queue
+                if (s->head) {
+                    // Move the whole remote chain into the local queue at once.
+                    s->local_head = s->head; s->local_tail = s->tail;
+                    s->head = s->tail = NULL;
+                    pthread_mutex_unlock(&s->mu);
+                    break;
                 }
+                // Nothing ready: block in kevent until a cross-thread wake
+                // (EVFILT_USER), socket readiness, or the nearest timer. kevent
+                // must not hold s->mu (it blocks), so drop it first; a wake that
+                // races this gap triggers EVFILT_USER, which kevent returns
+                // immediately (EV_CLEAR). Timeout is RELATIVE (unlike the old
+                // absolute condvar deadline).
+                struct timespec ts, *tsp = NULL;
+                if (s->timer_head) {
+                    long rem = s->timer_head->deadline_ns - gprod_now_ns();
+                    if (rem < 0) rem = 0;
+                    ts.tv_sec = (time_t)(rem / 1000000000L);
+                    ts.tv_nsec = (long)(rem % 1000000000L);
+                    tsp = &ts;
+                }
+                pthread_mutex_unlock(&s->mu);
+                struct kevent evs[16];
+                __pluto_gc_enter_safe_region();  // idle wait = GC-safe region
+                int n = kevent(s->kq, NULL, 0, evs, 16, tsp);
                 __pluto_gc_leave_safe_region();
-                timer_fire_expired(s, gprod_now_ns());
+                // Socket-readiness events (EVFILT_READ/WRITE) carry the parked
+                // fiber in udata; re-ready it. EVFILT_USER / timeouts fall
+                // through to the next loop, which drains the remote queue and
+                // fires timers. (No fds are registered yet — inc 2 wires them.)
+                for (int i = 0; i < n; i++) {
+                    if (evs[i].filter == EVFILT_READ || evs[i].filter == EVFILT_WRITE) {
+                        GProdTask *w = (GProdTask *)evs[i].udata;
+                        if (w) { w->state = GRUN; sched_push_local(s, w); }
+                    }
+                }
             }
-            // Move the whole remote chain into the local queue in one shot.
-            s->local_head = s->head; s->local_tail = s->tail;
-            s->head = s->tail = NULL;
-            pthread_mutex_unlock(&s->mu);
         }
         GProdTask *t = s->local_head;
         s->local_head = t->next;
@@ -417,7 +449,14 @@ static void gprod_ensure_started(void) {
         for (int i = 0; i < g_nsched; i++) {
             GProdSched *s = &g_scheds[i];
             pthread_mutex_init(&s->mu, NULL);
-            pthread_cond_init(&s->wake, NULL);
+            s->kq = kqueue();
+            // Register the user-filter wake channel once. EV_CLEAR makes it
+            // edge-triggered: a NOTE_TRIGGER that arrives between our empty-queue
+            // check and the kevent() is latched and returned immediately, so a
+            // cross-thread wake can never be lost in that gap.
+            struct kevent ev;
+            EV_SET(&ev, SCHED_WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+            kevent(s->kq, &ev, 1, NULL, 0, NULL);
             s->head = s->tail = s->timer_head = NULL;
             s->local_head = s->local_tail = NULL;
             s->sched_sp = NULL; s->current = NULL;
