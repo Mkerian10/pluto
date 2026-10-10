@@ -8,20 +8,19 @@ struct Cli {
     #[arg(long, global = true)]
     stdlib: Option<PathBuf>,
 
-    /// Garbage collector backend: "marksweep" (default) or "noop"
-    #[arg(long, global = true, default_value = "marksweep")]
-    gc: String,
+    /// Garbage collector backend: marksweep (default), noop, legacy, ...
+    #[arg(long, global = true)]
+    gc: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
 }
 
 fn parse_gc_backend(s: &str) -> Result<pluto::GcBackend, String> {
-    match s {
-        "marksweep" => Ok(pluto::GcBackend::MarkSweep),
-        "noop" => Ok(pluto::GcBackend::Noop),
-        other => Err(format!("unknown GC backend '{}'; expected 'marksweep' or 'noop'", other)),
-    }
+    pluto::GcBackend::from_name(s).ok_or_else(|| {
+        let names: Vec<&str> = pluto::GcBackend::ALL.iter().map(|b| b.name()).collect();
+        format!("unknown GC backend '{}'; expected one of: {}", s, names.join(", "))
+    })
 }
 
 #[derive(Subcommand)]
@@ -259,7 +258,7 @@ fn main() {
     let cli = Cli::parse();
 
     let stdlib = cli.stdlib.as_deref();
-    let gc = match parse_gc_backend(&cli.gc) {
+    let gc = match cli.gc.as_deref().map(parse_gc_backend).unwrap_or_else(|| Ok(pluto::GcBackend::default())) {
         Ok(gc) => gc,
         Err(msg) => {
             eprintln!("error: {msg}");

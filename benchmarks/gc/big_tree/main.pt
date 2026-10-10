@@ -1,0 +1,41 @@
+// Large, wide retained heap: a 2M-node balanced tree stays live while
+// short-lived trees churn. Every full collection marks the whole tree —
+// a graph with plenty of independent branches (parallel marking's best
+// case) and a big old generation that minor collections can skip.
+class Node {
+    left: Node?
+    right: Node?
+    v: int
+}
+
+fn make(d: int) Node {
+    if d == 0 {
+        return Node { left: none, right: none, v: 1 }
+    }
+    return Node { left: make(d - 1), right: make(d - 1), v: d }
+}
+
+fn sum(n: Node) int {
+    let mut s = n.v
+    let l = n.left
+    if l != none {
+        s = s + sum(l)
+    }
+    let r = n.right
+    if r != none {
+        s = s + sum(r)
+    }
+    return s
+}
+
+fn main() {
+    let big = make(20)
+    let mut acc = 0
+    let mut i = 0
+    while i < 400 {
+        acc = acc + sum(make(10))
+        i = i + 1
+    }
+    acc = acc + sum(big)
+    print(f"check={acc}")
+}

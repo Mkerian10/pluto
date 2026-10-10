@@ -1,0 +1,90 @@
+// Pause scaling on a large resident heap: a service keeps a ~1M-session
+// table (every session owns a small container), four workers serve a stream
+// of requests that each build private garbage, and two idle tasks sit
+// blocked on a channel the whole time holding private data of their own.
+// The session table is mutated as requests arrive (fresh containers stored
+// into old sessions). What it measures is the worst pause: any collector
+// work proportional to the heap — rebuilding container tables, sweeping
+// whole heaps, sweeping an idle thread's heap on its behalf — shows up as a
+// pause that grows with the table instead of staying flat.
+class Session {
+    id: int
+    user: string
+    tags: [int]
+    hits: int
+}
+
+fn handle(r: int) int {
+    let mut parts: [string] = []
+    let mut i = 0
+    while i < 24 {
+        parts.push(f"part-{r}-{i}")
+        i = i + 1
+    }
+    let mut acc = 0
+    for p in parts {
+        acc = acc + p.len()
+    }
+    return acc
+}
+
+fn worker(rx: Receiver<int>) int {
+    let mut acc = 0
+    for r in rx {
+        acc = acc + handle(r) % 97
+    }
+    return acc
+}
+
+fn idler(rx: Receiver<int>) int {
+    let mut keep: [string] = []
+    let mut i = 0
+    while i < 100000 {
+        keep.push(f"idle-{i}")
+        i = i + 1
+    }
+    let mut got = 0
+    for x in rx {
+        got = got + x
+    }
+    return got + keep.len()
+}
+
+fn main() {
+    let n = 1000000
+    let mut table: Map<int, Session> = Map<int, Session> {}
+    let mut i = 0
+    while i < n {
+        table[i] = Session { id: i, user: f"user-{i}", tags: [i % 7, i % 11, i % 13], hits: 0 }
+        i = i + 1
+    }
+    let (itx, irx) = chan<int>(4)
+    let idle0 = spawn idler(irx)
+    let idle1 = spawn idler(irx)
+    let (tx, rx) = chan<int>(256)
+    let w0 = spawn worker(rx)
+    let w1 = spawn worker(rx)
+    let w2 = spawn worker(rx)
+    let w3 = spawn worker(rx)
+    let mut r = 0
+    while r < 400000 {
+        tx.send(r) catch print("send failed")
+        let k = (r * 7919) % n
+        let mut s = table[k]
+        s.hits = s.hits + 1
+        if r % 3 == 0 {
+            s.tags = [r % 5, r % 9, r % 17, r % 23]
+        }
+        r = r + 1
+    }
+    tx.close()
+    itx.close()
+    let mut total = w0.get() + w1.get() + w2.get() + w3.get() + idle0.get() + idle1.get()
+    let mut j = 0
+    while j < n {
+        let s = table[j]
+        total = total + s.hits + s.tags.len()
+        j = j + 15
+    }
+    print(f"check={total}")
+}
