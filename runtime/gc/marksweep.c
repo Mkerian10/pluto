@@ -279,6 +279,8 @@ typedef struct GCBlock {
                               // the shared heap subtracts)
     uint32_t nlive;           // hybrid: allocated objects in the block (exact after
                               // a sweep; allocation adds, local deaths subtract)
+    uint32_t gswept;          // hybrid: the last global result applied to the block
+                              // (its owner's pend_seq once applied)
     uint64_t young[GC_BLOCK_SIZE / 32 / 64];   // hybrid: one bit per slot, set for
                               // every private object (and possibly stale for
                               // slots since promoted or freed): a local sweep
@@ -699,6 +701,12 @@ typedef struct GCThreadHeap {
 #endif
 #if defined(GC_HYBRID)
     int shared_sweep_pending;  // the cycle finished: free dead shared objects
+    uint32_t pend_seq;         // which result is pending (a block whose gswept
+                               // differs has not had it applied yet)
+    int sweep_pend;            // the sweep applies it to the block being swept (gc_tlh_keep)
+    int sweep_unapplied;       // the block being swept has it pending, but this
+                               // (local) sweep leaves it to gc_hyb_apply_some
+    size_t gsweep_pos, gpark_pos, gsweep_quota;   // incremental application
     size_t swept_promoted;     // bytes the running local sweep promoted
     // Old generation (private objects tenured in place, header next ==
     // GC_OLD_TAG / GC_OLD_REM_TAG). Minor collections skip it; stores into
@@ -754,6 +762,9 @@ static void gc_tlh_own_append(GCThreadHeap *H, GCBlock *b) {
 
 static void gc_tlh_own(GCThreadHeap *H, GCBlock *b) {   // under gc_mutex or STW
     b->owner = H;
+#if defined(GC_HYBRID)
+    b->gswept = H->pend_seq;   // a fresh block holds nothing a pending result judges
+#endif
     if (H->nblocks == H->cap) {
         size_t cap = H->cap ? H->cap * 2 : 64;
         GCBlock **grown = (GCBlock **)realloc(H->blocks, cap * sizeof(GCBlock *));
@@ -1643,6 +1654,11 @@ static void gc_stw_resume_threads(int stopped_count) {
 #if defined(GC_TLH)
 static void gc_tlh_local_collect(GCThreadHeap *H);
 #if defined(GC_HYBRID)
+static size_t gc_hyb_apply_some(GCThreadHeap *H);
+#define GC_HYB_PEND_ROOM    ((size_t)16 << 10)   // checkpoint spacing while a result is pending
+#define GC_HYB_APPLY_STEPS  48                   // checkpoints to apply one in
+#endif
+#if defined(GC_HYBRID)
 static void gc_hyb_start(int complete);
 static void gc_hyb_step(int complete);
 static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked);
@@ -1662,12 +1678,14 @@ static int gc_tlh_global_due(void) {
 static inline void gc_tlh_refill_room(GCThreadHeap *H) {
     size_t room = 0;
     if (gc_torture_every <= 0
-#if defined(GC_HYBRID)
-        && !H->shared_sweep_pending
-#endif
         && H->unreported < GC_TLAB_BUDGET && H->local_alloc < H->local_threshold) {
         room = GC_TLAB_BUDGET - H->unreported;
         if (H->local_threshold - H->local_alloc < room) room = H->local_threshold - H->local_alloc;
+#if defined(GC_HYBRID)
+        // A pending global result is applied a few blocks per checkpoint:
+        // checkpoints come every GC_HYB_PEND_ROOM bytes until it is done.
+        if (H->shared_sweep_pending && room > GC_HYB_PEND_ROOM) room = GC_HYB_PEND_ROOM;
+#endif
     }
     H->room = H->room_base = room;
 }
@@ -1725,8 +1743,9 @@ static void *gc_tlh_alloc(GCThreadHeap *H, size_t user_size, uint8_t type_tag,
         gc_tlh_local_collect(H);
     }
 #if defined(GC_HYBRID)
-    // Apply a finished global cycle's result to this heap (lock-free).
-    if (H->shared_sweep_pending) H->local_freed += gc_tlh_local_sweep(H, 0);
+    // Apply a finished global cycle's result to this heap (lock-free), a
+    // few blocks per checkpoint.
+    if (H->shared_sweep_pending) H->local_freed += gc_hyb_apply_some(H);
 #endif
     gc_heap_lock();
     gc_tlh_report(H);
@@ -2611,9 +2630,11 @@ static void gc_tlh_promote_visit(GCTrace *T, GCHeader *h) {
     // A global cycle judges shared objects. While one marks, a newly shared
     // object is logged, so the next step traces it — marking it black here
     // would skip the shared objects only it reaches. Once the cycle is done
-    // but this heap has not applied the result, it is simply live.
+    // but this heap has not applied the result to its block, it is simply
+    // live (marked; once applied, the block keeps no marks until the next
+    // cycle).
     if (gc_incr_marking) gc_satb_push(&gc_satb_local, (long)(h + 1));
-    else if (H->shared_sweep_pending) h->mark |= GC_MARK_GLOBAL;
+    else if (H->shared_sweep_pending && b->gswept != H->pend_seq) h->mark |= GC_MARK_GLOBAL;
 #endif
     gc_worklist_push(T, (char *)h + sizeof(GCHeader));
 }
@@ -2966,7 +2987,7 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
     (void)H;
     if (h->next == GC_SHARED_TAG) {
 #if defined(GC_HYBRID)
-        if (H->shared_sweep_pending) {
+        if (H->sweep_pend) {
             if (!(h->mark & GC_MARK_GLOBAL)) return 0;
             h->mark &= (uint8_t)~GC_MARK_GLOBAL;
         }
@@ -2978,7 +2999,7 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
     // survive any sweep but a major one (large objects and full walks under
     // a pending global result reach them here).
     if (private_marked && !H->major && (h->next == GC_OLD_TAG || h->next == GC_OLD_REM_TAG)) {
-        if (H->shared_sweep_pending) h->mark &= (uint8_t)~GC_MARK_GLOBAL;
+        if (H->sweep_pend) h->mark &= (uint8_t)~GC_MARK_GLOBAL;
         *live_private += osz;
         return 1;
     }
@@ -3031,8 +3052,11 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
             h->next = GC_SHARED_TAG;
             H->promoted_bytes += osz;
             H->swept_promoted += osz;
+            // In a block the pending result is not applied to yet, it is
+            // live for that result (marked, like a store's promotion).
             if (gc_incr_marking) gc_satb_push(&gc_satb_local, (long)(h + 1));
-            if (H->shared_sweep_pending) h->mark &= (uint8_t)~GC_MARK_GLOBAL;
+            if (H->sweep_pend) h->mark &= (uint8_t)~GC_MARK_GLOBAL;
+            else if (H->sweep_unapplied) h->mark |= GC_MARK_GLOBAL;
             h->mark &= (uint8_t)~GC_MARK_LOCAL;
             return 1;
         }
@@ -3043,7 +3067,7 @@ static inline int gc_tlh_keep(GCThreadHeap *H, GCHeader *h, int private_marked, 
         }
     }
     if (private_marked && h->next == NULL) H->sweep_young_live += osz;
-    if (H->shared_sweep_pending) h->mark &= (uint8_t)~GC_MARK_GLOBAL;
+    if (H->sweep_pend) h->mark &= (uint8_t)~GC_MARK_GLOBAL;
 #else
     if (!local) return 0;
 #endif
@@ -3279,16 +3303,29 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
     // survivors, whose marks the first pass cleared, dead).
     // A major collection (or an exit reclaim) judges the old generation as
     // well: it visits the old bits of blocks holding old objects too.
+    // A pending result may already be applied to some blocks (incrementally,
+    // gc_hyb_apply_some): each block is judged by its own stamp.
     GCBlock **unparked = NULL;
     size_t nunparked = 0;
-    if (H->shared_sweep_pending && H->nparked) {
+    // A local collection judges private objects only and leaves a pending
+    // result to gc_hyb_apply_some (which a local collection soon after a
+    // cycle's end would otherwise pay in full); applying one (no local
+    // mark: a cycle's start, a heap's retirement) finishes it.
+    int applying = H->shared_sweep_pending && !private_marked;
+    if (applying && H->nparked) {
         unparked = (GCBlock **)malloc(H->nparked * sizeof(GCBlock *));
         if (!unparked) gc_oom("GC parked blocks");
         size_t np = 0;
+        H->sweep_pend = 1;
         for (size_t k = 0; k < H->nparked; k++) {
             GCBlock *b = H->parked[k];
+            if (b->gswept == H->pend_seq) {
+                H->parked[np++] = b;
+                continue;
+            }
             size_t dummy = 0;
             int r = gc_tlh_sweep_one(H, b, 0, &freed, &dummy);
+            b->gswept = H->pend_seq;
             if (r == 2) H->parked[np++] = b;
             else if (r == 0) unparked[nunparked++] = b;
         }
@@ -3298,6 +3335,20 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
     for (size_t k = 0; k < H->nblocks; k++) {
         GCBlock *b = H->blocks[k];
 #if defined(GC_HYBRID)
+        int unapplied = H->shared_sweep_pending && b->gswept != H->pend_seq;
+        int pend = applying && unapplied;
+        H->sweep_pend = pend;
+        H->sweep_unapplied = unapplied && !applying;
+        // Applying a result only (no local mark): a block it was applied to
+        // already has nothing left to change.
+        if (!private_marked && !pend) {
+            if (b->kind == GC_BLOCK_SMALL && (b->free_list || b->bump < b->nobjs)) {
+                b->next = H->avail[b->cls];
+                H->avail[b->cls] = b;
+            }
+            H->blocks[kept++] = b;
+            continue;
+        }
         // A small block with no private objects has nothing a local sweep
         // can free or unmark (shared objects are judged only when a global
         // result is pending): keep it on the available list and move on.
@@ -3305,9 +3356,19 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
         // local mark and hide its children from the next local mark — so
         // PLUTO_GC_VERIFY checks every skipped block.
         // A major collection skips blocks with no old objects either.
-        if (b->kind == GC_BLOCK_SMALL && b->nprivate == 0 && !H->shared_sweep_pending
+        if (b->kind == GC_BLOCK_SMALL && b->nprivate == 0 && !pend
             && (!H->major || b->nold == 0)) {
             if (H->verify_now) gc_hyb_verify_no_private(b, H->major);
+            if (b->nlive == 0) {   // emptied by an incremental application
+                if (H->verify_now) gc_hyb_verify_young(b);
+                b->kind = GC_BLOCK_POOL;
+                b->bump = 0;
+                b->free_list = NULL;
+                b->has_containers = 0;
+                b->next = H->empty;
+                H->empty = b;
+                continue;
+            }
             if (b->free_list || b->bump < b->nobjs) {
                 b->next = H->avail[b->cls];
                 H->avail[b->cls] = b;
@@ -3316,11 +3377,12 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
             continue;
         }
         int r;
-        if (b->kind == GC_BLOCK_SMALL && private_marked && !H->shared_sweep_pending) {
+        if (b->kind == GC_BLOCK_SMALL && private_marked && !pend) {
             if (H->verify_now) gc_hyb_verify_young(b);
             r = gc_hyb_sweep_young(H, b, &freed, &live_private);
         } else {
             r = gc_tlh_sweep_one(H, b, private_marked, &freed, &live_private);
+            if (pend) b->gswept = H->pend_seq;
         }
 #else
         int r = gc_tlh_sweep_one(H, b, private_marked, &freed, &live_private);
@@ -3337,12 +3399,94 @@ static size_t gc_tlh_local_sweep(GCThreadHeap *H, int private_marked) {
 #endif
     if (private_marked) H->private_live = live_private;
 #if defined(GC_HYBRID)
-    if (H->shared_sweep_pending) {   // the last cycle's result is applied
-        H->shared_sweep_pending = 0;
-    }
+    if (applying) H->shared_sweep_pending = 0;   // the last cycle's result is applied
+    H->sweep_pend = H->sweep_unapplied = 0;
+    // Blocks moved: gc_hyb_apply_some starts over (it skips applied blocks).
+    H->gsweep_pos = H->gpark_pos = 0;
 #endif
     return freed;
 }
+
+#if defined(GC_HYBRID)
+// Apply the pending global result to one small block: free its unmarked
+// shared objects, clear the cycle's marks. Private objects are kept (no
+// local mark ran), and nothing is relinked: freed slots go on the block's
+// free list, which the block may or may not be available through until the
+// next local sweep rebuilds the lists.
+static size_t gc_hyb_apply_block(GCThreadHeap *H, GCBlock *b) {
+    size_t osz = b->obj_size, freed = 0;
+    uint32_t died = 0;
+    for (uint32_t i = 0; i < b->bump; i++) {
+        GCHeader *h = (GCHeader *)(b->base + (size_t)i * osz);
+        if (h->type_tag == GC_TAG_FREE) continue;
+        if (h->next != GC_SHARED_TAG || (h->mark & GC_MARK_GLOBAL)) {
+            h->mark &= (uint8_t)~GC_MARK_GLOBAL;
+            continue;
+        }
+        gc_finalize(h);
+        gc_poison(h);
+        h->type_tag = GC_TAG_FREE;
+        h->next = b->free_list;
+        b->free_list = h;
+        freed += osz;
+        died++;
+    }
+    b->nlive -= died;
+    b->gswept = H->pend_seq;
+    return freed;
+}
+
+// A finished global cycle's result, applied a few blocks at a time at
+// allocation checkpoints (the quota is set at the cycle's end to finish
+// within a few dozen checkpoints) instead of in one walk of the whole heap:
+// a thread whose blocks hold a large shared heap paid that walk as a single
+// pause (big_service: 23 ms). A local collection or the next cycle's start
+// finishes whatever is left.
+static size_t gc_hyb_apply_some(GCThreadHeap *H) {
+    size_t freed = 0, budget = H->gsweep_quota;
+    while (budget && H->gsweep_pos < H->nblocks) {
+        GCBlock *b = H->blocks[H->gsweep_pos];
+        if (b->gswept == H->pend_seq) {
+            H->gsweep_pos++;
+            continue;
+        }
+        budget--;
+        if (b->kind == GC_BLOCK_SMALL) {
+            freed += gc_hyb_apply_block(H, b);
+            H->gsweep_pos++;
+        } else if (b->kind == GC_BLOCK_LARGE) {
+            H->sweep_pend = 1;
+            size_t dummy = 0;
+            int r = gc_tlh_sweep_one(H, b, 0, &freed, &dummy);
+            H->sweep_pend = 0;
+            b->gswept = H->pend_seq;
+            if (r == 1) H->blocks[H->gsweep_pos] = H->blocks[--H->nblocks];   // dead: on dead_large
+            else H->gsweep_pos++;
+        } else {
+            b->gswept = H->pend_seq;
+            H->gsweep_pos++;
+        }
+    }
+    while (budget && H->gpark_pos < H->nparked) {
+        GCBlock *b = H->parked[H->gpark_pos];
+        if (b->gswept == H->pend_seq) {
+            H->gpark_pos++;
+            continue;
+        }
+        budget--;
+        size_t f = gc_hyb_apply_block(H, b);
+        freed += f;
+        if (f) {   // free slots now: back among the blocks a local sweep visits
+            H->parked[H->gpark_pos] = H->parked[--H->nparked];
+            gc_tlh_own_append(H, b);
+        } else {
+            H->gpark_pos++;
+        }
+    }
+    if (H->gsweep_pos >= H->nblocks && H->gpark_pos >= H->nparked) H->shared_sweep_pending = 0;
+    return freed;
+}
+#endif
 
 
 #if defined(GC_HYBRID)
@@ -3494,17 +3638,24 @@ static size_t gc_hyb_check_remembered(GCThreadHeap *H) {
 // spills to the shared heap anyway. So:
 //   - old mode: a major collection that saw few barrier stores into old
 //     objects per byte tenured since the last one switches the heap to
-//     tenuring straight into the shared heap;
+//     tenuring straight into the shared heap, and so does one that had to
+//     scan much more than was tenured since the last one: a large old
+//     container being filled (big_service's session table, rescanned whole
+//     at every major while it grew: 100 ms pauses) costs a major its whole
+//     size, while tenuring its new elements straight to the shared heap
+//     costs each element once;
 //   - direct mode: once the store barrier has promoted more into the
 //     shared heap than tenuring has (stores into shared objects are what
 //     a private old generation absorbs), switch back.
 #define GC_HYB_STORES_PER_MB 64          // old-mode stores per MiB tenured worth keeping it
 #define GC_HYB_MODE_MIN      ((size_t)4 << 20)
-static void gc_hyb_choose_target(GCThreadHeap *H, int was_major, size_t tenured_before_major) {
+#define GC_HYB_SCAN_PER_TENURED 1        // major scan work per byte tenured worth keeping old mode
+static void gc_hyb_choose_target(GCThreadHeap *H, int was_major, size_t tenured_before_major, size_t major_work) {
     if (!H->direct_shared) {
         if (!was_major) return;
         size_t mb = tenured_before_major >> 20;
-        if (mb && H->old_stores < (size_t)GC_HYB_STORES_PER_MB * mb) {
+        if ((mb && H->old_stores < (size_t)GC_HYB_STORES_PER_MB * mb)
+            || major_work > GC_HYB_SCAN_PER_TENURED * tenured_before_major + GC_HYB_MODE_MIN) {
             H->direct_shared = 1;
             H->mode_tenured = H->mode_barrier = 0;
             // Nothing tenures into the old generation from now on, so no
@@ -3582,9 +3733,11 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     H->tenure_shared = H->direct_shared
                        || (H->major && H->old_live + H->old_growth > gc_hyb_old_cap);
     size_t growth_at_start = H->old_growth;
+    int tenure_shared_log = H->tenure_shared;
     // Spill written objects too only when they alone would fill the old
     // generation (they did at the last major), or when tenuring is direct.
     H->spill_hot = H->direct_shared || H->hot_live > gc_hyb_old_cap / 2;
+    int spill_hot_log = H->spill_hot;
     T->spill_hot = H->spill_hot;
     H->sweep_hot_live = 0;
     T->minor = !H->major;
@@ -3668,7 +3821,7 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
     }
     H->nremvals = kept_vals;
     int was_major = H->major;
-    gc_hyb_choose_target(H, was_major, growth_at_start);
+    gc_hyb_choose_target(H, was_major, growth_at_start, T->trace_work);
     H->young_live = H->sweep_young_live;
     if (H->major) {
         H->hot_live = H->sweep_hot_live;
@@ -3714,15 +3867,20 @@ static void gc_tlh_local_collect(GCThreadHeap *H) {
 #if defined(GC_HYBRID)
         size_t tenured = H->swept_promoted, stored = H->barrier_promoted;
         int major_log = was_major;
+        size_t old_log = H->old_live, hot_log = H->hot_live;
+        int spill_log = tenure_shared_log, spillhot_log = spill_hot_log;
 #else
         size_t tenured = 0, stored = 0;
         int major_log = 0;
+        size_t old_log = 0, hot_log = 0;
+        int spill_log = 0, spillhot_log = 0;
 #endif
         fprintf(stderr,
                 "gc: local #%ld heap=%p major=%d live=%zu freed=%zu tenured=%zu stored=%zu next_threshold=%zu"
-                " pause_us=%ld mark_us=%ld sweep_us=%ld kind=local\n",
+                " old=%zu hot=%zu spill=%d/%d work=%zu pause_us=%ld mark_us=%ld sweep_us=%ld kind=local\n",
                 H->local_count, (void *)H, major_log, H->private_live, freed, tenured, stored,
-                H->local_threshold, GC_US(t0, t1), GC_US(t0, tm), GC_US(tm, t1));
+                H->local_threshold, old_log, hot_log, spill_log, spillhot_log, T->trace_work,
+                GC_US(t0, t1), GC_US(t0, tm), GC_US(tm, t1));
 #undef GC_US
     }
 #if defined(GC_HYBRID)
@@ -4461,11 +4619,10 @@ static void gc_root_check(void *candidate) {
     if (!c || (c->mark & GC_MARK_GLOBAL)) return;
     GCBlock *cb = gc_pagemap_get((uintptr_t)c);
     if (c->next != GC_SHARED_TAG && cb && cb->owner) return;   // private: not this cycle's
-    fprintf(stderr, "pluto: PLUTO_GC_VERIFY: root reference %p to unmarked %s object %p "
+    fprintf(stderr, "pluto: PLUTO_GC_VERIFY_ROOTS: root reference %p to unmarked %s object %p "
             "(tag %d, size %u, next %p, mark %x) at the end of a global cycle\n",
             candidate, cb && cb->owner ? "shared" : "unowned", (void *)(c + 1), c->type_tag,
             c->size, (void *)c->next, c->mark);
-    abort();
 }
 
 // PLUTO_GC_VERIFY at the end of a global cycle: every shared object that a
@@ -4488,13 +4645,45 @@ static void gc_hyb_check(void) {
     // Snapshot-at-the-beginning: whatever a root reaches now was reachable
     // at the snapshot or became shared during the cycle (and was logged), so
     // a root-referenced shared object, or any object of an unowned block,
-    // must be marked.
-    GCTrace *T = GC_TR();
-    T->root_check = 1;
-    gc_scan_roots(T);
-    T->root_check = 0;
+    // should be marked. Only a diagnostic (PLUTO_GC_VERIFY_ROOTS): stacks are
+    // scanned conservatively, and frames pushed since the snapshot can hold
+    // stale words naming dead objects in slots they have not written yet.
+    static int roots_env = -1;
+    if (roots_env < 0) roots_env = getenv("PLUTO_GC_VERIFY_ROOTS") != NULL;
+    if (roots_env) {
+        GCTrace *T = GC_TR();
+        T->root_check = 1;
+        gc_scan_roots(T);
+        T->root_check = 0;
+    }
 }
 
+
+// PLUTO_GC_VERIFY at a cycle's start (every heap has applied the last
+// result): no object still carries a global mark, which the new cycle would
+// take for its own and not trace through.
+static void gc_hyb_check_no_marks(void) {
+    for (size_t k = 0; k < gc_small_block_count; k++) {
+        GCBlock *b = gc_small_blocks[k];
+        if (b->kind != GC_BLOCK_SMALL) continue;
+        for (uint32_t i = 0; i < b->bump; i++) {
+            GCHeader *h = (GCHeader *)(b->base + (size_t)i * b->obj_size);
+            if (h->type_tag != GC_TAG_FREE && (h->mark & GC_MARK_GLOBAL)) {
+                fprintf(stderr, "pluto: PLUTO_GC_VERIFY: %p (tag %d, next %p) keeps a global mark "
+                        "into the next cycle\n", (void *)(h + 1), h->type_tag, (void *)h->next);
+                abort();
+            }
+        }
+    }
+    for (size_t k = 0; k < gc_large_count; k++) {
+        GCHeader *h = (GCHeader *)gc_large_blocks[k]->base;
+        if (h->type_tag != GC_TAG_FREE && (h->mark & GC_MARK_GLOBAL)) {
+            fprintf(stderr, "pluto: PLUTO_GC_VERIFY: large %p keeps a global mark into the next cycle\n",
+                    (void *)(h + 1));
+            abort();
+        }
+    }
+}
 
 // Stop-the-world: sweep blocks no thread owns (the shared heap proper:
 // unregistered threads' allocations, retired heaps). Everything there is
@@ -4577,8 +4766,12 @@ static void gc_hyb_finish(void) {
     size_t freed = gc_hyb_sweep_unowned();
     gc_bytes_allocated = freed < gc_bytes_allocated ? gc_bytes_allocated - freed : 0;
     for (size_t i = 0; i < gc_tlh_heap_count; i++) {
-        gc_tlh_heaps[i]->shared_sweep_pending = 1;
-        gc_tlh_drop_room(gc_tlh_heaps[i]);
+        GCThreadHeap *H = gc_tlh_heaps[i];
+        H->shared_sweep_pending = 1;
+        H->pend_seq++;
+        H->gsweep_pos = H->gpark_pos = 0;
+        H->gsweep_quota = (H->nblocks + H->nparked) / GC_HYB_APPLY_STEPS + 4;
+        gc_tlh_drop_room(H);
     }
     gc_shared_growth = 0;
     gc_shared_threshold = gc_hyb_marked_shared > GC_TLH_SHARED_FLOOR ? gc_hyb_marked_shared
@@ -4645,6 +4838,7 @@ static void gc_hyb_start(int complete) {
         if (H->shared_sweep_pending) H->local_freed += gc_tlh_local_sweep(H, 0);
         gc_tlh_report(H);
     }
+    if (gc_verify_enabled > 0) gc_hyb_check_no_marks();
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &ta);
     if (gc_log_enabled) clock_gettime(CLOCK_MONOTONIC, &tb);
     gc_worklist_count = 0;
