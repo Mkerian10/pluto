@@ -1155,10 +1155,53 @@ void __pluto_test_timed_yield(void) {
 
 // ── Production mode: pthread-based concurrency ──
 
+// Green fibers parked in .get() on this task (cp4). Distinct from cond waiters
+// (pthread/main threads): a fiber cannot block the scheduler thread, so it
+// parks and is re-readied by __pluto_green_wake when the task completes.
+typedef struct GreenWaiter {
+    void *fiber;
+    struct GreenWaiter *next;
+} GreenWaiter;
+
 typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
+    GreenWaiter *green_waiters;   // guarded by `mutex`
 } TaskSync;
+
+// Re-ready every green fiber parked on this task. Caller holds sync->mutex;
+// the list is detached first, then the wakes run (each takes the scheduler's
+// queue lock — ordering is always sync->mutex before the queue lock, never the
+// reverse, so holding it here is deadlock-free).
+static void task_wake_green_waiters(TaskSync *sync) {
+    GreenWaiter *w = sync->green_waiters;
+    sync->green_waiters = NULL;
+    while (w) {
+        GreenWaiter *n = w->next;
+        __pluto_green_wake(w->fiber);
+        free(w);
+        w = n;
+    }
+}
+
+// Park handoff for a fiber awaiting a task. Runs on the scheduler stack with
+// the fiber fully switched out: under the task lock, either the task is already
+// done (re-ready at once — no lost wakeup) or we publish the fiber as a waiter.
+typedef struct { TaskSync *sync; long *task; void *self; } TaskAwaitPark;
+static void task_await_handoff(void *p) {
+    TaskAwaitPark *a = (TaskAwaitPark *)p;
+    pthread_mutex_lock(&a->sync->mutex);
+    if (a->task[3]) {                         // already done
+        pthread_mutex_unlock(&a->sync->mutex);
+        __pluto_green_wake(a->self);
+    } else {
+        GreenWaiter *w = (GreenWaiter *)malloc(sizeof(GreenWaiter));
+        w->fiber = a->self;
+        w->next = a->sync->green_waiters;
+        a->sync->green_waiters = w;
+        pthread_mutex_unlock(&a->sync->mutex);
+    }
+}
 
 // ── Serve handler threads ───────────────────────────────────────────────────
 //
@@ -1278,6 +1321,7 @@ static void *__pluto_spawn_trampoline(void *arg) {
         }
     }
     pthread_cond_signal(&sync->cond);
+    task_wake_green_waiters(sync);   // re-ready any green fibers in .get() (cp4)
     pthread_mutex_unlock(&sync->mutex);
 
     // Deregister thread stack from GC
@@ -1360,6 +1404,7 @@ static void green_run_cb(void *arg) {
         }
     }
     pthread_cond_signal(&sync->cond);
+    task_wake_green_waiters(sync);   // re-ready any green fibers in .get() (cp4)
     pthread_mutex_unlock(&sync->mutex);
 
     __pluto_current_task = NULL;
@@ -1397,18 +1442,30 @@ long __pluto_task_get(long task_ptr) {
     long *task = (long *)task_ptr;
     TaskSync *sync = (TaskSync *)task[4];
 
-    // Block as a GC-safe region, like chan_cond_wait. This used to wait in
-    // 10 ms timed slices and poll the safepoint in between, so every
-    // stop-the-world while a thread sat in get() waited up to 10 ms for it
-    // (invisible in pause logs, which start once the world is stopped).
-    // Inside the region the thread only reads the task's done flag: a
-    // scalar of an object its own stack keeps alive, which the collector
-    // neither moves nor writes.
-    __pluto_gc_enter_safe_region();
-    pthread_mutex_lock(&sync->mutex);
-    while (!task[3]) pthread_cond_wait(&sync->cond, &sync->mutex);
-    pthread_mutex_unlock(&sync->mutex);
-    __pluto_gc_leave_safe_region();
+    void *self = __pluto_green_self();
+    if (self) {
+        // Awaiting from a green fiber: park the FIBER (not the scheduler
+        // thread), so the scheduler keeps serving its peers. The handoff runs
+        // on the scheduler stack once we have switched out and either re-readies
+        // us (task already done) or lists us to be woken on completion. `park`
+        // lives on this parked frame, which stays intact until we resume.
+        TaskAwaitPark park = { sync, task, self };
+        __pluto_green_park(task_await_handoff, &park);
+        // Resumed: task[3] is set (the completer woke us after setting it).
+    } else {
+        // Block as a GC-safe region, like chan_cond_wait. This used to wait in
+        // 10 ms timed slices and poll the safepoint in between, so every
+        // stop-the-world while a thread sat in get() waited up to 10 ms for it
+        // (invisible in pause logs, which start once the world is stopped).
+        // Inside the region the thread only reads the task's done flag: a
+        // scalar of an object its own stack keeps alive, which the collector
+        // neither moves nor writes.
+        __pluto_gc_enter_safe_region();
+        pthread_mutex_lock(&sync->mutex);
+        while (!task[3]) pthread_cond_wait(&sync->cond, &sync->mutex);
+        pthread_mutex_unlock(&sync->mutex);
+        __pluto_gc_leave_safe_region();
+    }
 
     // If cancelled and no result, raise TaskCancelled
     if (task[6] && !task[1] && !task[2]) {

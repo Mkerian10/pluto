@@ -218,6 +218,13 @@ void __pluto_gc_deregister_thread_stack(void);
 void *__pluto_gc_register_green_context(void *stack_top, void *live_sp);
 // Submit a run-callback to the production green scheduler (runtime/green).
 void __pluto_green_submit(void (*run)(void *), void *job, size_t stack_size);
+// Cooperative fiber primitives (runtime/green/green_prod.c, #369 cp4). self()
+// returns the running fiber or NULL off the scheduler thread; park() suspends
+// the current fiber, running handoff(arg) on the scheduler stack once it has
+// switched out; wake() re-readies a parked fiber (thread-safe, any tier).
+void *__pluto_green_self(void);
+void __pluto_green_park(void (*handoff)(void *), void *arg);
+void __pluto_green_wake(void *fiber);
 void __pluto_gc_green_set_live_sp(void *handle, void *live_sp);
 void __pluto_gc_unregister_green_context(void *handle);
 int __pluto_gc_active_tasks(void);
