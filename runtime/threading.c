@@ -1075,6 +1075,14 @@ long __pluto_task_spawn(long closure_ptr) {
     return task_spawn_fiber(closure_ptr);
 }
 
+// Green executor. In test mode green tasks run on the DPOR fiber scheduler —
+// the same cooperative model production targets — so routing through the
+// (fiber-based) task spawn gives green tasks interleaving exploration for free
+// (rfc-green-tasks.md test-mode routing / unification).
+long __pluto_green_spawn(long closure_ptr) {
+    return __pluto_task_spawn(closure_ptr);
+}
+
 long __pluto_task_get(long task_ptr) {
     long *task = (long *)task_ptr;
 
@@ -1309,6 +1317,14 @@ long __pluto_task_spawn(long closure_ptr) {
         exit(1);
     }
     return (long)task;
+}
+
+// Green executor (production). cp3a: delegates to the OS-thread spawn path
+// (proven, GC-correct) so `green` is a working distinct lowering. cp3b swaps
+// this body to enqueue on the green scheduler (runtime/green/), keeping the
+// same Task<T> handle + TaskSync so .get() stays unchanged.
+long __pluto_green_spawn(long closure_ptr) {
+    return __pluto_task_spawn(closure_ptr);
 }
 
 long __pluto_task_get(long task_ptr) {

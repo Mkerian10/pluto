@@ -3600,7 +3600,7 @@ impl<'a> LowerContext<'a> {
             Expr::ClosureCreate { fn_name, captures, .. } => {
                 self.lower_closure_create(fn_name, captures)
             }
-            Expr::Spawn { call, .. } => {
+            Expr::Spawn { call, green } => {
                 match &call.node {
                     Expr::ClosureCreate { fn_name, captures, .. } => {
                         let closure_ptr = self.lower_closure_create(fn_name, captures)?;
@@ -3639,7 +3639,11 @@ impl<'a> LowerContext<'a> {
                                 self.call_runtime_void("__pluto_chan_sender_inc", &[val]);
                             }
                         }
-                        Ok(self.call_runtime("__pluto_task_spawn", &[closure_ptr]))
+                        // `green` picks the executor: a cooperative green task
+                        // on the scheduler vs a preemptive OS thread. Both return
+                        // the same Task<T> handle, so `.get()` is unchanged.
+                        let spawn_fn = if *green { "__pluto_green_spawn" } else { "__pluto_task_spawn" };
+                        Ok(self.call_runtime(spawn_fn, &[closure_ptr]))
                     }
                     _ => Err(CompileError::codegen("spawn should contain ClosureCreate after lifting"))
                 }
