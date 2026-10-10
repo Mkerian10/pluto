@@ -709,7 +709,7 @@ impl Default for GcBackend {
         std::env::var("PLUTO_GC_BACKEND")
             .ok()
             .and_then(|n| GcBackend::from_name(&n))
-            .unwrap_or(GcBackend::MarkSweep)
+            .unwrap_or(GcBackend::Hybrid)
     }
 }
 
