@@ -72,3 +72,27 @@ stops it at a safepoint. Additions:
   stack references — values cross via channels by copy, entities by handle).
 - Stack-size vs resident memory (one 16 KB page/fiber today): segmented or
   copying stacks would pack idle fibers sub-page — a later optimization.
+
+## Running-fiber-at-STW: resolved (conservative full-stack while running)
+
+Earlier this was the sharpest open hazard: a fiber that triggers a collection
+mid-run has live frames BELOW its registered `live_sp` (stack grows down), so a
+`[live_sp, top)` scan with a stale `live_sp` would miss them. Resolution — the
+scheduler sets the context's `live_sp` by state:
+
+- **running** (swapped in): `live_sp = stack_base` → the scan covers the ENTIRE
+  fiber stack `[base, top)`, so every current frame is included. Conservative
+  (a few dead slots below the real sp become harmless candidates) but sound,
+  and only one fiber per scheduler is running, so the extra scan is negligible.
+- **parked / ready** (swapped out): `live_sp = saved sp` → precise scan, as
+  validated in green_gc_scan_test.c.
+
+This needs no coupling to the collecting thread's sp. green_prod will set
+`live_sp = base` on swap-in and `= saved sp` on swap-out.
+
+## Checkpoint 2 result (green_gc_survive_test.c)
+
+With the REAL collector (marksweep.c): a GC object reachable only through a
+registered green context survives a forced `__pluto_gc_collect()` while ~160 KB
+of unreferenced garbage is swept (after-collect ≈ the sentinel's ~48 bytes).
+Proves registry + scan + real collection end-to-end for the parked case.
