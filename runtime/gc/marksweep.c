@@ -3077,11 +3077,16 @@ static int gc_hyb_sweep_young(GCThreadHeap *H, GCBlock *b, size_t *freed, size_t
     size_t osz = b->obj_size;
     uint32_t died = 0;
     int with_old = H->major;   // a major collection judges the old generation too
+    // Most young objects are dead at a minor collection: an unmarked young
+    // object that no running global cycle holds is freed here without the
+    // general verdict (gc_tlh_keep), which survivors still go through.
+    uint8_t live_bits = (uint8_t)(GC_MARK_LOCAL | (gc_incr_marking ? GC_MARK_GLOBAL : 0));
     for (size_t w = 0; w < sizeof b->young / sizeof b->young[0]; w++) {
         uint64_t bits = b->young[w] | (with_old ? b->old[w] : 0);
         while (bits) {
             size_t i = w * 64 + (size_t)__builtin_ctzll(bits);
             bits &= bits - 1;
+            if (bits) __builtin_prefetch(b->base + (size_t)__builtin_ctzll(bits) * osz + w * 64 * osz, 1);
             uint64_t bit = (uint64_t)1 << (i & 63);
             GCHeader *h = (GCHeader *)(b->base + i * osz);
             b->young[w] &= ~bit;
@@ -3089,6 +3094,7 @@ static int gc_hyb_sweep_young(GCThreadHeap *H, GCBlock *b, size_t *freed, size_t
             // Bits go stale (an object freed, promoted or tenured since):
             // the header says what the slot holds now.
             if (h->type_tag == GC_TAG_FREE || h->next == GC_SHARED_TAG) continue;
+            if (h->next == NULL && !(h->mark & live_bits)) goto dead;
             if (!with_old && h->next != NULL) {   // old: not this collection's
                 b->old[w] |= bit;
                 continue;
@@ -3098,6 +3104,7 @@ static int gc_hyb_sweep_young(GCThreadHeap *H, GCBlock *b, size_t *freed, size_t
                 else if (h->next != GC_SHARED_TAG) b->old[w] |= bit;
                 continue;
             }
+        dead:
             gc_hyb_log_dying(h);
             gc_finalize(h);
             gc_poison(h);
