@@ -968,7 +968,7 @@ impl<'a> Analyzer<'a> {
                     self.misuse_scan(a);
                 }
             }
-            Expr::Spawn { call } => self.misuse_scan(call),
+            Expr::Spawn { call, .. } => self.misuse_scan(call),
             Expr::EnumData { fields, .. } => {
                 for (_, v) in fields {
                     self.misuse_scan(v);
@@ -1186,7 +1186,7 @@ impl<'a> Analyzer<'a> {
                     self.scan_nested(&a.node);
                 }
             }
-            Expr::Spawn { call } => self.scan_nested(&call.node),
+            Expr::Spawn { call, .. } => self.scan_nested(&call.node),
             Expr::StructLit { fields, .. } | Expr::EnumData { fields, .. } => {
                 for (_, v) in fields {
                     self.scan_nested(&v.node);

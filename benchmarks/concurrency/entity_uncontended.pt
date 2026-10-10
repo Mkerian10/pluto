@@ -1,0 +1,44 @@
+// Four tasks, four SEPARATE entities, PER per-call locked increments each.
+// Same lock-acquisition count as entity_contended, but no two tasks ever
+// contend for the same lock. (entity_contended - this) isolates contention
+// cost; this exercises real cross-thread lock traffic without it.
+
+object Counter {
+    value: int
+
+    fn inc(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+fn hammer(mut c: Counter, n: int) {
+    let mut i = 0
+    while i < n {
+        c.inc()
+        i = i + 1
+    }
+}
+
+fn main() {
+    let per = 500000
+    let mut a = Counter { value: 0 }
+    let mut b = Counter { value: 0 }
+    let mut c = Counter { value: 0 }
+    let mut d = Counter { value: 0 }
+    let start = time_ns()
+    let t1 = spawn hammer(a, per)
+    let t2 = spawn hammer(b, per)
+    let t3 = spawn hammer(c, per)
+    let t4 = spawn hammer(d, per)
+    t1.get()
+    t2.get()
+    t3.get()
+    t4.get()
+    let ms = (time_ns() - start) / 1000000
+    print(f"total: {a.get() + b.get() + c.get() + d.get()}")
+    print(f"elapsed: {ms} ms")
+}

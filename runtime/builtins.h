@@ -108,10 +108,25 @@ typedef struct GCHeader {
 // ── Channel Sync (Production Mode Only) ──────────────────────────────────────
 
 #ifndef PLUTO_TEST_MODE
+// A green fiber parked on a task or channel (#369 cp4). pthread/main waiters
+// block on a condvar; a fiber cannot block the scheduler thread, so it parks
+// and is re-readied by __pluto_green_wake. Queued FIFO for fairness.
+typedef struct GreenWaiter {
+    void *fiber;
+    struct GreenWaiter *next;
+} GreenWaiter;
+
 typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t not_empty;
     pthread_cond_t not_full;
+    long recv_waiters;   // receivers parked on not_empty (guarded by mutex)
+    long send_waiters;   // senders parked on not_full  (guarded by mutex)
+    // Green fibers parked on this channel (cp4), guarded by `mutex`. A sender
+    // wakes one green_recv (preferring it to a cond waiter); a receiver wakes
+    // one green_send; close wakes them all.
+    GreenWaiter *green_recv_head, *green_recv_tail;
+    GreenWaiter *green_send_head, *green_send_tail;
 } ChannelSync;
 #endif
 
@@ -211,6 +226,23 @@ void __pluto_gc_maybe_collect(void);
 // Thread stack API for spawned tasks (production mode only)
 void __pluto_gc_register_thread_stack(void *stack_lo, void *stack_hi);
 void __pluto_gc_deregister_thread_stack(void);
+// Green-task context registry (#369): the green scheduler registers each
+// fiber/scheduler stack so the collector scans [live_sp, stack_top) for roots.
+void *__pluto_gc_register_green_context(void *stack_top, void *live_sp);
+// Submit a run-callback to the production green scheduler (runtime/green).
+void __pluto_green_submit(void (*run)(void *), void *job, size_t stack_size);
+// Cooperative fiber primitives (runtime/green/green_prod.c, #369 cp4). self()
+// returns the running fiber or NULL off the scheduler thread; park() suspends
+// the current fiber, running handoff(arg) on the scheduler stack once it has
+// switched out; wake() re-readies a parked fiber (thread-safe, any tier).
+void *__pluto_green_self(void);
+void __pluto_green_park(void (*handoff)(void *), void *arg);
+void __pluto_green_wake(void *fiber);
+// cp6: cooperative sleep — park the current fiber for `ns`, yielding the
+// scheduler to its peers. Only valid on a fiber (the runtime guards the call).
+void __pluto_green_sleep_ns(long ns);
+void __pluto_gc_green_set_live_sp(void *handle, void *live_sp);
+void __pluto_gc_unregister_green_context(void *handle);
 int __pluto_gc_active_tasks(void);
 void __pluto_gc_task_start(void);
 void __pluto_gc_task_end(void);

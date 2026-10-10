@@ -204,7 +204,7 @@ impl Visitor for AccessCollector<'_> {
                     self.edges.insert(mangled_name.clone());
                 }
             }
-            Expr::Spawn { call } => {
+            Expr::Spawn { call, .. } => {
                 // Spawn is opaque to concurrency analysis for the spawned body.
                 // Only collect effects from spawn arg expressions.
                 if let Expr::Closure { body, .. } = &call.node {

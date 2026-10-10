@@ -698,6 +698,10 @@ pub enum Expr {
     },
     Spawn {
         call: Box<Spanned<Expr>>,
+        /// Executor: false = `spawn` (preemptive OS thread, parallelism);
+        /// true = `green` (cooperative green task on a scheduler). Same Task<T>
+        /// and sharing rules — only the executor differs (rfc-green-tasks.md).
+        green: bool,
     },
     NoneLit,
     /// `a ?? b` — a if non-none, else b. Result is non-nullable when b is.

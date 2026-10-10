@@ -1,0 +1,31 @@
+// Lock-overhead floor: K per-call increments on a plain value `class`,
+// single-threaded. A class method takes NO lock, so this is the cost of
+// (method dispatch + field increment) alone. Pair with lock_entity_single:
+// the gap is the pure per-call entity rwlock overhead a single-domain proof
+// could elide.
+
+class Counter {
+    value: int
+
+    fn inc(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+fn main() {
+    let k = 2000000
+    let mut c = Counter { value: 0 }
+    let start = time_ns()
+    let mut i = 0
+    while i < k {
+        c.inc()
+        i = i + 1
+    }
+    let ms = (time_ns() - start) / 1000000
+    print(f"final: {c.get()}")
+    print(f"elapsed: {ms} ms")
+}

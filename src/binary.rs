@@ -47,7 +47,8 @@ const MAGIC: &[u8; 4] = b"PLTO";
 /// v24: DerivedInfo.perception_surface — decode-validated invariants (rfc-module-semantics section 4).
 /// v25: Program.reexports — `pub import module.Item` named re-exports (rfc-module-semantics section 7).
 /// v26: removed Expr::Cast — `as` casts replaced by conversion methods (rfc-number-types phase 3).
-const SCHEMA_VERSION: u32 = 26;
+/// v27: Expr::Spawn gains `green: bool` — `green` executor flag (rfc-green-tasks).
+const SCHEMA_VERSION: u32 = 27;
 
 /// Header size in bytes: magic (4) + version (4) + source_offset (4) + ast_offset (4) + derived_offset (4).
 const HEADER_SIZE: usize = 20;

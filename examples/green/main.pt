@@ -1,0 +1,74 @@
+// Green tasks (#369): cheap cooperative concurrency.
+//
+// `green f(args)` launches f on a shared cooperative scheduler instead of its
+// own OS thread, and returns the same Task<T> as `spawn`. A green task is far
+// cheaper than a thread — thousands can run on one scheduler — and when a green
+// task awaits a result or blocks on a channel it YIELDS the scheduler to its
+// peers instead of blocking a thread. Same sharing rules as `spawn`, no
+// async/await coloring.
+//
+// Rule of thumb: `green` for fine-grained, coordination-heavy work (lots of
+// small tasks passing messages); `spawn` when the work must run on its own OS
+// thread — CPU-bound parallelism, or anything that does blocking file/stdin/
+// socket I/O (those are a compile error under `green`, since they would stall
+// the cooperative scheduler).
+
+fn square(x: int) int {
+    return x * x
+}
+
+// A green fiber can itself spawn and await more green tasks: awaiting parks the
+// fiber and lets its peers run, so this does not block the scheduler.
+fn sum_of_squares(n: int) int {
+    let mut tasks = [green square(0)]
+    let mut i = 1
+    while i < n {
+        tasks.push(green square(i))
+        i = i + 1
+    }
+    let mut total = 0
+    let mut j = 0
+    while j < n {
+        total = total + (tasks[j].get() catch 0)
+        j = j + 1
+    }
+    return total
+}
+
+// Producer / consumer over a cap-1 channel, both running as green fibers on one
+// scheduler. The producer parks when the channel is full, the consumer parks
+// when it is empty, each waking the other — a cooperative ping-pong.
+fn producer(tx: Sender<int>, n: int) int {
+    let mut i = 1
+    while i <= n {
+        tx.send(i)!
+        i = i + 1
+    }
+    return 0
+}
+
+fn consumer(rx: Receiver<int>, n: int) int {
+    let mut acc = 0
+    let mut k = 0
+    while k < n {
+        acc = acc + (rx.recv() catch 0)
+        k = k + 1
+    }
+    return acc
+}
+
+fn main() {
+    // Many green tasks, awaited from inside another green task.
+    let outer = green sum_of_squares(100)
+    print(f"sum of squares 0..99 = {outer.get()}")
+
+    // Two green fibers coordinating over a channel on one scheduler thread.
+    let (tx, rx) = chan<int>(1)
+    let p = green producer(tx, 1000)
+    let c = green consumer(rx, 1000)
+    let total = c.get()
+    p.get() catch 0
+    print(f"sum 1..1000 over channel = {total}")
+
+    print("done")
+}

@@ -1443,6 +1443,14 @@ void __pluto_time_sleep_ns(long ns) {
     (void)ns;
     __pluto_test_timed_yield();
 #else
+    // On a green fiber, sleep cooperatively: park on the scheduler's timer wheel
+    // and yield to peers, instead of a nanosleep that would stall the whole
+    // scheduler thread (#369 cp6). Off the scheduler thread (main/spawn), the
+    // ordinary blocking nanosleep is correct.
+    if (__pluto_green_self()) {
+        __pluto_green_sleep_ns(ns);
+        return;
+    }
     struct timespec req;
     req.tv_sec = ns / 1000000000L;
     req.tv_nsec = ns % 1000000000L;

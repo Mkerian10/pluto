@@ -1,0 +1,33 @@
+// Buffered channel throughput: capacity == N, so the producer never blocks
+// and the consumer mostly finds data already present. This isolates the
+// per-op lock + condvar-signal overhead WITHOUT the unbuffered rendezvous,
+// which is where a trylock fast path and waiter-gated signalling could help.
+
+fn consumer(rx: Receiver<int>, n: int) {
+    let mut i = 0
+    while i < n {
+        let _v = rx.recv() catch -1
+        i = i + 1
+    }
+}
+
+fn produce(tx: Sender<int>, n: int) int {
+    let mut i = 0
+    while i < n {
+        tx.send(i)!
+        i = i + 1
+    }
+    return n
+}
+
+fn main() {
+    let n = 500000
+    let (tx, rx) = chan<int>(500000)
+    let c = spawn consumer(rx, n)
+    let start = time_ns()
+    let sent = produce(tx, n) catch -1
+    c.get()
+    let ms = (time_ns() - start) / 1000000
+    print(f"messages: {sent}")
+    print(f"elapsed: {ms} ms")
+}

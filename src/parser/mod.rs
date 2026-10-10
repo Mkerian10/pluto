@@ -4300,8 +4300,9 @@ impl<'a> Parser<'a> {
                 let end = close.span.end;
                 Ok(Spanned::new(Expr::ArrayLit { elements }, Span::new(start, end)))
             }
-            Token::Spawn => {
+            Token::Spawn | Token::Green => {
                 let spawn_tok = self.advance().expect("token should exist after peek");
+                let green = matches!(spawn_tok.node, Token::Green);
                 let start = spawn_tok.span.start;
                 // Parse the first identifier (or `self`)
                 let first = match self.peek_raw() {
@@ -4322,7 +4323,7 @@ impl<'a> Parser<'a> {
                         let call_span = Span::new(first.span.start, close.span.end);
                         let call = Expr::Call { name: first, args, type_args: vec![], target_id: None };
                         Ok(Spanned::new(
-                            Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
+                            Expr::Spawn { call: Box::new(Spanned::new(call, call_span)), green },
                             Span::new(start, close.span.end),
                         ))
                     }
@@ -4351,7 +4352,7 @@ impl<'a> Parser<'a> {
                                         type_args: vec![],
                                     };
                                     return Ok(Spanned::new(
-                                        Expr::Spawn { call: Box::new(Spanned::new(call, call_span)) },
+                                        Expr::Spawn { call: Box::new(Spanned::new(call, call_span)), green },
                                         Span::new(start, close.span.end),
                                     ));
                                 }
@@ -6795,7 +6796,7 @@ mod tests {
         match &f.body.node.stmts[0].node {
             Stmt::Let { value, .. } => {
                 match &value.node {
-                    Expr::Spawn { call } => {
+                    Expr::Spawn { call, .. } => {
                         // Verify the call has arguments
                         match &call.node {
                             Expr::Call { args, .. } => {

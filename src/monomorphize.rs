@@ -743,7 +743,7 @@ fn substitute_in_expr(expr: &mut Expr, bindings: &HashMap<String, TypeExpr>) {
                 }
             }
         }
-        Expr::Spawn { call } => {
+        Expr::Spawn { call, .. } => {
             substitute_in_expr(&mut call.node, bindings);
         }
         Expr::If { condition, then_block, else_block } => {
@@ -3030,6 +3030,7 @@ mod tests {
         use crate::parser::ast::Expr;
 
         let mut expr = Expr::Spawn {
+            green: false,
             call: Box::new(spanned(Expr::Call { name: spanned("f".to_string()), args: vec![], type_args: vec![spanned(TypeExpr::Named("T".to_string()))], target_id: None })),
         };
 
@@ -3038,7 +3039,7 @@ mod tests {
 
         substitute_in_expr(&mut expr, &bindings);
 
-        if let Expr::Spawn { call } = expr {
+        if let Expr::Spawn { call, .. } = expr {
             if let Expr::Call { type_args, .. } = &call.node {
                 assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }

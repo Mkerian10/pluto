@@ -13,6 +13,7 @@ pub(crate) mod builtins;
 pub(crate) mod errors;
 mod idempotency;
 mod linearity;
+pub(crate) mod blocking;
 pub(crate) mod shrink;
 pub(crate) mod requires;
 pub(crate) mod arith_fit;
@@ -219,6 +220,33 @@ pub fn type_check(program: &Program) -> Result<(TypeEnv, Vec<CompileWarning>), C
     // reach monomorphization, reflection, or marshaling.
     templates::sweep_skolems(&mut env);
     crate::concurrency::infer_synchronization(program, &mut env);
+    // Blocking-effect inference (#369 §6): compute which functions can block
+    // the OS thread, transitively.
+    blocking::infer_blocking_effects(program, &mut env);
+    // Green-task boundary (#369 cp5): a `green f()` whose target reaches a
+    // blocking op with NO cooperative form (fs, stdin, blocking sockets; sleep
+    // is cooperative under the cp6 timer wheel and NOT here) would stall the
+    // single-threaded green scheduler and every fiber on it.
+    // Reject it at compile time — the author must use `spawn` (a dedicated OS
+    // thread) for that work. Channel/task/lock/select do NOT trigger this:
+    // under the green scheduler they are cooperative yields, so they are absent
+    // from `green_illegal_fns`. (Opaque targets — calls through closures or
+    // trait-dynamic dispatch — are a known soundness gap, not yet rejected:
+    // hard-rejecting them would reject most legitimate green code.)
+    for (target, span) in &env.green_spawn_sites {
+        if env.green_illegal_fns.contains(target) {
+            let bare = target.rsplit('$').next().unwrap_or(target);
+            return Err(CompileError::type_err(
+                format!(
+                    "'{bare}' performs a blocking operation (file/stdin/blocking socket) \
+                     with no cooperative form, so it cannot run as a green task — it would stall \
+                     the green scheduler and every fiber on it. Use `spawn` (a dedicated OS \
+                     thread) for this work instead of `green`."
+                ),
+                *span,
+            ));
+        }
+    }
     // Objects serialize their methods unconditionally (rfc-objects.md):
     // sharing an entity is safe BECAUSE it processes one message at a time,
     // not because an analysis proved no concurrent access.

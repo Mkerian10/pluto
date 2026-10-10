@@ -1075,6 +1075,14 @@ long __pluto_task_spawn(long closure_ptr) {
     return task_spawn_fiber(closure_ptr);
 }
 
+// Green executor. In test mode green tasks run on the DPOR fiber scheduler —
+// the same cooperative model production targets — so routing through the
+// (fiber-based) task spawn gives green tasks interleaving exploration for free
+// (rfc-green-tasks.md test-mode routing / unification).
+long __pluto_green_spawn(long closure_ptr) {
+    return __pluto_task_spawn(closure_ptr);
+}
+
 long __pluto_task_get(long task_ptr) {
     long *task = (long *)task_ptr;
 
@@ -1147,10 +1155,50 @@ void __pluto_test_timed_yield(void) {
 
 // ── Production mode: pthread-based concurrency ──
 
+// GreenWaiter (a fiber parked on a task/channel) is declared in builtins.h —
+// shared by TaskSync here and ChannelSync. green_waiters is the list of fibers
+// parked in .get() on this task (cp4), distinct from cond waiters (pthread/main
+// threads): a fiber cannot block the scheduler thread, so it parks and is
+// re-readied by __pluto_green_wake when the task completes.
 typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
+    GreenWaiter *green_waiters;   // guarded by `mutex`
 } TaskSync;
+
+// Re-ready every green fiber parked on this task. Caller holds sync->mutex;
+// the list is detached first, then the wakes run (each takes the scheduler's
+// queue lock — ordering is always sync->mutex before the queue lock, never the
+// reverse, so holding it here is deadlock-free).
+static void task_wake_green_waiters(TaskSync *sync) {
+    GreenWaiter *w = sync->green_waiters;
+    sync->green_waiters = NULL;
+    while (w) {
+        GreenWaiter *n = w->next;
+        __pluto_green_wake(w->fiber);
+        free(w);
+        w = n;
+    }
+}
+
+// Park handoff for a fiber awaiting a task. Runs on the scheduler stack with
+// the fiber fully switched out: under the task lock, either the task is already
+// done (re-ready at once — no lost wakeup) or we publish the fiber as a waiter.
+typedef struct { TaskSync *sync; long *task; void *self; } TaskAwaitPark;
+static void task_await_handoff(void *p) {
+    TaskAwaitPark *a = (TaskAwaitPark *)p;
+    pthread_mutex_lock(&a->sync->mutex);
+    if (a->task[3]) {                         // already done
+        pthread_mutex_unlock(&a->sync->mutex);
+        __pluto_green_wake(a->self);
+    } else {
+        GreenWaiter *w = (GreenWaiter *)malloc(sizeof(GreenWaiter));
+        w->fiber = a->self;
+        w->next = a->sync->green_waiters;
+        a->sync->green_waiters = w;
+        pthread_mutex_unlock(&a->sync->mutex);
+    }
+}
 
 // ── Serve handler threads ───────────────────────────────────────────────────
 //
@@ -1270,6 +1318,7 @@ static void *__pluto_spawn_trampoline(void *arg) {
         }
     }
     pthread_cond_signal(&sync->cond);
+    task_wake_green_waiters(sync);   // re-ready any green fibers in .get() (cp4)
     pthread_mutex_unlock(&sync->mutex);
 
     // Deregister thread stack from GC
@@ -1311,22 +1360,111 @@ long __pluto_task_spawn(long closure_ptr) {
     return (long)task;
 }
 
+// Green executor (production, cp3b): build the same Task<T> handle as the
+// thread path, then submit the closure to the green scheduler (runtime/green)
+// instead of pthread_create. .get() is unchanged — the scheduler fiber
+// delivers the result into the task's TaskSync.
+typedef struct { long closure; long *task; } GreenJob;
+
+// Runs on a green scheduler fiber (GC-context registered by green_prod): invoke
+// the Pluto closure and deliver its result/error into the Task<T>'s TaskSync.
+static void green_run_cb(void *arg) {
+    GreenJob *j = (GreenJob *)arg;
+    long closure_ptr = j->closure;
+    long *task = j->task;
+    free(j);
+
+    __pluto_current_error = NULL;
+    __pluto_current_task = task;
+    // `task` is now live on this fiber's stack (GC-scanned via the fiber's
+    // green context), so the pre-submit pending root is no longer needed.
+    __pluto_gc_remove_pending_root(task);
+
+    long fn_ptr = *(long *)closure_ptr;
+    long result = ((long (*)(long))fn_ptr)(closure_ptr);
+
+    TaskSync *sync = (TaskSync *)task[4];
+    pthread_mutex_lock(&sync->mutex);
+    if (__pluto_current_error) {
+        task[2] = (long)__pluto_current_error;
+        __pluto_current_error = NULL;
+    } else {
+        task[1] = result;
+    }
+    task[3] = 1;  // done
+    if (task[5] && task[2]) {   // detached + errored → stderr (parity with spawn)
+        long *err_obj = (long *)task[2];
+        char *msg_ptr = (char *)err_obj[0];
+        if (msg_ptr) {
+            long len = *(long *)msg_ptr;
+            fprintf(stderr, "pluto: error in detached green task: %.*s\n", (int)len, msg_ptr + 8);
+        }
+    }
+    pthread_cond_signal(&sync->cond);
+    task_wake_green_waiters(sync);   // re-ready any green fibers in .get() (cp4)
+    pthread_mutex_unlock(&sync->mutex);
+
+    __pluto_current_task = NULL;
+    __pluto_gc_task_end();
+}
+
+// Green fiber stack size. The scheduler (runtime/green/green_prod.c) allocates
+// each stack with mmap + a PROT_NONE guard page at the low end, so a deeply
+// recursive green fn faults immediately instead of overflowing silently. 512 KB
+// matches the pthread reserve; right-sizing for the idle-connection memory win
+// is a later tuning pass (the mmap'd pages are lazily backed, so an idle fiber
+// that never deep-recurses costs far less than 512 KB resident regardless).
+#define PLUTO_GREEN_STACK (512 * 1024)
+
+long __pluto_green_spawn(long closure_ptr) {
+    long *task = (long *)gc_alloc(56, GC_TAG_TASK, 3);
+    task[0] = closure_ptr;
+    task[1] = 0; task[2] = 0; task[3] = 0;
+    task[5] = 0; task[6] = 0;
+
+    TaskSync *sync = (TaskSync *)calloc(1, sizeof(TaskSync));
+    pthread_mutex_init(&sync->mutex, NULL);
+    pthread_cond_init(&sync->cond, NULL);
+    task[4] = (long)sync;
+
+    __pluto_gc_task_start();
+    __pluto_gc_add_pending_root(task);   // kept alive until the fiber holds it
+
+    GreenJob *j = (GreenJob *)malloc(sizeof(GreenJob));
+    j->closure = closure_ptr;
+    j->task = task;
+    __pluto_green_submit(green_run_cb, j, PLUTO_GREEN_STACK);
+    return (long)task;
+}
+
 long __pluto_task_get(long task_ptr) {
     long *task = (long *)task_ptr;
     TaskSync *sync = (TaskSync *)task[4];
 
-    // Block as a GC-safe region, like chan_cond_wait. This used to wait in
-    // 10 ms timed slices and poll the safepoint in between, so every
-    // stop-the-world while a thread sat in get() waited up to 10 ms for it
-    // (invisible in pause logs, which start once the world is stopped).
-    // Inside the region the thread only reads the task's done flag: a
-    // scalar of an object its own stack keeps alive, which the collector
-    // neither moves nor writes.
-    __pluto_gc_enter_safe_region();
-    pthread_mutex_lock(&sync->mutex);
-    while (!task[3]) pthread_cond_wait(&sync->cond, &sync->mutex);
-    pthread_mutex_unlock(&sync->mutex);
-    __pluto_gc_leave_safe_region();
+    void *self = __pluto_green_self();
+    if (self) {
+        // Awaiting from a green fiber: park the FIBER (not the scheduler
+        // thread), so the scheduler keeps serving its peers. The handoff runs
+        // on the scheduler stack once we have switched out and either re-readies
+        // us (task already done) or lists us to be woken on completion. `park`
+        // lives on this parked frame, which stays intact until we resume.
+        TaskAwaitPark park = { sync, task, self };
+        __pluto_green_park(task_await_handoff, &park);
+        // Resumed: task[3] is set (the completer woke us after setting it).
+    } else {
+        // Block as a GC-safe region, like chan_cond_wait. This used to wait in
+        // 10 ms timed slices and poll the safepoint in between, so every
+        // stop-the-world while a thread sat in get() waited up to 10 ms for it
+        // (invisible in pause logs, which start once the world is stopped).
+        // Inside the region the thread only reads the task's done flag: a
+        // scalar of an object its own stack keeps alive, which the collector
+        // neither moves nor writes.
+        __pluto_gc_enter_safe_region();
+        pthread_mutex_lock(&sync->mutex);
+        while (!task[3]) pthread_cond_wait(&sync->cond, &sync->mutex);
+        pthread_mutex_unlock(&sync->mutex);
+        __pluto_gc_leave_safe_region();
+    }
 
     // If cancelled and no result, raise TaskCancelled
     if (task[6] && !task[1] && !task[2]) {
@@ -2083,6 +2221,10 @@ long __pluto_chan_create(long capacity) {
 // so a thread blocked on the mutex must count as stopped too. The collector
 // itself never takes channel mutexes, so parking while holding one is fine.
 static void chan_lock(ChannelSync *sync) {
+    // Uncontended acquisition never parks, so skip the safe-region bookkeeping;
+    // only a blocking acquisition needs it (a holder may be parked for a whole
+    // collection, so a thread blocked on the mutex must count as stopped too).
+    if (pthread_mutex_trylock(&sync->mutex) == 0) return;
     __pluto_gc_enter_safe_region();
     pthread_mutex_lock(&sync->mutex);
     __pluto_gc_leave_safe_region();
@@ -2107,14 +2249,83 @@ static int chan_cond_timedwait(pthread_cond_t *cond, ChannelSync *sync,
     return rc;
 }
 
+// ── Green-fiber parking on channels (cp4) ────────────────────────────────────
+//
+// A fiber that would block on a channel (full on send, empty on recv) parks the
+// FIBER instead of the scheduler thread. The channel predicate is not monotonic
+// (a peer can consume/produce between wake and resume), so the caller re-checks
+// under the lock in its wait loop, exactly like chan_cond_wait.
+
+// Park handoff: runs on the scheduler stack with the channel mutex still held
+// by this (scheduler) thread. Enqueues the fiber on `*tail` FIFO, then releases
+// the mutex — publishing the waiter atomically w.r.t. any waker, which must
+// take the mutex to see or wake it.
+typedef struct { ChannelSync *sync; GreenWaiter **head; GreenWaiter **tail; void *self; } ChanPark;
+static void chan_green_handoff(void *p) {
+    ChanPark *cp = (ChanPark *)p;
+    GreenWaiter *w = (GreenWaiter *)malloc(sizeof(GreenWaiter));
+    w->fiber = cp->self; w->next = NULL;
+    if (*cp->tail) (*cp->tail)->next = w; else *cp->head = w;
+    *cp->tail = w;
+    pthread_mutex_unlock(&cp->sync->mutex);
+}
+
+// Suspend the current fiber on a channel wait queue, releasing the channel
+// mutex, and re-acquire it on wake. Caller holds sync->mutex; returns with it
+// held. Mirrors chan_cond_wait for the green tier.
+static void chan_green_park(ChannelSync *sync, GreenWaiter **head, GreenWaiter **tail, void *self) {
+    ChanPark cp = { sync, head, tail, self };
+    __pluto_green_park(chan_green_handoff, &cp);  // handoff unlocks sync->mutex
+    chan_lock(sync);                              // re-acquire on resume
+}
+
+// Wake one waiter from a green queue (FIFO). Caller holds sync->mutex. Returns
+// 1 if a green fiber was woken, 0 if the queue was empty.
+static int chan_wake_one_green(GreenWaiter **head, GreenWaiter **tail) {
+    GreenWaiter *w = *head;
+    if (!w) return 0;
+    *head = w->next;
+    if (!*head) *tail = NULL;
+    void *f = w->fiber; free(w);
+    __pluto_green_wake(f);
+    return 1;
+}
+
+// Wake exactly one receiver, preferring a parked green fiber over a cond
+// waiter. Caller holds sync->mutex. (A woken loser simply re-checks and
+// re-waits, so waking the "wrong" tier is never incorrect, only wasteful.)
+static void chan_wake_one_recv(ChannelSync *sync) {
+    if (chan_wake_one_green(&sync->green_recv_head, &sync->green_recv_tail)) return;
+    if (sync->recv_waiters > 0) pthread_cond_signal(&sync->not_empty);
+}
+static void chan_wake_one_send(ChannelSync *sync) {
+    if (chan_wake_one_green(&sync->green_send_head, &sync->green_send_tail)) return;
+    if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
+}
+
+// Wake every green fiber parked on this channel (both directions). Caller holds
+// sync->mutex. Used by close, which must wake all waiters so each re-checks and
+// sees the closed flag.
+static void chan_wake_all_green(ChannelSync *sync) {
+    while (chan_wake_one_green(&sync->green_recv_head, &sync->green_recv_tail)) {}
+    while (chan_wake_one_green(&sync->green_send_head, &sync->green_send_tail)) {}
+}
+
 long __pluto_chan_send(long handle, long value) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
+    void *self = __pluto_green_self();
 
     chan_lock(sync);
     while (ch[3] == ch[2] && !ch[6]) {
-        chan_cond_wait(&sync->not_full, sync);
-        // Check for task cancellation after waking from condvar
+        if (self) {
+            chan_green_park(sync, &sync->green_send_head, &sync->green_send_tail, self);
+        } else {
+            sync->send_waiters++;
+            chan_cond_wait(&sync->not_full, sync);
+            sync->send_waiters--;
+        }
+        // Check for task cancellation after waking
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
             task_raise_cancelled();
@@ -2130,7 +2341,7 @@ long __pluto_chan_send(long handle, long value) {
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
-    pthread_cond_signal(&sync->not_empty);
+    chan_wake_one_recv(sync);
     pthread_mutex_unlock(&sync->mutex);
     return value;
 }
@@ -2138,11 +2349,18 @@ long __pluto_chan_send(long handle, long value) {
 long __pluto_chan_recv(long handle) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
+    void *self = __pluto_green_self();
 
     chan_lock(sync);
     while (ch[3] == 0 && !ch[6]) {
-        chan_cond_wait(&sync->not_empty, sync);
-        // Check for task cancellation after waking from condvar
+        if (self) {
+            chan_green_park(sync, &sync->green_recv_head, &sync->green_recv_tail, self);
+        } else {
+            sync->recv_waiters++;
+            chan_cond_wait(&sync->not_empty, sync);
+            sync->recv_waiters--;
+        }
+        // Check for task cancellation after waking
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
             task_raise_cancelled();
@@ -2158,7 +2376,7 @@ long __pluto_chan_recv(long handle) {
     long val = buf[ch[4]];
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
-    pthread_cond_signal(&sync->not_full);
+    chan_wake_one_send(sync);
     pthread_mutex_unlock(&sync->mutex);
     return val;
 }
@@ -2187,9 +2405,50 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
         deadline.tv_nsec -= 1000000000L;
     }
 
+    // On a green fiber, a cond wait would block the scheduler thread (and every
+    // peer fiber) for up to the whole timeout. Instead poll cooperatively: check
+    // readiness under the lock, then cooperatively sleep (parking on the cp6
+    // timer wheel, which yields the scheduler) until the next slice or the
+    // deadline. Costs up to one slice of latency on arrival/timeout — acceptable
+    // on a timeout path; an event-driven dual-register (channel waiter + timer
+    // with wake-once) is the follow-up optimization (#369 cp6).
+    if (__pluto_green_self()) {
+        long deadline_ns = (long)deadline.tv_sec * 1000000000L + deadline.tv_nsec;
+        const long SLICE_NS = 1000000L;   // 1 ms poll granularity
+        for (;;) {
+            chan_lock(sync);
+            if (ch[3] > 0) {
+                long *buf = (long *)ch[1];
+                long val = buf[ch[4]];
+                ch[4] = (ch[4] + 1) % ch[2];
+                ch[3]--;
+                chan_wake_one_send(sync);
+                pthread_mutex_unlock(&sync->mutex);
+                return val;
+            }
+            if (ch[6]) {   // closed and drained
+                pthread_mutex_unlock(&sync->mutex);
+                chan_raise_error_typed("ChannelClosed", "channel closed");
+                return 0;
+            }
+            pthread_mutex_unlock(&sync->mutex);
+            struct timespec now;
+            clock_gettime(CLOCK_REALTIME, &now);
+            long now_ns = (long)now.tv_sec * 1000000000L + now.tv_nsec;
+            long remaining = deadline_ns - now_ns;
+            if (remaining <= 0) {
+                chan_raise_error_typed("TimedOut", "timed out waiting on channel");
+                return 0;
+            }
+            __pluto_green_sleep_ns(remaining < SLICE_NS ? remaining : SLICE_NS);
+        }
+    }
+
     chan_lock(sync);
     while (ch[3] == 0 && !ch[6]) {
+        sync->recv_waiters++;
         int rc = chan_cond_timedwait(&sync->not_empty, sync, &deadline);
+        sync->recv_waiters--;
         // Check for task cancellation after waking from condvar
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
@@ -2212,7 +2471,7 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
     long val = buf[ch[4]];
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
-    pthread_cond_signal(&sync->not_full);
+    chan_wake_one_send(sync);
     pthread_mutex_unlock(&sync->mutex);
     return val;
 }
@@ -2236,7 +2495,7 @@ long __pluto_chan_try_send(long handle, long value) {
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
-    pthread_cond_signal(&sync->not_empty);
+    chan_wake_one_recv(sync);
     pthread_mutex_unlock(&sync->mutex);
     return value;
 }
@@ -2260,7 +2519,7 @@ long __pluto_chan_try_recv(long handle) {
     long val = buf[ch[4]];
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
-    pthread_cond_signal(&sync->not_full);
+    chan_wake_one_send(sync);
     pthread_mutex_unlock(&sync->mutex);
     return val;
 }
@@ -2273,6 +2532,7 @@ void __pluto_chan_close(long handle) {
     ch[6] = 1;
     pthread_cond_broadcast(&sync->not_empty);
     pthread_cond_broadcast(&sync->not_full);
+    chan_wake_all_green(sync);   // fibers parked here must wake to see closed
     pthread_mutex_unlock(&sync->mutex);
 }
 
@@ -2517,6 +2777,11 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                                           : now_ns + timeout_ms * 1000000L;
     }
 
+    /* On a green fiber, the inter-poll wait must yield the scheduler (park on
+     * the cp6 timer wheel), not usleep the scheduler thread and stall every
+     * peer fiber. Off the scheduler thread, usleep is correct. */
+    void *self = __pluto_green_self();
+
     /* Spin-poll loop */
     long spin_us = 100;  /* start at 100 microseconds */
     for (;;) {
@@ -2537,7 +2802,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                     long val = cbuf[ch[4]];
                     ch[4] = (ch[4] + 1) % ch[2];
                     ch[3]--;
-                    pthread_cond_signal(&sync->not_full);
+                    chan_wake_one_send(sync);
                     pthread_mutex_unlock(&sync->mutex);
                     values[i] = val;
                     return (long)i;
@@ -2553,7 +2818,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                     cbuf[ch[5]] = values[i];
                     ch[5] = (ch[5] + 1) % ch[2];
                     ch[3]++;
-                    pthread_cond_signal(&sync->not_empty);
+                    chan_wake_one_recv(sync);
                     pthread_mutex_unlock(&sync->mutex);
                     return (long)i;
                 }
@@ -2592,7 +2857,11 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
             if (remaining_us < 1) remaining_us = 1;
             if (nap_us > remaining_us) nap_us = remaining_us;
         }
-        usleep((useconds_t)nap_us);
+        if (self) {
+            __pluto_green_sleep_ns((long)nap_us * 1000L);  // cooperative yield
+        } else {
+            usleep((useconds_t)nap_us);
+        }
         if (spin_us < 1000) spin_us = spin_us * 2;
         if (spin_us > 1000) spin_us = 1000;
     }
@@ -2666,12 +2935,19 @@ typedef struct {
     pthread_cond_t cv;    // signaled when the lock may have become available
     long readers;         // active shared (read) holds
     long write_depth;     // nested holds by the owning thread (0 = not write-held)
+    long waiters;         // threads parked on cv (guarded by mu) — lets unlock
+                          // skip cond_broadcast when nobody is waiting
     pthread_t owner;      // valid iff write_depth > 0
 } PlutoRwlock;
 
-// Acquire the metadata mutex, counting the wait as a GC-safe region (a
-// holder of mu can itself be parked in leave_safe_region for a collection).
+// Acquire the metadata mutex. The uncontended case (the overwhelming common
+// one for entity methods) never blocks, so try it lock-free first and skip
+// the GC safe-region bookkeeping entirely — a trylock that succeeds does not
+// park the thread. Only the genuinely contended acquisition, which can block,
+// is bracketed in a safe region (a holder of mu may then be parked in
+// leave_safe_region for a collection).
 static void rwlock_mu_lock(PlutoRwlock *l) {
+    if (pthread_mutex_trylock(&l->mu) == 0) return;
     __pluto_gc_enter_safe_region();
     pthread_mutex_lock(&l->mu);
     __pluto_gc_leave_safe_region();
@@ -2699,7 +2975,9 @@ void __pluto_rwlock_rdlock(long lock_ptr) {
         return;
     }
     while (l->write_depth > 0) {
+        l->waiters++;
         rwlock_cond_wait(l);
+        l->waiters--;
     }
     l->readers++;
     pthread_mutex_unlock(&l->mu);
@@ -2714,7 +2992,9 @@ void __pluto_rwlock_wrlock(long lock_ptr) {
         return;
     }
     while (l->write_depth > 0 || l->readers > 0) {
+        l->waiters++;
         rwlock_cond_wait(l);
+        l->waiters--;
     }
     l->owner = pthread_self();
     l->write_depth = 1;
@@ -2726,10 +3006,10 @@ void __pluto_rwlock_unlock(long lock_ptr) {
     rwlock_mu_lock(l);
     if (l->write_depth > 0 && pthread_equal(l->owner, pthread_self())) {
         l->write_depth--;
-        if (l->write_depth == 0) pthread_cond_broadcast(&l->cv);
+        if (l->write_depth == 0 && l->waiters > 0) pthread_cond_broadcast(&l->cv);
     } else if (l->readers > 0) {
         l->readers--;
-        if (l->readers == 0) pthread_cond_broadcast(&l->cv);
+        if (l->readers == 0 && l->waiters > 0) pthread_cond_broadcast(&l->cv);
     }
     pthread_mutex_unlock(&l->mu);
 }

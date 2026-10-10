@@ -1640,3 +1640,281 @@ fn task_get_in_if_expr_condition() {
     );
     assert_eq!(out.trim(), "100");
 }
+
+// ── green tasks (rfc-green-tasks.md) ────────────────────────────────────────
+// The `green` executor keyword mirrors `spawn` (same Task<T>, args, capture,
+// result via .get()). Codegen currently lowers it like a thread spawn; the
+// cooperative scheduler is wired in a later phase.
+#[test]
+fn green_task_basic_and_result() {
+    let out = compile_and_run_stdout(
+        r#"
+        fn work(x: int) int { return x + 1 }
+        fn main() {
+            let t = green work(41)
+            let g = green work(99)
+            print(t.get())
+            print(g.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42\n100");
+}
+
+#[test]
+fn green_task_method_call() {
+    let out = compile_and_run_stdout(
+        r#"
+        class Adder { base: int
+            fn add(self, x: int) int { return self.base + x }
+        }
+        fn main() {
+            let a = Adder { base: 10 }
+            let t = green a.add(5)
+            print(t.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "15");
+}
+
+// ── Green cooperative scheduling: park/await/channels (#369 cp4) ──────────────
+
+#[test]
+fn green_await_green_nested() {
+    // A green fiber spawns another green task and awaits it from WITHIN the
+    // fiber: the awaiting fiber must park (yield the scheduler), not block the
+    // scheduler thread, or the inner task could never run.
+    let out = compile_and_run_stdout(
+        r#"
+        fn inner(x: int) int { return x * 2 }
+        fn outer(x: int) int {
+            let t = green inner(x)
+            return t.get() + 1
+        }
+        fn main() {
+            let o = green outer(10)
+            print(o.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "21");
+}
+
+#[test]
+fn green_fiber_awaits_pthread_task() {
+    // Cross-tier await: a green fiber awaits a pthread spawn task. The pthread
+    // completion must wake the parked fiber across threads.
+    let out = compile_and_run_stdout(
+        r#"
+        fn work(x: int) int { return x + 1 }
+        fn mixed(x: int) int {
+            let t = spawn work(x)
+            return t.get() + 100
+        }
+        fn main() {
+            let m = green mixed(5)
+            print(m.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "106");
+}
+
+#[test]
+fn green_channel_ping_pong() {
+    // Two green fibers on one scheduler, a cap-1 channel: the producer parks on
+    // a full channel and the consumer parks on an empty one, each waking the
+    // other. Would deadlock the scheduler if send/recv did not park the fiber.
+    let out = compile_and_run_stdout(
+        r#"
+        fn producer(tx: Sender<int>, n: int) int {
+            let mut i = 1
+            while i <= n {
+                tx.send(i)!
+                i = i + 1
+            }
+            return 0
+        }
+        fn consumer(rx: Receiver<int>, n: int) int {
+            let mut acc = 0
+            let mut k = 0
+            while k < n {
+                acc = acc + (rx.recv() catch 0)
+                k = k + 1
+            }
+            return acc
+        }
+        fn main() {
+            let (tx, rx) = chan<int>(1)
+            let p = green producer(tx, 100)
+            let c = green consumer(rx, 100)
+            let sum = c.get()
+            p.get() catch 0
+            print(sum)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "5050");
+}
+
+#[test]
+fn green_rejects_blocking_op() {
+    // A green task that reaches a blocking op with no cooperative form (here a
+    // file read) is rejected at compile time (#369 cp5): it would stall the
+    // green scheduler. The identical function under `spawn` is fine.
+    compile_should_fail_with(
+        r#"
+        extern fn __pluto_fs_read(fd: int) int
+        fn rd() int {
+            return __pluto_fs_read(3)
+        }
+        fn main() {
+            let t = green rd()
+            print(t.get())
+        }
+        "#,
+        "cannot run as a green task",
+    );
+}
+
+#[test]
+fn green_sleep_is_cooperative() {
+    // Sleep is legal in a green task (#369 cp6): it parks on the scheduler's
+    // timer wheel instead of blocking the thread, so two green sleeps overlap.
+    // The result proves it compiled (sleep is no longer green-illegal) and both
+    // tasks completed.
+    let out = compile_and_run_stdout(
+        r#"
+        extern fn __pluto_time_sleep_ns(ns: int)
+        fn napper(id: int, ms: int) int {
+            __pluto_time_sleep_ns(ms * 1000000)
+            return id
+        }
+        fn main() {
+            let a = green napper(1, 100)
+            let b = green napper(2, 50)
+            print(a.get() + b.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn spawn_allows_blocking_op() {
+    // The same blocking function is legal under `spawn` (a dedicated OS thread).
+    let out = compile_and_run_stdout(
+        r#"
+        extern fn __pluto_time_sleep_ns(ns: int)
+        fn nap(ms: int) {
+            __pluto_time_sleep_ns(ms * 1000000)
+        }
+        fn main() {
+            spawn nap(1).detach()
+            print(7)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "7");
+}
+
+#[test]
+fn green_recv_timeout_yields() {
+    // A green fiber in recv_timeout yields the scheduler rather than blocking it
+    // (#369 cp6): a peer fiber completes while the waiter is timing out, and the
+    // waiter then returns the timeout sentinel. If recv_timeout blocked the
+    // scheduler, worker() could not run until the timeout elapsed.
+    let out = compile_and_run_stdout(
+        r#"
+        fn waiter(rx: Receiver<int>) int { return rx.recv_timeout(100) catch -1 }
+        fn worker() int { return 42 }
+        fn main() {
+            let (tx, rx) = chan<int>(1)
+            let w = green waiter(rx)
+            let k = green worker()
+            print(k.get())
+            print(w.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42\n-1");
+}
+
+#[test]
+fn green_recv_timeout_receives() {
+    // recv_timeout from a fiber returns an item that arrives before the deadline.
+    let out = compile_and_run_stdout(
+        r#"
+        fn producer(tx: Sender<int>) int {
+            tx.send(99)!
+            return 0
+        }
+        fn consumer(rx: Receiver<int>) int { return rx.recv_timeout(500) catch -1 }
+        fn main() {
+            let (tx, rx) = chan<int>(1)
+            let p = green producer(tx)
+            let c = green consumer(rx)
+            print(c.get())
+            p.get() catch 0
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "99");
+}
+
+#[test]
+fn green_select_yields() {
+    // A green fiber in select yields the scheduler rather than spin-blocking it
+    // (#369 cp6): a peer fiber completes while the select waits out its `after`
+    // arm, which then fires. If select blocked the scheduler, worker() could not
+    // run until the after elapsed.
+    let out = compile_and_run_stdout(
+        r#"
+        fn waiter(rx: Receiver<int>) int {
+            select {
+                v = rx.recv() { return v }
+                after(150) { return -1 }
+            }
+            return -2
+        }
+        fn worker() int { return 42 }
+        fn main() {
+            let (tx, rx) = chan<int>(1)
+            let w = green waiter(rx)
+            let k = green worker()
+            print(k.get())
+            print(w.get() catch -9)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "42\n-1");
+}
+
+#[test]
+fn green_select_receives() {
+    // select from a fiber picks a ready arm: a peer sends, the select receives.
+    let out = compile_and_run_stdout(
+        r#"
+        fn producer(tx: Sender<int>) int {
+            tx.send(77)!
+            return 0
+        }
+        fn consumer(rx: Receiver<int>) int {
+            select {
+                v = rx.recv() { return v }
+                after(2000) { return -1 }
+            }
+            return -2
+        }
+        fn main() {
+            let (tx, rx) = chan<int>(1)
+            let p = green producer(tx)
+            let c = green consumer(rx)
+            print(c.get() catch -9)
+            p.get() catch 0
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "77");
+}

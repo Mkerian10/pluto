@@ -214,6 +214,34 @@ pub struct TypeEnv {
     pub di_zero_closure: Vec<String>,
     /// DI singletons that need rwlock synchronization (accessed concurrently from spawn + main)
     pub synchronized_singletons: HashSet<String>,
+    /// Functions/methods (mangled names) that can block the OS thread,
+    /// transitively — they reach a blocking leaf (channel recv/send, task
+    /// join, or a blocking C intrinsic: fs/socket/stdin/sleep). Computed by
+    /// `crate::typeck::blocking::infer_blocking_effects`. The enabling
+    /// analysis for a green-task boundary check (#369) and a safe CPU-only
+    /// spawn pool. Currently computed but not yet enforced.
+    pub blocking_fns: HashSet<String>,
+    /// Functions/methods (mangled names) that MIGHT block because they reach a
+    /// call the analysis can't resolve to a concrete target — a trait dynamic
+    /// dispatch, an unresolved method call, or a call through a closure /
+    /// function-reference variable. Conservative: a sound pool/green gate must
+    /// treat `blocking_fns ∪ blocking_opaque_fns` as "cannot prove non-blocking".
+    /// Kept separate from `blocking_fns` so a diagnostic can distinguish a
+    /// definite block from an unprovable one. Computed by `blocking::infer_blocking_effects`.
+    pub blocking_opaque_fns: HashSet<String>,
+    /// Functions/methods ILLEGAL inside a green task in v1: they reach an op
+    /// that blocks the OS thread with NO cooperative/readiness form (fs, stdin,
+    /// sleep, blocking sockets). Narrower than `blocking_fns`: channel
+    /// send/recv, task `.get()`, lock waits and `select` are NOT here because
+    /// under the green scheduler they become cooperative yields
+    /// (rfc-green-tasks.md). The green-task boundary check rejects a `green f()`
+    /// whose target is in `green_illegal_fns ∪ blocking_opaque_fns`.
+    pub green_illegal_fns: HashSet<String>,
+    /// Green-spawn sites collected during body checking: (target fn/method name,
+    /// span of the spawned call). Enforced AFTER blocking-effect inference
+    /// (which runs post-body-check), rejecting any whose target reaches a
+    /// green-illegal blocking op (#369 cp5).
+    pub green_spawn_sites: Vec<(String, crate::span::Span)>,
     /// Per-function error sets: maps function name to set of error type names it can raise.
     /// Populated by the error inference pass. Also holds per-closure nodes
     /// keyed as `<closure@span>` for closures bound to local variables.
@@ -572,6 +600,10 @@ impl TypeEnv {
             di_order: Vec::new(),
             di_zero_closure: Vec::new(),
             synchronized_singletons: HashSet::new(),
+            blocking_fns: HashSet::new(),
+            blocking_opaque_fns: HashSet::new(),
+            green_illegal_fns: HashSet::new(),
+            green_spawn_sites: Vec::new(),
             fn_errors: HashMap::new(),
             closure_call_sites: HashMap::new(),
             fallible_value_calls: HashSet::new(),

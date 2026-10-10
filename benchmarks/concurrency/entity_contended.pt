@@ -1,0 +1,42 @@
+// Four tasks hammer ONE shared entity, each taking the per-instance write
+// lock on every inc(). 4 x PER fully-contended wrlock acquisitions. This is
+// the worst case the Track A sync-elision work targets when it CANNOT prove
+// single-domain access, and the baseline a smarter lock (writer preference,
+// or a fast uncontended path) would improve.
+
+object Counter {
+    value: int
+
+    fn inc(mut self) {
+        self.value = self.value + 1
+    }
+
+    fn get(self) int {
+        return self.value
+    }
+}
+
+fn hammer(mut c: Counter, n: int) {
+    let mut i = 0
+    while i < n {
+        c.inc()
+        i = i + 1
+    }
+}
+
+fn main() {
+    let per = 500000
+    let mut c = Counter { value: 0 }
+    let start = time_ns()
+    let t1 = spawn hammer(c, per)
+    let t2 = spawn hammer(c, per)
+    let t3 = spawn hammer(c, per)
+    let t4 = spawn hammer(c, per)
+    t1.get()
+    t2.get()
+    t3.get()
+    t4.get()
+    let ms = (time_ns() - start) / 1000000
+    print(f"final: {c.get()}")
+    print(f"elapsed: {ms} ms")
+}

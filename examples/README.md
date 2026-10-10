@@ -104,6 +104,14 @@ Demonstrates `spawn` for concurrent execution: spawning functions on separate th
 cargo run -- run examples/concurrency/main.pt
 ```
 
+## green
+
+Demonstrates `green` for cheap cooperative concurrency: launching tasks on a shared scheduler instead of one OS thread each, awaiting a green task from inside another (the awaiting fiber parks and yields to its peers rather than blocking a thread), and two green fibers coordinating over a channel on one scheduler. Same `Task<T>` and sharing rules as `spawn`; blocking file/stdin/socket I/O is a compile error under `green` (use `spawn` for that).
+
+```bash
+cargo run -- run examples/green/main.pt
+```
+
 ## rust_ffi
 
 Demonstrates calling plain Rust functions from Pluto via `extern rust`. A normal Rust crate with `pub fn` functions is imported with zero boilerplate — supported types (`i64`, `f64`, `bool`) are bridged automatically.

@@ -1482,7 +1482,7 @@ struct SpawnClosureCollector<'a> {
 
 impl Visitor for SpawnClosureCollector<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
-        if let Expr::Spawn { call } = &expr.node {
+        if let Expr::Spawn { call, .. } = &expr.node {
             if let Expr::ClosureCreate { fn_name, .. } = &call.node {
                 self.names.insert(fn_name.clone());
             }

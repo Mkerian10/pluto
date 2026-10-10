@@ -780,6 +780,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Box::new(dummy(Expr::Ident("a".to_string()))),
             rhs: Box::new(dummy(Expr::Spawn {
+                green: false,
                 call: Box::new(dummy(Expr::Call {
                     name: dummy("foo".to_string()),
                     args: vec![],
