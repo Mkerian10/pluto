@@ -35,33 +35,43 @@ use crate::visit::{walk_expr, walk_stmt, Visitor};
 /// (e.g. `std.fs.read_all`) inherit the effect through the fixed point. Names
 /// are the extern symbols as declared in the stdlib `extern fn` bindings.
 pub const BLOCKING_EXTERN_LEAVES: &[&str] = &[
-    // filesystem — no portable async form; a green scheduler must offload these
-    "__pluto_fs_open", "__pluto_fs_open_read", "__pluto_fs_open_write",
-    "__pluto_fs_read", "__pluto_fs_write", "__pluto_fs_pread", "__pluto_fs_pwrite",
-    "__pluto_fs_sync", "__pluto_fs_fsync", "__pluto_fs_fdatasync",
-    "__pluto_fs_read_all", "__pluto_fs_write_all", "__pluto_fs_copy",
+    // filesystem READS that allocate a GC result (string/bytes/stat/dir list).
+    // These cannot yet run on an offload-pool worker (an unregistered worker
+    // must not touch the GC heap), so they stay green-illegal pending a
+    // registered-worker follow-up.
+    "__pluto_fs_read", "__pluto_fs_read_bytes", "__pluto_fs_read_at",
+    "__pluto_fs_read_all", "__pluto_fs_read_all_bytes",
+    "__pluto_fs_stat", "__pluto_fs_list_dir",
     // stdin / http — no cooperative form yet (stdin has no readiness model that
     // composes with the scheduler; http_read_request layers on raw reads but is
     // not yet converted).
     "__pluto_io_read_line",
     "__pluto_http_read_request",
-    // NOTE: __pluto_time_sleep_ns and the socket ops in COOPERATIVE_EXTERN_LEAVES
-    // are deliberately NOT here. Under the green scheduler they are cooperative
-    // yields (the timer wheel / the kqueue reactor), so they block a plain
-    // thread but are legal in green — handled as `coop` in the collector, like
-    // channel/task ops (feeds blocking_fns, not green_illegal_fns).
+    // NOTE: __pluto_time_sleep_ns and the ops in COOPERATIVE_EXTERN_LEAVES are
+    // deliberately NOT here. Under the green scheduler they are cooperative
+    // yields (timer wheel / kqueue-epoll reactor / fs offload pool), so they
+    // block a plain thread but are legal in green — handled as `coop` in the
+    // collector, like channel/task ops (feeds blocking_fns, not
+    // green_illegal_fns).
 ];
 
-/// Extern leaves that BLOCK a plain thread but YIELD under the green scheduler:
-/// the socket ops park the fiber on the scheduler's kqueue until the fd is
-/// ready (runtime `socket_*` / `__pluto_green_prod_wait_fd`). Like
-/// `__pluto_time_sleep_ns`, they feed `blocking_fns` but NOT `green_illegal_fns`
+/// Extern leaves that BLOCK a plain thread but YIELD under the green scheduler.
+/// Sockets park the fiber on the scheduler's reactor (kqueue/epoll) until the fd
+/// is ready; the primitive fs writes/opens are OFFLOADED to a worker pool (the
+/// fiber parks, a pool thread runs the blocking syscall, then wakes it). Like
+/// `__pluto_time_sleep_ns`, these feed `blocking_fns` but NOT `green_illegal_fns`
 /// — reaching one does not make a function illegal to call from `green`.
 pub const COOPERATIVE_EXTERN_LEAVES: &[&str] = &[
+    // sockets — reactor readiness (runtime `socket_*` / `__pluto_green_prod_wait_fd`)
     "__pluto_socket_accept", "__pluto_socket_connect",
     "__pluto_socket_read", "__pluto_socket_read_bytes",
     "__pluto_socket_write", "__pluto_socket_write_bytes",
     "__pluto_write_framed", "__pluto_read_framed",
+    // filesystem — primitive-returning ops offloaded to the pool
+    // (`__pluto_green_fs_offload`): opens, writes, close.
+    "__pluto_fs_open_read", "__pluto_fs_open_write", "__pluto_fs_open_append",
+    "__pluto_fs_close", "__pluto_fs_write",
+    "__pluto_fs_write_all", "__pluto_fs_append_all",
 ];
 
 /// Is this method resolution a blocking leaf? Channel recv/send and task join

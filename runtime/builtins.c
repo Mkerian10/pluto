@@ -2769,6 +2769,28 @@ static void set_grow(long *h, long key_type) {
 
 static __thread long __pluto_fs_saved_errno = 0;
 
+// Green offload guard. When a primitive fs op is called from a green fiber,
+// route it through the worker pool (park the fiber, run the blocking syscall on
+// a pool thread) instead of blocking the scheduler. `rawfn` takes three longs
+// and encodes its error in the return value — never the thread-local saved
+// errno, which could not cross to the worker thread. String ARGUMENTS must be
+// converted to C pointers on the fiber BEFORE this macro (so a slice's owned
+// copy is allocated on the GC-registered fiber, not the unregistered worker);
+// those pointers stay alive via the parked fiber's own stack. On a non-fiber
+// caller — and on the pool worker itself — the macro is inert and the op runs
+// inline. Test mode has no production scheduler, so it is a no-op there.
+#ifndef PLUTO_TEST_MODE
+#define FS_GREEN_OFFLOAD(rawfn, a0, a1, a2)                                    \
+    do {                                                                      \
+        if (__pluto_green_self())                                             \
+            return __pluto_green_fs_offload(                                  \
+                (long (*)(long, long, long))(rawfn),                          \
+                (long)(a0), (long)(a1), (long)(a2));                          \
+    } while (0)
+#else
+#define FS_GREEN_OFFLOAD(rawfn, a0, a1, a2) do { } while (0)
+#endif
+
 long __pluto_fs_last_errno(void) {
     return __pluto_fs_saved_errno;
 }
@@ -2782,34 +2804,37 @@ long __pluto_fs_err_noent(void) {
     return (long)ENOENT;
 }
 
-long __pluto_fs_open_read(void *path_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
+// Raw open: `path` is an already-converted C string; error encoded in the
+// return (-errno on failure, fd on success). Offloadable to a pool worker.
+static long fs_raw_open(long path_l, long flags, long mode) {
+    const char *path = (const char *)path_l;
     __pluto_gc_enter_safe_region();
-    long fd = (long)open(path, O_RDONLY);
+    long fd = (long)open(path, (int)flags, (mode_t)mode);
     long err = (long)errno;
     __pluto_gc_leave_safe_region();
     return fd < 0 ? -err : fd;
+}
+
+long __pluto_fs_open_read(void *path_str) {
+    long path = (long)__pluto_string_to_cstr(path_str);   // convert on this fiber
+    FS_GREEN_OFFLOAD(fs_raw_open, path, O_RDONLY, 0);
+    return fs_raw_open(path, O_RDONLY, 0);
 }
 
 long __pluto_fs_open_write(void *path_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
-    __pluto_gc_enter_safe_region();
-    long fd = (long)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    long err = (long)errno;
-    __pluto_gc_leave_safe_region();
-    return fd < 0 ? -err : fd;
+    long path = (long)__pluto_string_to_cstr(path_str);
+    FS_GREEN_OFFLOAD(fs_raw_open, path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    return fs_raw_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 }
 
 long __pluto_fs_open_append(void *path_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
-    __pluto_gc_enter_safe_region();
-    long fd = (long)open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    long err = (long)errno;
-    __pluto_gc_leave_safe_region();
-    return fd < 0 ? -err : fd;
+    long path = (long)__pluto_string_to_cstr(path_str);
+    FS_GREEN_OFFLOAD(fs_raw_open, path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    return fs_raw_open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
 }
 
 long __pluto_fs_close(long fd) {
+    FS_GREEN_OFFLOAD(__pluto_fs_close, fd, 0, 0);   // worker re-enters off-fiber -> inline
     __pluto_gc_enter_safe_region();
     int rc = close((int)fd);
     long err = (long)errno;
@@ -2849,6 +2874,10 @@ void *__pluto_fs_read(long fd, long max_bytes) {
 // Loops to completion (issue #367 short-write fix). Returns the byte count
 // written (== len) on success, -errno on the first failing write.
 long __pluto_fs_write(long fd, void *data_str) {
+    // string_data does not allocate (it reads the string's inline bytes), so the
+    // whole op is offloadable via its own pointer: the worker re-enters off-fiber
+    // and takes the inline path. data_str stays alive via the parked fiber's arg.
+    FS_GREEN_OFFLOAD(__pluto_fs_write, fd, data_str, 0);
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
@@ -3526,12 +3555,24 @@ static long __pluto_fs_write_whole(const char *path, const char *data, long len,
     return 0;
 }
 
+// Raw whole-file writes: `path`/`data` are already-converted C pointers, error
+// encoded in the return. One per open-mode (offload passes only three longs).
+static long fs_raw_write_trunc(long path, long data, long len) {
+    return __pluto_fs_write_whole((const char *)path, (const char *)data, len,
+                                  O_WRONLY | O_CREAT | O_TRUNC);
+}
+static long fs_raw_write_append(long path, long data, long len) {
+    return __pluto_fs_write_whole((const char *)path, (const char *)data, len,
+                                  O_WRONLY | O_CREAT | O_APPEND);
+}
+
 long __pluto_fs_write_all(void *path_str, void *data_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
+    const char *path = __pluto_string_to_cstr(path_str);   // convert on this fiber
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
-    return __pluto_fs_write_whole(path, data, len, O_WRONLY | O_CREAT | O_TRUNC);
+    FS_GREEN_OFFLOAD(fs_raw_write_trunc, path, data, len);
+    return fs_raw_write_trunc((long)path, (long)data, len);
 }
 
 long __pluto_fs_append_all(void *path_str, void *data_str) {
@@ -3539,7 +3580,8 @@ long __pluto_fs_append_all(void *path_str, void *data_str) {
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
-    return __pluto_fs_write_whole(path, data, len, O_WRONLY | O_CREAT | O_APPEND);
+    FS_GREEN_OFFLOAD(fs_raw_write_append, path, data, len);
+    return fs_raw_write_append((long)path, (long)data, len);
 }
 
 // ── Bytes-typed one-shots (issue #368) ────────────────────────────────────────

@@ -250,6 +250,10 @@ void __pluto_green_sleep_ns(long ns);
 // scheduler's kqueue. Production green scheduler only; the socket intrinsics
 // gate the call behind __pluto_green_self().
 void __pluto_green_prod_wait_fd(int fd, int for_write);
+// Offload a primitive-returning blocking fs op to the worker pool and park the
+// current green fiber until it completes (production only; the fs intrinsics
+// guard the call with __pluto_green_self()).
+long __pluto_green_fs_offload(long (*fn)(long, long, long), long a0, long a1, long a2);
 void __pluto_gc_green_set_live_sp(void *handle, void *live_sp);
 void __pluto_gc_unregister_green_context(void *handle);
 int __pluto_gc_active_tasks(void);

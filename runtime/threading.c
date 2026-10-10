@@ -1444,6 +1444,101 @@ long __pluto_green_spawn(long closure_ptr) {
     return (long)task;
 }
 
+// ── Blocking-op offload pool (fs from a green fiber) ─────────────────────────
+// A regular file has no readiness model, so a green fiber's blocking fs syscall
+// cannot park on the reactor the way a socket does. Instead it is OFFLOADED to
+// a small pool of worker threads: the fiber submits the op and PARKS (yielding
+// the scheduler to its peers); a worker runs the blocking syscall and then wakes
+// the fiber, which resumes with the result.
+//
+// SOUNDNESS — why the workers need no GC registration: these offload only
+// PRIMITIVE-returning fs ops (fd/int results). The worker allocates nothing on
+// the GC heap and only READS the fiber's argument strings. Mark-sweep never
+// moves objects, and those strings are reachable from the parked fiber's own
+// stack (its saved args), so they are marked and never swept while in use.
+// stop-the-world waits only for *registered* threads, so an unregistered worker
+// that never touches the GC heap may run freely during a collection — which is
+// exactly the case here. Allocating reads (read/read_all/stat/list_dir) return
+// GC objects and would need a registered worker + result-root handling; they
+// stay green-illegal pending that follow-up.
+typedef long (*PlutoFsFn)(long, long, long);
+
+typedef struct FsJob {
+    PlutoFsFn fn;
+    long a0, a1, a2;
+    long result;
+    void *fiber;            // parked green fiber to wake on completion
+    struct FsJob *next;
+} FsJob;
+
+static pthread_mutex_t fs_pool_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  fs_pool_cv = PTHREAD_COND_INITIALIZER;
+static FsJob *fs_job_head = NULL, *fs_job_tail = NULL;
+static int fs_pool_started = 0;
+
+#define FS_POOL_WORKERS 4
+
+static void *fs_worker(void *arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&fs_pool_mu);
+        while (!fs_job_head) pthread_cond_wait(&fs_pool_cv, &fs_pool_mu);
+        FsJob *j = fs_job_head;
+        fs_job_head = j->next;
+        if (!fs_job_head) fs_job_tail = NULL;
+        pthread_mutex_unlock(&fs_pool_mu);
+
+        // Run the blocking op. It brackets its own syscalls in GC safe regions;
+        // on this unregistered worker those are no-ops, which is fine (see the
+        // soundness note above — the worker touches no GC heap).
+        j->result = j->fn(j->a0, j->a1, j->a2);
+
+        // Publish the result, then wake the parked fiber on its home scheduler.
+        // The store to j->result is ordered before the wake by the scheduler
+        // queue lock the fiber re-acquires on resume. `j` lives on the fiber's
+        // parked stack, valid until it resumes.
+        __pluto_green_wake(j->fiber);
+    }
+    return NULL;
+}
+
+static void fs_pool_ensure_started(void) {
+    pthread_mutex_lock(&fs_pool_mu);
+    if (!fs_pool_started) {
+        fs_pool_started = 1;
+        for (int i = 0; i < FS_POOL_WORKERS; i++) {
+            pthread_t t;
+            if (pthread_create(&t, NULL, fs_worker, NULL) == 0) pthread_detach(t);
+        }
+    }
+    pthread_mutex_unlock(&fs_pool_mu);
+}
+
+// Handoff (runs on the scheduler stack once the fiber has switched out): enqueue
+// the job and signal a worker. Enqueuing only now is the gopark invariant — a
+// worker cannot wake the fiber before it has fully switched out.
+static void fs_offload_handoff(void *arg) {
+    FsJob *j = (FsJob *)arg;
+    pthread_mutex_lock(&fs_pool_mu);
+    j->next = NULL;
+    if (fs_job_tail) fs_job_tail->next = j; else fs_job_head = j;
+    fs_job_tail = j;
+    pthread_cond_signal(&fs_pool_cv);
+    pthread_mutex_unlock(&fs_pool_mu);
+}
+
+// Offload a primitive blocking fs op from the CURRENT green fiber: park the
+// fiber, run fn(a0,a1,a2) on a pool worker, return its result. Only called when
+// already on a green fiber (the fs intrinsics guard with __pluto_green_self()).
+long __pluto_green_fs_offload(PlutoFsFn fn, long a0, long a1, long a2) {
+    fs_pool_ensure_started();
+    FsJob job;
+    job.fn = fn; job.a0 = a0; job.a1 = a1; job.a2 = a2;
+    job.result = 0; job.fiber = __pluto_green_self(); job.next = NULL;
+    __pluto_green_park(fs_offload_handoff, &job);
+    return job.result;
+}
+
 long __pluto_task_get(long task_ptr) {
     long *task = (long *)task_ptr;
     TaskSync *sync = (TaskSync *)task[4];

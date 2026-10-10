@@ -1779,6 +1779,67 @@ fn green_rejects_blocking_op() {
 }
 
 #[test]
+fn green_fs_writes_are_cooperative() {
+    // Primitive fs writes are legal in a green task: a regular file has no
+    // readiness model, so instead of blocking the scheduler the op is OFFLOADED
+    // to a worker pool (the fiber parks, a pool thread runs the blocking
+    // syscall, then wakes it). This opens/writes/closes files from many green
+    // fibers on one scheduler and verifies the contents — proving the ops are no
+    // longer green-illegal AND that the offload round-trip is correct. (Reads,
+    // which allocate a GC result, stay green-illegal — see green_rejects_blocking_op.)
+    let out = compile_and_run_stdout(
+        r#"
+        extern fn __pluto_fs_open_write(path: string) int
+        extern fn __pluto_fs_open_read(path: string) int
+        extern fn __pluto_fs_write(fd: int, data: string) int
+        extern fn __pluto_fs_read(fd: int, max_bytes: int) string
+        extern fn __pluto_fs_close(fd: int) int
+
+        fn writer(path: string, content: string) int {
+            let fd = __pluto_fs_open_write(path)
+            if fd < 0 {
+                return 0
+            }
+            __pluto_fs_write(fd, content)
+            __pluto_fs_close(fd)
+            return 1
+        }
+        fn main() {
+            let n = 12
+            let mut tasks = [green writer(f"/tmp/pluto_gfs_coop_0", f"data-0")]
+            let mut i = 1
+            while i < n {
+                tasks.push(green writer(f"/tmp/pluto_gfs_coop_{i}", f"data-{i}"))
+                i = i + 1
+            }
+            let mut wrote = 0
+            let mut j = 0
+            while j < n {
+                wrote = wrote + (tasks[j].get() catch 0)
+                j = j + 1
+            }
+            // Read back on the main thread (off-fiber blocking path, allowed).
+            let mut ok = 0
+            let mut k = 0
+            while k < n {
+                let fd = __pluto_fs_open_read(f"/tmp/pluto_gfs_coop_{k}")
+                if fd >= 0 {
+                    let got = __pluto_fs_read(fd, 1024)
+                    __pluto_fs_close(fd)
+                    if got == f"data-{k}" {
+                        ok = ok + 1
+                    }
+                }
+                k = k + 1
+            }
+            print(ok)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "12");
+}
+
+#[test]
 fn green_sleep_is_cooperative() {
     // Sleep is legal in a green task (#369 cp6): it parks on the scheduler's
     // timer wheel instead of blocking the thread, so two green sleeps overlap.
