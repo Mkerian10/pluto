@@ -1155,14 +1155,11 @@ void __pluto_test_timed_yield(void) {
 
 // ── Production mode: pthread-based concurrency ──
 
-// Green fibers parked in .get() on this task (cp4). Distinct from cond waiters
-// (pthread/main threads): a fiber cannot block the scheduler thread, so it
-// parks and is re-readied by __pluto_green_wake when the task completes.
-typedef struct GreenWaiter {
-    void *fiber;
-    struct GreenWaiter *next;
-} GreenWaiter;
-
+// GreenWaiter (a fiber parked on a task/channel) is declared in builtins.h —
+// shared by TaskSync here and ChannelSync. green_waiters is the list of fibers
+// parked in .get() on this task (cp4), distinct from cond waiters (pthread/main
+// threads): a fiber cannot block the scheduler thread, so it parks and is
+// re-readied by __pluto_green_wake when the task completes.
 typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
@@ -2250,16 +2247,83 @@ static int chan_cond_timedwait(pthread_cond_t *cond, ChannelSync *sync,
     return rc;
 }
 
+// ── Green-fiber parking on channels (cp4) ────────────────────────────────────
+//
+// A fiber that would block on a channel (full on send, empty on recv) parks the
+// FIBER instead of the scheduler thread. The channel predicate is not monotonic
+// (a peer can consume/produce between wake and resume), so the caller re-checks
+// under the lock in its wait loop, exactly like chan_cond_wait.
+
+// Park handoff: runs on the scheduler stack with the channel mutex still held
+// by this (scheduler) thread. Enqueues the fiber on `*tail` FIFO, then releases
+// the mutex — publishing the waiter atomically w.r.t. any waker, which must
+// take the mutex to see or wake it.
+typedef struct { ChannelSync *sync; GreenWaiter **head; GreenWaiter **tail; void *self; } ChanPark;
+static void chan_green_handoff(void *p) {
+    ChanPark *cp = (ChanPark *)p;
+    GreenWaiter *w = (GreenWaiter *)malloc(sizeof(GreenWaiter));
+    w->fiber = cp->self; w->next = NULL;
+    if (*cp->tail) (*cp->tail)->next = w; else *cp->head = w;
+    *cp->tail = w;
+    pthread_mutex_unlock(&cp->sync->mutex);
+}
+
+// Suspend the current fiber on a channel wait queue, releasing the channel
+// mutex, and re-acquire it on wake. Caller holds sync->mutex; returns with it
+// held. Mirrors chan_cond_wait for the green tier.
+static void chan_green_park(ChannelSync *sync, GreenWaiter **head, GreenWaiter **tail, void *self) {
+    ChanPark cp = { sync, head, tail, self };
+    __pluto_green_park(chan_green_handoff, &cp);  // handoff unlocks sync->mutex
+    chan_lock(sync);                              // re-acquire on resume
+}
+
+// Wake one waiter from a green queue (FIFO). Caller holds sync->mutex. Returns
+// 1 if a green fiber was woken, 0 if the queue was empty.
+static int chan_wake_one_green(GreenWaiter **head, GreenWaiter **tail) {
+    GreenWaiter *w = *head;
+    if (!w) return 0;
+    *head = w->next;
+    if (!*head) *tail = NULL;
+    void *f = w->fiber; free(w);
+    __pluto_green_wake(f);
+    return 1;
+}
+
+// Wake exactly one receiver, preferring a parked green fiber over a cond
+// waiter. Caller holds sync->mutex. (A woken loser simply re-checks and
+// re-waits, so waking the "wrong" tier is never incorrect, only wasteful.)
+static void chan_wake_one_recv(ChannelSync *sync) {
+    if (chan_wake_one_green(&sync->green_recv_head, &sync->green_recv_tail)) return;
+    if (sync->recv_waiters > 0) pthread_cond_signal(&sync->not_empty);
+}
+static void chan_wake_one_send(ChannelSync *sync) {
+    if (chan_wake_one_green(&sync->green_send_head, &sync->green_send_tail)) return;
+    if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
+}
+
+// Wake every green fiber parked on this channel (both directions). Caller holds
+// sync->mutex. Used by close, which must wake all waiters so each re-checks and
+// sees the closed flag.
+static void chan_wake_all_green(ChannelSync *sync) {
+    while (chan_wake_one_green(&sync->green_recv_head, &sync->green_recv_tail)) {}
+    while (chan_wake_one_green(&sync->green_send_head, &sync->green_send_tail)) {}
+}
+
 long __pluto_chan_send(long handle, long value) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
+    void *self = __pluto_green_self();
 
     chan_lock(sync);
     while (ch[3] == ch[2] && !ch[6]) {
-        sync->send_waiters++;
-        chan_cond_wait(&sync->not_full, sync);
-        sync->send_waiters--;
-        // Check for task cancellation after waking from condvar
+        if (self) {
+            chan_green_park(sync, &sync->green_send_head, &sync->green_send_tail, self);
+        } else {
+            sync->send_waiters++;
+            chan_cond_wait(&sync->not_full, sync);
+            sync->send_waiters--;
+        }
+        // Check for task cancellation after waking
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
             task_raise_cancelled();
@@ -2275,7 +2339,7 @@ long __pluto_chan_send(long handle, long value) {
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
-    if (sync->recv_waiters > 0) pthread_cond_signal(&sync->not_empty);
+    chan_wake_one_recv(sync);
     pthread_mutex_unlock(&sync->mutex);
     return value;
 }
@@ -2283,13 +2347,18 @@ long __pluto_chan_send(long handle, long value) {
 long __pluto_chan_recv(long handle) {
     long *ch = (long *)handle;
     ChannelSync *sync = (ChannelSync *)ch[0];
+    void *self = __pluto_green_self();
 
     chan_lock(sync);
     while (ch[3] == 0 && !ch[6]) {
-        sync->recv_waiters++;
-        chan_cond_wait(&sync->not_empty, sync);
-        sync->recv_waiters--;
-        // Check for task cancellation after waking from condvar
+        if (self) {
+            chan_green_park(sync, &sync->green_recv_head, &sync->green_recv_tail, self);
+        } else {
+            sync->recv_waiters++;
+            chan_cond_wait(&sync->not_empty, sync);
+            sync->recv_waiters--;
+        }
+        // Check for task cancellation after waking
         if (__pluto_current_task && __pluto_current_task[6]) {
             pthread_mutex_unlock(&sync->mutex);
             task_raise_cancelled();
@@ -2305,7 +2374,7 @@ long __pluto_chan_recv(long handle) {
     long val = buf[ch[4]];
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
-    if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
+    chan_wake_one_send(sync);
     pthread_mutex_unlock(&sync->mutex);
     return val;
 }
@@ -2361,7 +2430,7 @@ long __pluto_chan_recv_timeout(long handle, long timeout_ms) {
     long val = buf[ch[4]];
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
-    if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
+    chan_wake_one_send(sync);
     pthread_mutex_unlock(&sync->mutex);
     return val;
 }
@@ -2385,7 +2454,7 @@ long __pluto_chan_try_send(long handle, long value) {
     buf[ch[5]] = value;
     ch[5] = (ch[5] + 1) % ch[2];
     ch[3]++;
-    if (sync->recv_waiters > 0) pthread_cond_signal(&sync->not_empty);
+    chan_wake_one_recv(sync);
     pthread_mutex_unlock(&sync->mutex);
     return value;
 }
@@ -2409,7 +2478,7 @@ long __pluto_chan_try_recv(long handle) {
     long val = buf[ch[4]];
     ch[4] = (ch[4] + 1) % ch[2];
     ch[3]--;
-    if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
+    chan_wake_one_send(sync);
     pthread_mutex_unlock(&sync->mutex);
     return val;
 }
@@ -2422,6 +2491,7 @@ void __pluto_chan_close(long handle) {
     ch[6] = 1;
     pthread_cond_broadcast(&sync->not_empty);
     pthread_cond_broadcast(&sync->not_full);
+    chan_wake_all_green(sync);   // fibers parked here must wake to see closed
     pthread_mutex_unlock(&sync->mutex);
 }
 
@@ -2686,7 +2756,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                     long val = cbuf[ch[4]];
                     ch[4] = (ch[4] + 1) % ch[2];
                     ch[3]--;
-                    if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
+                    chan_wake_one_send(sync);
                     pthread_mutex_unlock(&sync->mutex);
                     values[i] = val;
                     return (long)i;
@@ -2702,7 +2772,7 @@ long __pluto_select(long buffer_ptr, long count, long has_default, long timeout_
                     cbuf[ch[5]] = values[i];
                     ch[5] = (ch[5] + 1) % ch[2];
                     ch[3]++;
-                    if (sync->recv_waiters > 0) pthread_cond_signal(&sync->not_empty);
+                    chan_wake_one_recv(sync);
                     pthread_mutex_unlock(&sync->mutex);
                     return (long)i;
                 }

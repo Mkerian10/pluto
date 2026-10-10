@@ -1677,3 +1677,83 @@ fn green_task_method_call() {
     );
     assert_eq!(out.trim(), "15");
 }
+
+// ── Green cooperative scheduling: park/await/channels (#369 cp4) ──────────────
+
+#[test]
+fn green_await_green_nested() {
+    // A green fiber spawns another green task and awaits it from WITHIN the
+    // fiber: the awaiting fiber must park (yield the scheduler), not block the
+    // scheduler thread, or the inner task could never run.
+    let out = compile_and_run_stdout(
+        r#"
+        fn inner(x: int) int { return x * 2 }
+        fn outer(x: int) int {
+            let t = green inner(x)
+            return t.get() + 1
+        }
+        fn main() {
+            let o = green outer(10)
+            print(o.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "21");
+}
+
+#[test]
+fn green_fiber_awaits_pthread_task() {
+    // Cross-tier await: a green fiber awaits a pthread spawn task. The pthread
+    // completion must wake the parked fiber across threads.
+    let out = compile_and_run_stdout(
+        r#"
+        fn work(x: int) int { return x + 1 }
+        fn mixed(x: int) int {
+            let t = spawn work(x)
+            return t.get() + 100
+        }
+        fn main() {
+            let m = green mixed(5)
+            print(m.get())
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "106");
+}
+
+#[test]
+fn green_channel_ping_pong() {
+    // Two green fibers on one scheduler, a cap-1 channel: the producer parks on
+    // a full channel and the consumer parks on an empty one, each waking the
+    // other. Would deadlock the scheduler if send/recv did not park the fiber.
+    let out = compile_and_run_stdout(
+        r#"
+        fn producer(tx: Sender<int>, n: int) int {
+            let mut i = 1
+            while i <= n {
+                tx.send(i)!
+                i = i + 1
+            }
+            return 0
+        }
+        fn consumer(rx: Receiver<int>, n: int) int {
+            let mut acc = 0
+            let mut k = 0
+            while k < n {
+                acc = acc + (rx.recv() catch 0)
+                k = k + 1
+            }
+            return acc
+        }
+        fn main() {
+            let (tx, rx) = chan<int>(1)
+            let p = green producer(tx, 100)
+            let c = green consumer(rx, 100)
+            let sum = c.get()
+            p.get() catch 0
+            print(sum)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "5050");
+}

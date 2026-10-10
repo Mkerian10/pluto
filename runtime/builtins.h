@@ -108,12 +108,25 @@ typedef struct GCHeader {
 // ── Channel Sync (Production Mode Only) ──────────────────────────────────────
 
 #ifndef PLUTO_TEST_MODE
+// A green fiber parked on a task or channel (#369 cp4). pthread/main waiters
+// block on a condvar; a fiber cannot block the scheduler thread, so it parks
+// and is re-readied by __pluto_green_wake. Queued FIFO for fairness.
+typedef struct GreenWaiter {
+    void *fiber;
+    struct GreenWaiter *next;
+} GreenWaiter;
+
 typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t not_empty;
     pthread_cond_t not_full;
     long recv_waiters;   // receivers parked on not_empty (guarded by mutex)
     long send_waiters;   // senders parked on not_full  (guarded by mutex)
+    // Green fibers parked on this channel (cp4), guarded by `mutex`. A sender
+    // wakes one green_recv (preferring it to a cond waiter); a receiver wakes
+    // one green_send; close wakes them all.
+    GreenWaiter *green_recv_head, *green_recv_tail;
+    GreenWaiter *green_send_head, *green_send_tail;
 } ChannelSync;
 #endif
 
