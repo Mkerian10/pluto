@@ -253,13 +253,17 @@ schema LineItem {
     invariant self.quantity > 0                 // checked at the door
 }
 
-// A PATCH body reuses CreateOrder's fields by inlining them. An inlined field
-// keeps the source field's type, claims, and identity; a trailing ? makes it
-// optional here. No derived-type keyword.
+// A PATCH body inlines CreateOrder: its fields coalesce into UpdateOrder's
+// own body with the same names, types, claims, and identity. The trailing ?
+// makes every inlined field optional here.
 schema UpdateOrder {
-    CreateOrder.note?
-    CreateOrder.currency?
-    CreateOrder.items?
+    ...CreateOrder?
+}
+
+// A response body inlines a class and adds its own fields.
+schema OrderResponse {
+    ...Order
+    created_at: int
 }
 ```
 
@@ -279,14 +283,17 @@ schema UpdateOrder {
   `none`. Defaulted fields are filled at decode. Tri-state presence (absent
   distinct from null) is not part of this phase; it arrives with streaming
   decode in phase 3, where partial values exist for a structural reason.
-- **Inlined fields.** A line of the form `Other.field` inside a schema body
-  inlines that field: same name, type, claims, and UUID as the source, which
-  may be a schema or a class. A trailing `?` makes it optional here. Because
-  the identity is shared, admission between the two shapes and the evolution
-  diff both know they are the same field, and a rename at the source is not
-  a rename at the inlining site. Inlined fields cannot be renamed. This is how
-  request, response, and PATCH bodies share fields without a derived-type
-  form; whole-schema spread (`...Other`) stays deferred (D8).
+- **Inlining.** A line `...Other` inside a schema body inlines every field of
+  `Other`, a schema or a class: the fields coalesce into this body with the
+  same names, types, claims, and UUIDs, with no nesting. `...Other?` makes
+  each inlined field optional here, which is the PATCH form. `Other.field`
+  and `Other.field?` inline one field, for picking a subset. Inlined fields
+  cannot be renamed, and a name collision between two inlined sets or with
+  the body's own fields is an error at the declaration, never a silent merge.
+  Because identity is shared, admission between the two shapes and the
+  evolution diff both know they are the same field, and a rename at the
+  source is not a rename at the inlining site. This is how request, response,
+  and PATCH bodies share fields without a derived-type form.
 - **Unknown fields.** Captured by the decoder into a compiler-owned hidden
   bag, re-emitted by an encoder of the same family on encode, never visible as
   a user field (so the in-band `__variant`/`__bytes` collision of today's JSON
@@ -298,7 +305,6 @@ schema UpdateOrder {
   the class under the usual invariant proof. The decode coverage theorem
   (`check_decode_coverage`) extends to schemas: an invariant- or `priv`-bearing
   schema at any decode site has a validator by construction.
-- **Spread** (`...Timestamped`) is deferred (decision D8).
 - **Conditional fields** (`when`) from the February RFC are dropped: that is a
   data-carrying enum whose JSON spelling flattens the payload, which is an
   encoder parameter.
@@ -466,7 +472,8 @@ and is independently mergeable. Each names the dogfood that proves it.
 ### Phase 2 — Schema · XL
 
 - Lexer/parser/AST/binary (SCHEMA_VERSION bump); `PlutoType::Schema`; closure
-  check; presence modes; defaults; field inlining; tolerant decode lowering; unknown bag;
+  check; presence modes; defaults; inlining (`...Other`, `...Other?`, `Other.field`); tolerant decode
+  lowering; unknown bag;
   decode-coverage extension; SDK/MCP; `pluto analyze` perception surface.
 - `examples/schema/` (an HTTP API with `CreateOrder` → `Order` admission and a
   PATCH endpoint); book chapter "Schemas: the open world."
@@ -537,8 +544,9 @@ and is independently mergeable. Each names the dogfood that proves it.
 7. **D7 — Skew policy.** Strict reject unless the plan has verified the pair
    (*recommend*) vs always-tolerant additive reads. The strict form keeps the
    "every surviving claim has a warrant" discipline.
-8. **D8 — Spread composition.** Defer (*recommend*); revisit when a dogfood
-   API has three schemas sharing five fields.
+8. **D8 — Inlining.** *Decided in review, 2026-10-13:* `...Other` is the
+   primary composition form, `...Other?` the PATCH form, `Other.field` the
+   subset form; collisions are declaration errors. No further decision owed.
 9. **D9 — Sequencing against the plan RFC.** Phases 0–4 proceed now; phase 5
    waits (*recommend*) vs designing the plan artifact inside this campaign.
 
