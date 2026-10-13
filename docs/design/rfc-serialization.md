@@ -96,7 +96,7 @@ Protobuf's mistake is conflating the two in one file.
 **Claims, not instructions.** Per-field attributes are welcome when they state
 something true about the data independent of any single encoder, the compiler
 can enforce, prove, diff, or plan with them, and they do not name code. `priv`,
-`from`, `as "key"`, PII, retention, width are claims. `encode_with = fn` is an
+`from`, PII, retention, width are claims. `encode_with = fn` is an
 instruction and is refused. This is the properties doctrine (judgmental only,
 generative never) applied to fields.
 
@@ -214,7 +214,12 @@ let o = json.decode<Order>(s)!             // class: strict; schema: tolerant
 
 The DOM (`Json`) stays for genuinely dynamic data. Enum representation in JSON
 (externally tagged, internally tagged with a key, adjacently tagged, untagged)
-is a parameter of `JsonEncoder`, not a claim on the enum (decision D4).
+is a parameter of `JsonEncoder`, not a claim on the enum (decision D4). So is
+the key naming convention (snake_case as written, or camelCase): a field's
+external name is a property of the format family, not of the field, and no
+per-field rename syntax is reserved. A true one-off rename, if one ever shows
+up, fits the claims doctrine as `satisfies encode.name(self.f, "externalName")`
+without a keyword.
 
 **User encoders.** A foreign format is one `impl Encoder` + one `impl Decoder`,
 written once per format. Styx's Kafka protocol: i16 string lengths, `-1` as
@@ -235,7 +240,7 @@ at call sites, which turns the Styx `-1` sentinel bug into a compile error.
 
 ```pluto
 schema CreateOrder {
-    customer_email: string as "customerEmail"   // required; external key differs
+    customer_email: string                      // required
     items: [LineItem]                           // required
     note: string?                               // optional: absent and null both read as none
     currency: string = "USD"                    // defaulted at decode; expression must be pure
@@ -319,7 +324,6 @@ Claims attach to fields via `satisfies` (library-defined) or a bare marker
 claim: true of the data independent of any encoder; enforceable, provable,
 diffable, or plannable by the compiler; names no code.
 
-- **`as "key"`** — the field's external name for key-based encoders. Diffed.
 - **`std.width`** — `satisfies width.u64(self.ts)` etc. Treated by the facts
   engine as an invariant (`0 <= self.ts < 2^64`, overflow-trapped per #443)
   and surfaced to encoders via `FieldCtx.range`. This is how Charon's `value`
@@ -449,7 +453,7 @@ and is independently mergeable. Each names the dogfood that proves it.
 ### Phase 2 — Schema · XL
 
 - Lexer/parser/AST/binary (SCHEMA_VERSION bump); `PlutoType::Schema`; closure
-  check; presence modes; defaults; `partial of`; `as "key"`; presence facts
+  check; presence modes; defaults; `partial of`; presence facts
   and `is present` narrowing; tolerant decode lowering; unknown bag;
   decode-coverage extension; SDK/MCP; `pluto analyze` perception surface.
 - `examples/schema/` (an HTTP API with `CreateOrder` → `Order` admission and a
