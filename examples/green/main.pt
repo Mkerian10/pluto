@@ -8,10 +8,12 @@
 // async/await coloring.
 //
 // Rule of thumb: `green` for fine-grained, coordination-heavy work (lots of
-// small tasks passing messages); `spawn` when the work must run on its own OS
-// thread — CPU-bound parallelism, or anything that does blocking file/stdin/
-// socket I/O (those are a compile error under `green`, since they would stall
-// the cooperative scheduler).
+// small tasks passing messages) and for I/O-bound fan-out — a green fiber that
+// blocks on a socket parks on the scheduler's event loop and yields the thread,
+// so one scheduler can drive thousands of connections. Use `spawn` when the
+// work must run on its own OS thread: CPU-bound parallelism, or file/stdin I/O,
+// which has no cooperative form and is a compile error under `green` (it would
+// stall the cooperative scheduler).
 
 fn square(x: int) int {
     return x * x

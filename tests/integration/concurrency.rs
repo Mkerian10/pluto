@@ -1761,13 +1761,17 @@ fn green_channel_ping_pong() {
 #[test]
 fn green_rejects_blocking_op() {
     // A green task that reaches a blocking op with no cooperative form (here a
-    // file read) is rejected at compile time (#369 cp5): it would stall the
-    // green scheduler. The identical function under `spawn` is fine.
+    // stdin read — stdin has no readiness model and is not offloaded) is rejected
+    // at compile time (#369 cp5): it would stall the green scheduler. The
+    // identical function under `spawn` is fine. (fs reads/writes and sockets ARE
+    // cooperative now, so they are no longer rejected — see green_fs_is_cooperative
+    // and green_sockets_are_cooperative.)
     compile_should_fail_with(
         r#"
-        extern fn __pluto_fs_read(fd: int) int
+        extern fn __pluto_io_read_line() string
         fn rd() int {
-            return __pluto_fs_read(3)
+            let line = __pluto_io_read_line()
+            return line.len()
         }
         fn main() {
             let t = green rd()
@@ -1776,6 +1780,79 @@ fn green_rejects_blocking_op() {
         "#,
         "cannot run as a green task",
     );
+}
+
+#[test]
+fn green_fs_is_cooperative() {
+    // fs I/O is legal in a green task: a regular file has no readiness model, so
+    // instead of blocking the scheduler the op is OFFLOADED to a worker pool (the
+    // fiber parks, a pool thread runs the blocking syscall, then wakes it). Here
+    // one set of green fibers opens/writes/closes files and a second set READS
+    // them back and verifies — both the write side (primitive offload) and the
+    // read side (scratch-split: the worker reads into malloc, the fiber allocates
+    // the GC string on resume) run cooperatively on one scheduler. (Metadata
+    // reads — stat/list_dir — stay green-illegal; see green_rejects_blocking_op.)
+    let out = compile_and_run_stdout(
+        r#"
+        extern fn __pluto_fs_open_write(path: string) int
+        extern fn __pluto_fs_open_read(path: string) int
+        extern fn __pluto_fs_write(fd: int, data: string) int
+        extern fn __pluto_fs_read(fd: int, max_bytes: int) string
+        extern fn __pluto_fs_close(fd: int) int
+
+        fn writer(path: string, content: string) int {
+            let fd = __pluto_fs_open_write(path)
+            if fd < 0 {
+                return 0
+            }
+            __pluto_fs_write(fd, content)
+            __pluto_fs_close(fd)
+            return 1
+        }
+        fn reader(path: string, expect: string) int {
+            let fd = __pluto_fs_open_read(path)
+            if fd < 0 {
+                return 0
+            }
+            let got = __pluto_fs_read(fd, 1024)
+            __pluto_fs_close(fd)
+            if got == expect {
+                return 1
+            }
+            return 0
+        }
+        fn main() {
+            let n = 12
+            let mut ws = [green writer(f"/tmp/pluto_gfs_coop_0", f"data-0")]
+            let mut i = 1
+            while i < n {
+                ws.push(green writer(f"/tmp/pluto_gfs_coop_{i}", f"data-{i}"))
+                i = i + 1
+            }
+            let mut wrote = 0
+            let mut j = 0
+            while j < n {
+                wrote = wrote + (ws[j].get() catch 0)
+                j = j + 1
+            }
+            // Read back on GREEN fibers (reads are cooperative via the pool too).
+            let mut rs = [green reader(f"/tmp/pluto_gfs_coop_0", f"data-0")]
+            let mut k = 1
+            while k < n {
+                rs.push(green reader(f"/tmp/pluto_gfs_coop_{k}", f"data-{k}"))
+                k = k + 1
+            }
+            let mut ok = 0
+            let mut m = 0
+            while m < n {
+                ok = ok + (rs[m].get() catch 0)
+                m = m + 1
+            }
+            print(wrote + ok)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "24");
 }
 
 #[test]
@@ -1799,6 +1876,89 @@ fn green_sleep_is_cooperative() {
         "#,
     );
     assert_eq!(out.trim(), "3");
+}
+
+#[test]
+fn green_sockets_are_cooperative() {
+    // Socket I/O is legal in a green task (#369, kqueue reactor): a read/accept
+    // that would block parks the fiber on the scheduler's kqueue until the fd is
+    // ready, instead of stalling the thread. This runs an echo server, its
+    // per-connection handlers, and all clients as green fibers on ONE scheduler
+    // thread — impossible if any socket op blocked the thread. Proves the ops
+    // are no longer green-illegal AND that many connections interleave on one
+    // thread. (Externs inlined to keep the test stdlib-free.)
+    let out = compile_and_run_stdout(
+        r#"
+        extern fn __pluto_socket_create(domain: int, sock_type: int, protocol: int) int
+        extern fn __pluto_socket_bind(fd: int, host: string, port: int) int
+        extern fn __pluto_socket_listen(fd: int, backlog: int) int
+        extern fn __pluto_socket_accept(fd: int) int
+        extern fn __pluto_socket_connect(fd: int, host: string, port: int) int
+        extern fn __pluto_socket_read(fd: int, max_bytes: int) string
+        extern fn __pluto_socket_write(fd: int, data: string) int
+        extern fn __pluto_socket_close(fd: int) int
+        extern fn __pluto_socket_set_reuseaddr(fd: int) int
+        extern fn __pluto_socket_get_port(fd: int) int
+
+        fn handle(conn: int) int {
+            let msg = __pluto_socket_read(conn, 1024)
+            __pluto_socket_write(conn, msg)
+            __pluto_socket_close(conn)
+            return 0
+        }
+        fn server(listen_fd: int, n: int) int {
+            let mut i = 0
+            while i < n {
+                let conn = __pluto_socket_accept(listen_fd)
+                if conn >= 0 {
+                    green handle(conn).detach()
+                }
+                i = i + 1
+            }
+            return 0
+        }
+        fn client(port: int, id: int) int {
+            let fd = __pluto_socket_create(2, 1, 0)
+            if __pluto_socket_connect(fd, "127.0.0.1", port) < 0 {
+                __pluto_socket_close(fd)
+                return 0
+            }
+            let msg = f"m{id}"
+            __pluto_socket_write(fd, msg)
+            let reply = __pluto_socket_read(fd, 1024)
+            __pluto_socket_close(fd)
+            if reply == msg {
+                return 1
+            }
+            return 0
+        }
+        fn main() {
+            let n = 25
+            let listen_fd = __pluto_socket_create(2, 1, 0)
+            __pluto_socket_set_reuseaddr(listen_fd)
+            __pluto_socket_bind(listen_fd, "127.0.0.1", 0)
+            __pluto_socket_listen(listen_fd, 128)
+            let port = __pluto_socket_get_port(listen_fd)
+            let srv = green server(listen_fd, n)
+            let mut clients = [green client(port, 0)]
+            let mut i = 1
+            while i < n {
+                clients.push(green client(port, i))
+                i = i + 1
+            }
+            let mut ok = 0
+            let mut j = 0
+            while j < n {
+                ok = ok + (clients[j].get() catch 0)
+                j = j + 1
+            }
+            srv.get()
+            __pluto_socket_close(listen_fd)
+            print(ok)
+        }
+        "#,
+    );
+    assert_eq!(out.trim(), "25");
 }
 
 #[test]

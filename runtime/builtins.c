@@ -1526,6 +1526,108 @@ static void __pluto_ignore_sigpipe(void) {
     signal(SIGPIPE, SIG_IGN);
 }
 
+// ── Cooperative socket readiness ─────────────────────────────────────────────
+//
+// A socket op issued from a green fiber must not block the scheduler's OS
+// thread (one thread drives many fibers). Instead the op makes the fd
+// non-blocking, attempts the syscall, and on EWOULDBLOCK parks the fiber on the
+// scheduler's kqueue until the fd is ready — the thread runs other fibers
+// meanwhile. Off a fiber (a plain `spawn` thread or main) there is no
+// scheduler, so the op keeps its original blocking semantics: the fd stays
+// blocking and the syscall blocks the thread as before.
+//
+// Production only: in test mode (DST) there is no production scheduler and no
+// kqueue, so socket_is_green() is always false and every op blocks — the
+// pre-existing behavior.
+#ifndef PLUTO_TEST_MODE
+static int socket_is_green(void) { return __pluto_green_self() != NULL; }
+
+// Make fd non-blocking (idempotent). Needed before the first syscall on the
+// green path so EWOULDBLOCK surfaces instead of blocking the thread.
+static void socket_set_nonblocking(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+#else
+static int socket_is_green(void) { return 0; }
+static void socket_set_nonblocking(int fd) { (void)fd; }
+#endif
+
+// True if `e` is the would-block errno for a non-blocking socket.
+static inline int socket_would_block(int e) {
+    return e == EAGAIN || e == EWOULDBLOCK;
+}
+
+// A green read's cooperative wait plan, decided once before the syscall loop:
+//   mode 0 = blocking: a non-green caller — the read blocks the thread, and a
+//            receive deadline (SO_RCVTIMEO) fires in the kernel as before.
+//   mode 1 = untimed cooperative: a green caller with no deadline; park on
+//            fd-readiness (zero latency; the scheduler serves peers meanwhile).
+//   mode 2 = timed cooperative: a green caller with a deadline; poll the
+//            non-blocking fd, yielding via the scheduler timer between tries,
+//            until data arrives or the deadline passes. We track the deadline
+//            ourselves — SO_RCVTIMEO cannot fire on a non-blocking fd — so the
+//            fiber yields instead of blocking the scheduler for the timeout.
+typedef struct { int mode; long deadline_ns; } CoopRead;
+
+#ifndef PLUTO_TEST_MODE
+static long coop_now_ns(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000000000L + (long)ts.tv_nsec;
+}
+// SO_RCVTIMEO as nanoseconds, or 0 if no receive deadline is set.
+static long socket_rcvtimeo_ns(int fd) {
+    struct timeval tv; socklen_t len = sizeof(tv);
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, &len) < 0) return 0;
+    return (long)tv.tv_sec * 1000000000L + (long)tv.tv_usec * 1000L;
+}
+#endif
+
+// Decide the wait plan for a read on `fd` (see CoopRead) and ready the fd.
+static CoopRead socket_read_begin(int fd) {
+    CoopRead c = {0, 0};
+#ifndef PLUTO_TEST_MODE
+    if (!socket_is_green()) return c;
+    long timeout_ns = socket_rcvtimeo_ns(fd);
+    socket_set_nonblocking(fd);
+    if (timeout_ns > 0) { c.mode = 2; c.deadline_ns = coop_now_ns() + timeout_ns; }
+    else { c.mode = 1; }
+#else
+    (void)fd;
+#endif
+    return c;
+}
+
+// Called on EWOULDBLOCK. Returns 1 = retry the read, 0 = stop (a blocking
+// caller, or a timed cooperative read whose deadline has passed — the caller
+// then flags timed-out). Untimed cooperative parks on fd-readiness; timed
+// cooperative yields a <=1ms scheduler slice until the deadline.
+static int socket_read_wait(int fd, CoopRead *c) {
+#ifndef PLUTO_TEST_MODE
+    if (c->mode == 1) { __pluto_green_prod_wait_fd(fd, 0); return 1; }
+    if (c->mode == 2) {
+        long rem = c->deadline_ns - coop_now_ns();
+        if (rem <= 0) return 0;                        // deadline reached
+        long slice = rem < 1000000L ? rem : 1000000L;  // <=1ms cooperative yield
+        __pluto_green_sleep_ns(slice);
+        return 1;
+    }
+#else
+    (void)fd; (void)c;
+#endif
+    return 0;
+}
+
+// Park the current fiber until `fd` is ready (for_write: 1 = writable, 0 =
+// readable). Only ever reached on the green path (socket_is_green() true).
+static inline void socket_park_fd(int fd, int for_write) {
+#ifndef PLUTO_TEST_MODE
+    __pluto_green_prod_wait_fd(fd, for_write);
+#else
+    (void)fd; (void)for_write;
+#endif
+}
+
 long __pluto_socket_create(long domain, long type, long protocol) {
     return (long)socket((int)domain, (int)type, (int)protocol);
 }
@@ -1547,10 +1649,17 @@ long __pluto_socket_listen(long fd, long backlog) {
 long __pluto_socket_accept(long fd) {
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
-    __pluto_gc_enter_safe_region();
-    long conn = (long)accept((int)fd, (struct sockaddr *)&client_addr, &client_len);
-    __pluto_gc_leave_safe_region();
-    return conn;
+    int green = socket_is_green();
+    if (green) socket_set_nonblocking((int)fd);
+    for (;;) {
+        client_len = sizeof(client_addr);
+        __pluto_gc_enter_safe_region();
+        long conn = (long)accept((int)fd, (struct sockaddr *)&client_addr, &client_len);
+        int e = errno;
+        __pluto_gc_leave_safe_region();
+        if (conn >= 0 || !green || !socket_would_block(e)) return conn;
+        socket_park_fd((int)fd, 0);   // wait until the listener is readable
+    }
 }
 
 long __pluto_socket_connect(long fd, void *host_str, long port) {
@@ -1560,10 +1669,23 @@ long __pluto_socket_connect(long fd, void *host_str, long port) {
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return -1;
+    int green = socket_is_green();
+    if (green) socket_set_nonblocking((int)fd);
     __pluto_gc_enter_safe_region();
     int rc = connect((int)fd, (struct sockaddr *)&addr, sizeof(addr));
+    int e = errno;
     __pluto_gc_leave_safe_region();
-    return rc == 0 ? 0 : -1;
+    if (rc == 0) return 0;
+    // Non-blocking connect returns -1/EINPROGRESS and completes asynchronously:
+    // wait for the socket to become writable, then read SO_ERROR to learn the
+    // real outcome (0 = connected, else the connect error).
+    if (green && (e == EINPROGRESS || socket_would_block(e))) {
+        socket_park_fd((int)fd, 1);   // wait until writable
+        int so_err = 0; socklen_t len = sizeof(so_err);
+        if (getsockopt((int)fd, SOL_SOCKET, SO_ERROR, &so_err, &len) < 0) return -1;
+        return so_err == 0 ? 0 : -1;
+    }
+    return -1;
 }
 
 // Read-deadline support (issue #370). SO_RCVTIMEO is the mechanism
@@ -1594,14 +1716,20 @@ void *__pluto_socket_read(long fd, long max_bytes) {
     if (max_bytes > 1048576) max_bytes = 1048576;
     char *buf = (char *)malloc(max_bytes);
     if (!buf) return __pluto_string_new("", 0);
-    __pluto_gc_enter_safe_region();
-    ssize_t n = read((int)fd, buf, (size_t)max_bytes);
-    int read_errno = errno;
-    __pluto_gc_leave_safe_region();
-    if (n <= 0) {
-        if (n < 0 && (read_errno == EAGAIN || read_errno == EWOULDBLOCK)) {
-            socket_read_timed_out = 1;
+    CoopRead coop = socket_read_begin((int)fd);
+    ssize_t n;
+    for (;;) {
+        __pluto_gc_enter_safe_region();
+        n = read((int)fd, buf, (size_t)max_bytes);
+        int read_errno = errno;
+        __pluto_gc_leave_safe_region();
+        if (n < 0 && socket_would_block(read_errno)) {
+            if (socket_read_wait((int)fd, &coop)) continue;   // parked/yielded, retry
+            socket_read_timed_out = 1;   // deadline reached (blocking or cooperative)
         }
+        break;
+    }
+    if (n <= 0) {
         free(buf);
         return __pluto_string_new("", 0);
     }
@@ -1614,7 +1742,24 @@ long __pluto_socket_write(long fd, void *data_str) {
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
-    return (long)write((int)fd, data, (size_t)len);
+    if (!socket_is_green()) {
+        return (long)write((int)fd, data, (size_t)len);
+    }
+    // Green: a full send buffer returns EWOULDBLOCK on a non-blocking fd, so
+    // park for writability and loop to completion rather than reporting a short
+    // write. Returns total bytes written (parity with a completed write()).
+    socket_set_nonblocking((int)fd);
+    long off = 0;
+    while (off < len) {
+        __pluto_gc_enter_safe_region();
+        ssize_t n = write((int)fd, data + off, (size_t)(len - off));
+        int e = errno;
+        __pluto_gc_leave_safe_region();
+        if (n > 0) { off += n; continue; }
+        if (n < 0 && socket_would_block(e)) { socket_park_fd((int)fd, 1); continue; }
+        return off > 0 ? off : n;   // real error (or 0)
+    }
+    return off;
 }
 
 // Bytes-typed socket I/O: identical syscall path to the string variants, only
@@ -1628,9 +1773,15 @@ long __pluto_socket_read_bytes(long fd, long max_bytes) {
         if (max_bytes > 1048576) max_bytes = 1048576;
         buf = (char *)malloc((size_t)max_bytes);
         if (buf) {
-            __pluto_gc_enter_safe_region();
-            n = read((int)fd, buf, (size_t)max_bytes);
-            __pluto_gc_leave_safe_region();
+            CoopRead coop = socket_read_begin((int)fd);
+            for (;;) {
+                __pluto_gc_enter_safe_region();
+                n = read((int)fd, buf, (size_t)max_bytes);
+                int e = errno;
+                __pluto_gc_leave_safe_region();
+                if (n < 0 && socket_would_block(e) && socket_read_wait((int)fd, &coop)) continue;
+                break;
+            }
         }
     }
     if (n < 0) n = 0; // EOF and error both yield empty bytes (parity with read)
@@ -1650,7 +1801,21 @@ long __pluto_socket_write_bytes(long fd, long bytes_handle) {
     long *h = (long *)bytes_handle;
     long len = h[0];
     unsigned char *data = (unsigned char *)h[2];
-    return (long)write((int)fd, data, (size_t)len);
+    if (!socket_is_green()) {
+        return (long)write((int)fd, data, (size_t)len);
+    }
+    socket_set_nonblocking((int)fd);
+    long off = 0;
+    while (off < len) {
+        __pluto_gc_enter_safe_region();
+        ssize_t n = write((int)fd, data + off, (size_t)(len - off));
+        int e = errno;
+        __pluto_gc_leave_safe_region();
+        if (n > 0) { off += n; continue; }
+        if (n < 0 && socket_would_block(e)) { socket_park_fd((int)fd, 1); continue; }
+        return off > 0 ? off : n;
+    }
+    return off;
 }
 
 long __pluto_socket_close(long fd) {
@@ -1688,21 +1853,27 @@ long __pluto_write_framed(long fd, void *str) {
     hdr[1] = (unsigned char)((len >> 16) & 0xff);
     hdr[2] = (unsigned char)((len >> 8) & 0xff);
     hdr[3] = (unsigned char)(len & 0xff);
+    int green = socket_is_green();
+    if (green) socket_set_nonblocking((int)fd);
     long off = 0;
     while (off < 4) {
         __pluto_gc_enter_safe_region();
         ssize_t n = write((int)fd, hdr + off, (size_t)(4 - off));
+        int e = errno;
         __pluto_gc_leave_safe_region();
-        if (n <= 0) return -1;
-        off += n;
+        if (n > 0) { off += n; continue; }
+        if (green && n < 0 && socket_would_block(e)) { socket_park_fd((int)fd, 1); continue; }
+        return -1;
     }
     off = 0;
     while (off < len) {
         __pluto_gc_enter_safe_region();
         ssize_t n = write((int)fd, data + off, (size_t)(len - off));
+        int e = errno;
         __pluto_gc_leave_safe_region();
-        if (n <= 0) return -1;
-        off += n;
+        if (n > 0) { off += n; continue; }
+        if (green && n < 0 && socket_would_block(e)) { socket_park_fd((int)fd, 1); continue; }
+        return -1;
     }
     return 0;
 }
@@ -1715,6 +1886,7 @@ static __thread int framed_read_timed_out = 0;
 // Read a length-framed message into a pluto string. Returns NULL on failure.
 void *__pluto_read_framed(long fd) {
     framed_read_timed_out = 0;
+    CoopRead coop = socket_read_begin((int)fd);   // one deadline for the whole message
     unsigned char hdr[4];
     long got = 0;
     while (got < 4) {
@@ -1722,11 +1894,11 @@ void *__pluto_read_framed(long fd) {
         ssize_t n = read((int)fd, hdr + got, (size_t)(4 - got));
         int read_errno = errno;
         __pluto_gc_leave_safe_region();
-        if (n <= 0) {
-            if (n < 0 && (read_errno == EAGAIN || read_errno == EWOULDBLOCK))
-                framed_read_timed_out = 1;
-            return NULL;
+        if (n < 0 && socket_would_block(read_errno)) {
+            if (socket_read_wait((int)fd, &coop)) continue;   // parked/yielded, retry
+            framed_read_timed_out = 1;   // deadline reached (blocking or cooperative)
         }
+        if (n <= 0) return NULL;
         got += n;
     }
     long len = ((long)hdr[0] << 24) | ((long)hdr[1] << 16) | ((long)hdr[2] << 8) | (long)hdr[3];
@@ -1739,9 +1911,11 @@ void *__pluto_read_framed(long fd) {
         ssize_t n = read((int)fd, buf + off, (size_t)(len - off));
         int read_errno = errno;
         __pluto_gc_leave_safe_region();
+        if (n < 0 && socket_would_block(read_errno)) {
+            if (socket_read_wait((int)fd, &coop)) continue;
+            framed_read_timed_out = 1;
+        }
         if (n <= 0) {
-            if (n < 0 && (read_errno == EAGAIN || read_errno == EWOULDBLOCK))
-                framed_read_timed_out = 1;
             free(buf);
             return NULL;
         }
@@ -2595,6 +2769,28 @@ static void set_grow(long *h, long key_type) {
 
 static __thread long __pluto_fs_saved_errno = 0;
 
+// Green offload guard. When a primitive fs op is called from a green fiber,
+// route it through the worker pool (park the fiber, run the blocking syscall on
+// a pool thread) instead of blocking the scheduler. `rawfn` takes three longs
+// and encodes its error in the return value — never the thread-local saved
+// errno, which could not cross to the worker thread. String ARGUMENTS must be
+// converted to C pointers on the fiber BEFORE this macro (so a slice's owned
+// copy is allocated on the GC-registered fiber, not the unregistered worker);
+// those pointers stay alive via the parked fiber's own stack. On a non-fiber
+// caller — and on the pool worker itself — the macro is inert and the op runs
+// inline. Test mode has no production scheduler, so it is a no-op there.
+#ifndef PLUTO_TEST_MODE
+#define FS_GREEN_OFFLOAD(rawfn, a0, a1, a2)                                    \
+    do {                                                                      \
+        if (__pluto_green_self())                                             \
+            return __pluto_green_fs_offload(                                  \
+                (long (*)(long, long, long))(rawfn),                          \
+                (long)(a0), (long)(a1), (long)(a2));                          \
+    } while (0)
+#else
+#define FS_GREEN_OFFLOAD(rawfn, a0, a1, a2) do { } while (0)
+#endif
+
 long __pluto_fs_last_errno(void) {
     return __pluto_fs_saved_errno;
 }
@@ -2608,39 +2804,106 @@ long __pluto_fs_err_noent(void) {
     return (long)ENOENT;
 }
 
-long __pluto_fs_open_read(void *path_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
+// Raw open: `path` is an already-converted C string; error encoded in the
+// return (-errno on failure, fd on success). Offloadable to a pool worker.
+static long fs_raw_open(long path_l, long flags, long mode) {
+    const char *path = (const char *)path_l;
     __pluto_gc_enter_safe_region();
-    long fd = (long)open(path, O_RDONLY);
+    long fd = (long)open(path, (int)flags, (mode_t)mode);
     long err = (long)errno;
     __pluto_gc_leave_safe_region();
     return fd < 0 ? -err : fd;
+}
+
+long __pluto_fs_open_read(void *path_str) {
+    long path = (long)__pluto_string_to_cstr(path_str);   // convert on this fiber
+    FS_GREEN_OFFLOAD(fs_raw_open, path, O_RDONLY, 0);
+    return fs_raw_open(path, O_RDONLY, 0);
 }
 
 long __pluto_fs_open_write(void *path_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
-    __pluto_gc_enter_safe_region();
-    long fd = (long)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    long err = (long)errno;
-    __pluto_gc_leave_safe_region();
-    return fd < 0 ? -err : fd;
+    long path = (long)__pluto_string_to_cstr(path_str);
+    FS_GREEN_OFFLOAD(fs_raw_open, path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    return fs_raw_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 }
 
 long __pluto_fs_open_append(void *path_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
-    __pluto_gc_enter_safe_region();
-    long fd = (long)open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    long err = (long)errno;
-    __pluto_gc_leave_safe_region();
-    return fd < 0 ? -err : fd;
+    long path = (long)__pluto_string_to_cstr(path_str);
+    FS_GREEN_OFFLOAD(fs_raw_open, path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    return fs_raw_open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
 }
 
 long __pluto_fs_close(long fd) {
+    FS_GREEN_OFFLOAD(__pluto_fs_close, fd, 0, 0);   // worker re-enters off-fiber -> inline
     __pluto_gc_enter_safe_region();
     int rc = close((int)fd);
     long err = (long)errno;
     __pluto_gc_leave_safe_region();
     return rc == 0 ? 0 : -err;
+}
+
+// ── Green read offload (scratch-split) ───────────────────────────────────────
+// Reads allocate a GC result, which an unregistered pool worker must not do. So
+// the worker reads into a plain malloc buffer written to a descriptor on the
+// PARKED FIBER's stack, and the fiber allocates the GC string/bytes from that
+// scratch after it resumes. The worker touches no GC heap (see the offload-pool
+// soundness note), reusing the same pool as the primitive writes. errno comes
+// back in the descriptor — no thread-local crossing.
+typedef struct {
+    const char *path;   // path-based whole-file read; NULL for an fd read
+    long fd;
+    long offset;        // >= 0 for a positioned (pread) read, else -1
+    long max_bytes;
+    char *buf;          // OUT: malloc'd scratch (fiber frees), or NULL
+    long n;             // OUT: bytes read (>= 0)
+    long err;           // OUT: errno (0 = ok)
+} FsReadReq;
+
+// Read up to req->max_bytes from req->fd (positioned if req->offset >= 0) into a
+// fresh malloc buffer. No GC allocation. Runs on a pool worker.
+static long fs_raw_read_fd(long req_l, long u1, long u2) {
+    (void)u1; (void)u2;
+    FsReadReq *r = (FsReadReq *)req_l;
+    r->buf = NULL; r->n = 0; r->err = 0;
+    char *buf = (char *)malloc((size_t)r->max_bytes);
+    if (!buf) { r->err = (long)ENOMEM; return 0; }
+    __pluto_gc_enter_safe_region();
+    ssize_t n = (r->offset >= 0)
+        ? pread((int)r->fd, buf, (size_t)r->max_bytes, (off_t)r->offset)
+        : read((int)r->fd, buf, (size_t)r->max_bytes);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (n < 0) { free(buf); r->err = err; return 0; }
+    r->buf = buf; r->n = (long)n;
+    return 0;
+}
+
+// open + fstat + read the whole file at req->path into a fresh malloc buffer.
+static long fs_raw_read_all_path(long req_l, long u1, long u2) {
+    (void)u1; (void)u2;
+    FsReadReq *r = (FsReadReq *)req_l;
+    r->buf = NULL; r->n = 0; r->err = 0;
+    __pluto_gc_enter_safe_region();
+    int fd = open(r->path, O_RDONLY);
+    if (fd < 0) { r->err = (long)errno; __pluto_gc_leave_safe_region(); return 0; }
+    struct stat st;
+    if (fstat(fd, &st) != 0) { r->err = (long)errno; close(fd); __pluto_gc_leave_safe_region(); return 0; }
+    size_t size = (size_t)st.st_size;
+    char *buf = (char *)malloc(size > 0 ? size : 1);
+    if (!buf) { r->err = (long)ENOMEM; close(fd); __pluto_gc_leave_safe_region(); return 0; }
+    size_t total = 0; long err = 0;
+    while (total < size) {
+        ssize_t n = read(fd, buf + total, size - total);
+        if (n < 0) { if (errno == EINTR) continue; err = (long)errno; break; }
+        if (n == 0) break;   // truncated under us: return what we got
+        total += (size_t)n;
+    }
+    int crc = close(fd); long cerr = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (err == 0 && crc < 0) err = cerr;
+    if (err != 0) { free(buf); r->err = err; return 0; }
+    r->buf = buf; r->n = (long)total;
+    return 0;
 }
 
 // EOF/error disambiguation (issue #367): "" with last_errno == 0 is EOF;
@@ -2649,6 +2912,18 @@ void *__pluto_fs_read(long fd, long max_bytes) {
     __pluto_fs_saved_errno = 0;
     if (max_bytes <= 0) return __pluto_string_new("", 0);
     if (max_bytes > 104857600) max_bytes = 104857600; // 100MB cap
+#ifndef PLUTO_TEST_MODE
+    if (__pluto_green_self()) {
+        FsReadReq req = { NULL, fd, -1, max_bytes, NULL, 0, 0 };
+        __pluto_green_fs_offload(fs_raw_read_fd, (long)&req, 0, 0);  // park; worker reads
+        __pluto_fs_saved_errno = req.err;
+        void *result = (req.err != 0 || req.buf == NULL || req.n <= 0)
+            ? __pluto_string_new("", 0)
+            : __pluto_string_new(req.buf, req.n);
+        if (req.buf) free(req.buf);
+        return result;
+    }
+#endif
     char *buf = (char *)malloc((size_t)max_bytes);
     if (!buf) {
         __pluto_fs_saved_errno = (long)ENOMEM;
@@ -2675,6 +2950,10 @@ void *__pluto_fs_read(long fd, long max_bytes) {
 // Loops to completion (issue #367 short-write fix). Returns the byte count
 // written (== len) on success, -errno on the first failing write.
 long __pluto_fs_write(long fd, void *data_str) {
+    // string_data does not allocate (it reads the string's inline bytes), so the
+    // whole op is offloadable via its own pointer: the worker re-enters off-fiber
+    // and takes the inline path. data_str stays alive via the parked fiber's arg.
+    FS_GREEN_OFFLOAD(__pluto_fs_write, fd, data_str, 0);
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
@@ -2721,6 +3000,18 @@ long __pluto_fs_read_bytes(long fd, long max_bytes) {
     __pluto_fs_saved_errno = 0;
     if (max_bytes <= 0) return __pluto_fs_bytes_from_scratch(NULL, 0);
     if (max_bytes > 104857600) max_bytes = 104857600; // 100MB cap
+#ifndef PLUTO_TEST_MODE
+    if (__pluto_green_self()) {
+        FsReadReq req = { NULL, fd, -1, max_bytes, NULL, 0, 0 };
+        __pluto_green_fs_offload(fs_raw_read_fd, (long)&req, 0, 0);
+        __pluto_fs_saved_errno = req.err;
+        long result = (req.err != 0 || req.buf == NULL)
+            ? __pluto_fs_bytes_from_scratch(NULL, 0)
+            : __pluto_fs_bytes_from_scratch(req.buf, req.n);
+        if (req.buf) free(req.buf);
+        return result;
+    }
+#endif
     char *buf = (char *)malloc((size_t)max_bytes);
     if (!buf) {
         __pluto_fs_saved_errno = (long)ENOMEM;
@@ -2745,6 +3036,18 @@ long __pluto_fs_read_at(long fd, long offset, long max_bytes) {
     __pluto_fs_saved_errno = 0;
     if (max_bytes <= 0) return __pluto_fs_bytes_from_scratch(NULL, 0);
     if (max_bytes > 104857600) max_bytes = 104857600; // 100MB cap
+#ifndef PLUTO_TEST_MODE
+    if (__pluto_green_self()) {
+        FsReadReq req = { NULL, fd, offset, max_bytes, NULL, 0, 0 };
+        __pluto_green_fs_offload(fs_raw_read_fd, (long)&req, 0, 0);
+        __pluto_fs_saved_errno = req.err;
+        long result = (req.err != 0 || req.buf == NULL)
+            ? __pluto_fs_bytes_from_scratch(NULL, 0)
+            : __pluto_fs_bytes_from_scratch(req.buf, req.n);
+        if (req.buf) free(req.buf);
+        return result;
+    }
+#endif
     char *buf = (char *)malloc((size_t)max_bytes);
     if (!buf) {
         __pluto_fs_saved_errno = (long)ENOMEM;
@@ -3263,8 +3566,20 @@ long __pluto_fs_replace_all(void *path_str, void *data_str) {
 }
 
 void *__pluto_fs_read_all(void *path_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
+    const char *path = __pluto_string_to_cstr(path_str);   // convert on this fiber
     __pluto_fs_saved_errno = 0;
+#ifndef PLUTO_TEST_MODE
+    if (__pluto_green_self()) {
+        FsReadReq req = { path, -1, -1, 0, NULL, 0, 0 };
+        __pluto_green_fs_offload(fs_raw_read_all_path, (long)&req, 0, 0);
+        __pluto_fs_saved_errno = req.err;
+        void *result = (req.err != 0 || req.buf == NULL)
+            ? __pluto_string_new("", 0)
+            : __pluto_string_new(req.buf, req.n);
+        if (req.buf) free(req.buf);
+        return result;
+    }
+#endif
     __pluto_gc_enter_safe_region();
     int fd = open(path, O_RDONLY);
     long err = (long)errno;
@@ -3352,12 +3667,24 @@ static long __pluto_fs_write_whole(const char *path, const char *data, long len,
     return 0;
 }
 
+// Raw whole-file writes: `path`/`data` are already-converted C pointers, error
+// encoded in the return. One per open-mode (offload passes only three longs).
+static long fs_raw_write_trunc(long path, long data, long len) {
+    return __pluto_fs_write_whole((const char *)path, (const char *)data, len,
+                                  O_WRONLY | O_CREAT | O_TRUNC);
+}
+static long fs_raw_write_append(long path, long data, long len) {
+    return __pluto_fs_write_whole((const char *)path, (const char *)data, len,
+                                  O_WRONLY | O_CREAT | O_APPEND);
+}
+
 long __pluto_fs_write_all(void *path_str, void *data_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
+    const char *path = __pluto_string_to_cstr(path_str);   // convert on this fiber
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
-    return __pluto_fs_write_whole(path, data, len, O_WRONLY | O_CREAT | O_TRUNC);
+    FS_GREEN_OFFLOAD(fs_raw_write_trunc, path, data, len);
+    return fs_raw_write_trunc((long)path, (long)data, len);
 }
 
 long __pluto_fs_append_all(void *path_str, void *data_str) {
@@ -3365,7 +3692,8 @@ long __pluto_fs_append_all(void *path_str, void *data_str) {
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
-    return __pluto_fs_write_whole(path, data, len, O_WRONLY | O_CREAT | O_APPEND);
+    FS_GREEN_OFFLOAD(fs_raw_write_append, path, data, len);
+    return fs_raw_write_append((long)path, (long)data, len);
 }
 
 // ── Bytes-typed one-shots (issue #368) ────────────────────────────────────────
@@ -3375,8 +3703,20 @@ long __pluto_fs_append_all(void *path_str, void *data_str) {
 // Mirrors __pluto_fs_read_all: errors via last_errno + empty bytes; the GC
 // handle is allocated only after every syscall bracket is closed.
 long __pluto_fs_read_all_bytes(void *path_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
+    const char *path = __pluto_string_to_cstr(path_str);   // convert on this fiber
     __pluto_fs_saved_errno = 0;
+#ifndef PLUTO_TEST_MODE
+    if (__pluto_green_self()) {
+        FsReadReq req = { path, -1, -1, 0, NULL, 0, 0 };
+        __pluto_green_fs_offload(fs_raw_read_all_path, (long)&req, 0, 0);
+        __pluto_fs_saved_errno = req.err;
+        long result = (req.err != 0 || req.buf == NULL)
+            ? __pluto_fs_bytes_from_scratch(NULL, 0)
+            : __pluto_fs_bytes_from_scratch(req.buf, req.n);
+        if (req.buf) free(req.buf);
+        return result;
+    }
+#endif
     __pluto_gc_enter_safe_region();
     int fd = open(path, O_RDONLY);
     long err = (long)errno;

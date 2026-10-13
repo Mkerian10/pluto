@@ -1,32 +1,62 @@
-// Production green scheduler (#369). A single scheduler pthread with a
-// thread-safe ready queue, lazy startup, and cross-thread result delivery,
-// running fibers over the register-only context switch.
+// Production green scheduler (#369). N scheduler pthreads (thread-per-core by
+// default), each with its own ready queue + timer wheel, running fibers over
+// the register-only context switch.
 //
 // cp3b: run-to-completion submit path (real Pluto closures via a callback).
 // cp4: cooperative PARK / YIELD / WAKE so a fiber that awaits a task or blocks
 // on a channel suspends the FIBER (yielding the scheduler to its peers) instead
-// of blocking the whole scheduler thread. Wakes are thread-safe: a pthread or
-// the main thread completing an awaited task re-readies the parked fiber.
+// of blocking the whole scheduler thread.
+// cp6: timer wheel (cooperative sleep / timed waits).
+// MULTI-SCHEDULER (structural): a green task is assigned to one scheduler at
+// submit (round-robin) and runs there for its whole life — SHARED-NOTHING, no
+// work-stealing, no migration. Because a fiber never changes threads, every
+// single-scheduler invariant still holds: thread-local runtime state
+// (__pluto_current_error/_task) stays consistent, a mutex is locked and
+// unlocked on one thread, and each fiber's GC live_sp has exactly one writer
+// (its home scheduler). Cross-scheduler wakes (a completer on another thread
+// re-readying a parked fiber) enqueue onto the fiber's HOME scheduler.
 //
 // Race-freedom (the gopark pattern): a parking fiber records NOTHING about
 // itself before it switches out. It stashes a handoff fn + arg, sets state
-// PARK, and swaps to the scheduler. The scheduler — with the fiber fully
-// switched out — runs the handoff on its OWN stack. Only the handoff publishes
-// the fiber as a waiter (under the awaited object's lock). So a wake can never
-// reach a fiber that has not finished switching out, which would otherwise run
-// one fiber on two contexts.
+// PARK, and swaps to the scheduler, which runs the handoff on its OWN stack —
+// only then is the fiber published as a waiter, so a wake can never reach a
+// fiber still mid-switch.
 //
 // Production only — uses pthreads. Under PLUTO_TEST_MODE green routes to the
-// DPOR fiber scheduler instead (see rfc-green-tasks.md), so this file is inert
-// there.
+// DPOR fiber scheduler instead, so this file is inert there.
 #ifndef PLUTO_TEST_MODE
+// pthread_getattr_np (Linux thread-stack bounds) and eventfd are GNU
+// extensions — request them before the first system header. Harmless on macOS.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <time.h>
+// ── Readiness reactor ────────────────────────────────────────────────────────
+// Each scheduler blocks its idle-wait on an OS readiness object that multiplexes
+// three sources: a cross-thread wake (a remote enqueue), socket fd readiness,
+// and a timeout (the nearest timer). macOS uses kqueue + EVFILT_USER for the
+// wake; Linux uses epoll + an eventfd. The scheduler loop calls only the
+// portable reactor_* helpers below — no kqueue/epoll types leak into it.
+#if defined(__APPLE__)
+#include <sys/event.h>
+typedef struct kevent REvent;
+// EVFILT_USER ident for the cross-thread wake — the kqueue analogue of the old
+// ready-queue condvar signal.
+#define SCHED_WAKE_IDENT 1
+#elif defined(__linux__)
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+typedef struct epoll_event REvent;
+#else
+#error "green scheduler: no readiness reactor for this platform"
+#endif
 
 extern void pluto_ctx_swap(void **from_sp, void *to_sp);
 
@@ -38,8 +68,19 @@ extern void __pluto_gc_register_thread_stack(void *lo, void *hi);
 extern void __pluto_gc_enter_safe_region(void);
 extern void __pluto_gc_leave_safe_region(void);
 
+// Per-task runtime state that lives in THREAD-LOCAL storage (set by green_run_cb
+// and read by the channel ops' cancellation check). A fiber that migrates
+// between scheduler threads must carry these with it, or the origin thread is
+// left pointing at a freed task. The scheduler saves/restores them around every
+// fiber run (mirrors the test-mode fiber scheduler's saved_current_task).
+extern __thread void *__pluto_current_error;
+extern __thread void *__pluto_current_error_type;
+extern __thread long *__pluto_current_task;
+
 // Fiber lifecycle state, read by the scheduler after each swap-back.
 enum { GRUN = 0, GDONE, GYIELD, GPARK };
+
+typedef struct GProdSched GProdSched;
 
 typedef struct GProdTask {
     long (*fn)(void *);     // cp1 self-contained path (result via result/cv below)
@@ -55,34 +96,77 @@ typedef struct GProdTask {
     size_t stack_map_size;  // guard + stack_size, for munmap
     void *sp;               // saved fiber sp
     int state;              // GRUN / GDONE / GYIELD / GPARK (cp4)
-    void (*park_fn)(void *);// cp4: handoff run on the scheduler stack after the
-    void *park_arg;         //      fiber parks (publishes it as a waiter)
+    void (*park_fn)(void *);// cp4: handoff run on the scheduler stack after park
+    void *park_arg;
     void *gc_ctx;           // GC green-context handle (held across parks)
     long deadline_ns;       // cp6: CLOCK_REALTIME wake deadline when timer-parked
     struct GProdTask *timer_next; // cp6: link in the sorted timer list
+    GProdSched *home;       // scheduler this task currently lives on
+    // Per-fiber copy of the thread-local runtime state, so it follows the fiber
+    // across scheduler threads (migration safety).
+    long *sv_task;
+    void *sv_error;
+    void *sv_error_type;
     // Submit path (__pluto_green_submit): when submit_run != NULL the fiber
-    // calls submit_run(submit_job) and the callback owns result delivery (e.g.
-    // into a Pluto Task<T>); the scheduler then frees the whole GProdTask.
+    // calls submit_run(submit_job) and the callback owns result delivery; the
+    // scheduler then frees the whole GProdTask.
     void (*submit_run)(void *);
     void *submit_job;
 } GProdTask;
 
-static pthread_mutex_t gq_mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  gq_wake = PTHREAD_COND_INITIALIZER;
-static GProdTask *gq_head, *gq_tail;
-static pthread_t gq_thread;
-static int gq_started = 0;
+// One scheduler = one OS thread + its own ready queue, timer wheel, and running
+// context. Everything here is touched only by this scheduler's own thread
+// except the ready queue + its mutex/cond, which cross-scheduler/other-thread
+// wakes push onto under `mu`.
+struct GProdSched {
+    pthread_mutex_t mu;
+    int kq;                     // readiness reactor fd: a kqueue (macOS) or an
+                                //   epoll instance (Linux). The idle-wait blocks
+                                //   here on a cross-thread wake, socket fd
+                                //   readiness, or a timer timeout.
+    int wake_fd;                // Linux: the eventfd the cross-thread wake writes
+                                //   (registered EPOLLIN on `kq`). Unused (-1) on
+                                //   macOS, where EVFILT_USER carries the wake.
+    GProdTask *head, *tail;     // REMOTE ready queue: cross-thread wakes push
+                                //   here under `mu`; the scheduler drains it.
+    int fd_waiters;             // fibers currently parked on socket readiness
+                                //   (scheduler-thread-only). Gates the busy-path
+                                //   non-blocking kqueue poll so a socket-free
+                                //   workload never pays a kevent per fiber run.
+    GProdTask *local_head, *local_tail; // LOCAL ready queue: touched ONLY by
+                                //   this scheduler's own thread (yields, and
+                                //   same-thread wakes), so NO lock — the hot
+                                //   path for channel handoffs / await on one
+                                //   scheduler avoids the mutex entirely.
+    GProdTask *timer_head;      // sorted-by-deadline timer list (guarded by mu)
+    void *sched_sp;             // the scheduler loop's own saved context
+    GProdTask *current;         // the fiber it is currently running
+    pthread_t thread;
+};
 
-// The scheduler thread's own context + the task it is running (one scheduler,
-// so a single pair suffices; thread-local would generalize to N schedulers).
-static void *gsched_sp;
-static GProdTask *gsched_current;
+#define MAX_SCHED 64
+static GProdSched g_scheds[MAX_SCHED];
+static int g_nsched = 0;                 // number of live schedulers
+static int g_started = 0;
+static pthread_mutex_t g_start_mu = PTHREAD_MUTEX_INITIALIZER;
+static unsigned long g_rr = 0;           // round-robin assignment counter
+// EXPERIMENTAL (default off): wake-locality / fiber migration. When set, a
+// woken fiber moves to the waker's scheduler so communicating partners
+// converge. INCOMPLETE: the first blocker (a SEGV from stale thread-local
+// current_task after migration) is fixed by the per-fiber TLS save/restore in
+// the scheduler loop, but a second channel-migration issue remains (the Pluto
+// ping-pong exits with an uncaught error), so this stays off. See
+// __pluto_green_wake and rfc-green-tasks.md.
+static int g_wake_local = 0;
+// DEBUG (default off): assert a task's saved sp lies within its own stack
+// before swapping into it — catches a corrupt/migrated context at the swap
+// instead of as a jump to a garbage address.
+static int g_sp_check = 0;
 
-// cp6 timer wheel: fibers that sleep (and, later, time out on a channel) park
-// here instead of blocking the scheduler. Sorted ascending by deadline, guarded
-// by gq_mu. (A sorted list is O(n) insert — fine for modest timer counts; a
-// heap is the later optimization for many concurrent sleepers.)
-static GProdTask *timer_head;
+// The scheduler this thread IS, or NULL on a non-scheduler thread (main/spawn).
+// Replaces the old gt_on_sched flag and names the running scheduler for the
+// cooperative primitives.
+static __thread GProdSched *cur_sched = NULL;
 
 static long gprod_now_ns(void) {
     struct timespec ts;
@@ -90,39 +174,148 @@ static long gprod_now_ns(void) {
     return (long)ts.tv_sec * 1000000000L + (long)ts.tv_nsec;
 }
 
-// Insert t into the sorted timer list. Caller holds gq_mu.
-static void timer_insert(GProdTask *t) {
-    GProdTask **pp = &timer_head;
+// Insert t into s's sorted timer list. Caller holds s->mu.
+static void timer_insert(GProdSched *s, GProdTask *t) {
+    GProdTask **pp = &s->timer_head;
     while (*pp && (*pp)->deadline_ns <= t->deadline_ns) pp = &(*pp)->timer_next;
     t->timer_next = *pp;
     *pp = t;
 }
 
-// Move every timer whose deadline has passed onto the ready queue. Caller holds
-// gq_mu (so the inline enqueue is safe without gq_push's own lock).
-static void timer_fire_expired(long now) {
-    while (timer_head && timer_head->deadline_ns <= now) {
-        GProdTask *t = timer_head;
-        timer_head = t->timer_next;
+// Move every expired timer onto s's ready queue. Caller holds s->mu.
+static void timer_fire_expired(GProdSched *s, long now) {
+    while (s->timer_head && s->timer_head->deadline_ns <= now) {
+        GProdTask *t = s->timer_head;
+        s->timer_head = t->timer_next;
         t->timer_next = NULL;
         t->state = GRUN;
         t->next = NULL;
-        if (gq_tail) gq_tail->next = t; else gq_head = t;
-        gq_tail = t;
+        if (s->tail) s->tail->next = t; else s->head = t;
+        s->tail = t;
     }
 }
-// Set on the scheduler thread only, so __pluto_green_self() can tell a fiber
-// (running on the scheduler thread) from an ordinary pthread / the main thread.
-static __thread int gt_on_sched = 0;
 
-// Enqueue onto the ready queue. Caller must NOT hold gq_mu.
-static void gq_push(GProdTask *t) {
-    pthread_mutex_lock(&gq_mu);
+static void sched_push_local(GProdSched *s, GProdTask *t);  // fwd (reactor_drain)
+
+// ── Reactor helpers (kqueue on macOS, epoll + eventfd on Linux) ──────────────
+
+// Create the scheduler's reactor + register its cross-thread wake channel.
+static void reactor_init(GProdSched *s) {
+#if defined(__APPLE__)
+    s->kq = kqueue();
+    s->wake_fd = -1;
+    // EV_CLEAR = edge-latched: a NOTE_TRIGGER racing the empty-queue check is
+    // returned by the next kevent, so a cross-thread wake is never lost.
+    struct kevent ev;
+    EV_SET(&ev, SCHED_WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    kevent(s->kq, &ev, 1, NULL, 0, NULL);
+#elif defined(__linux__)
+    s->kq = epoll_create1(0);
+    s->wake_fd = eventfd(0, EFD_NONBLOCK);
+    // Level-triggered, data.ptr == NULL so the drain tells it apart from
+    // fd-waiters (whose data.ptr is a fiber). A write racing the empty-queue
+    // check stays readable until drained, so the wake is never lost.
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.ptr = NULL;
+    epoll_ctl(s->kq, EPOLL_CTL_ADD, s->wake_fd, &ev);
+#endif
+}
+
+// Wake scheduler s out of its idle-wait (cross-thread safe).
+static void reactor_wake(GProdSched *s) {
+#if defined(__APPLE__)
+    struct kevent ev;
+    EV_SET(&ev, SCHED_WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    kevent(s->kq, &ev, 1, NULL, 0, NULL);
+#elif defined(__linux__)
+    uint64_t one = 1;
+    ssize_t r = write(s->wake_fd, &one, sizeof one);
+    (void)r;
+#endif
+}
+
+// Arm ONE-SHOT interest in `fd` becoming readable (for_write=0) / writable
+// (for_write=1) on s's reactor, carrying `fiber` as the wake payload. One-shot:
+// the registration fires once then is disarmed, so each wait re-arms fresh.
+static void reactor_arm_fd(GProdSched *s, int fd, int for_write, void *fiber) {
+#if defined(__APPLE__)
+    struct kevent ev;
+    EV_SET(&ev, fd, for_write ? EVFILT_WRITE : EVFILT_READ,
+           EV_ADD | EV_ONESHOT, 0, 0, fiber);
+    kevent(s->kq, &ev, 1, NULL, 0, NULL);
+#elif defined(__linux__)
+    struct epoll_event ev;
+    ev.events = (uint32_t)(for_write ? EPOLLOUT : EPOLLIN) | EPOLLONESHOT;
+    ev.data.ptr = fiber;
+    // EPOLLONESHOT disables (not removes) the fd after it fires, so a re-arm is
+    // a MOD; a fresh fd is an ADD. close() auto-removes from the epoll set, so
+    // after a close MOD gives ENOENT and we fall back to ADD.
+    if (epoll_ctl(s->kq, EPOLL_CTL_MOD, fd, &ev) < 0)
+        epoll_ctl(s->kq, EPOLL_CTL_ADD, fd, &ev);
+#endif
+}
+
+// Block up to timeout_ns (negative = forever) for reactor events into
+// evs[0..max); return how many fired.
+static int reactor_wait(GProdSched *s, REvent *evs, int max, long timeout_ns) {
+#if defined(__APPLE__)
+    struct timespec ts, *tsp = NULL;
+    if (timeout_ns >= 0) {
+        ts.tv_sec = (time_t)(timeout_ns / 1000000000L);
+        ts.tv_nsec = (long)(timeout_ns % 1000000000L);
+        tsp = &ts;
+    }
+    return kevent(s->kq, NULL, 0, evs, max, tsp);
+#elif defined(__linux__)
+    int ms;
+    if (timeout_ns < 0) ms = -1;
+    else if (timeout_ns == 0) ms = 0;
+    else { long m = timeout_ns / 1000000L; ms = (int)(m > 0 ? m : 1); }  // sub-ms -> 1ms
+    return epoll_wait(s->kq, evs, max, ms);
+#endif
+}
+
+// Re-ready any fiber whose fd became ready in evs[0..n); drain the wake
+// channel. The cross-thread wake / timer timeouts carry no fiber and simply
+// mean "loop again".
+static void reactor_drain(GProdSched *s, REvent *evs, int n) {
+    for (int i = 0; i < n; i++) {
+#if defined(__APPLE__)
+        if (evs[i].filter == EVFILT_READ || evs[i].filter == EVFILT_WRITE) {
+            GProdTask *w = (GProdTask *)evs[i].udata;
+            if (w) { w->state = GRUN; sched_push_local(s, w); if (s->fd_waiters) s->fd_waiters--; }
+        }
+#elif defined(__linux__)
+        void *p = evs[i].data.ptr;
+        if (p == NULL) {                       // the wake eventfd
+            uint64_t buf; ssize_t r = read(s->wake_fd, &buf, sizeof buf); (void)r;
+        } else {
+            GProdTask *w = (GProdTask *)p;
+            w->state = GRUN; sched_push_local(s, w); if (s->fd_waiters) s->fd_waiters--;
+        }
+#endif
+    }
+}
+
+// Enqueue onto scheduler s's REMOTE ready queue under its lock + wake it. Used
+// for cross-thread wakes (a different scheduler or a non-scheduler thread
+// re-readying a fiber whose home is s).
+static void sched_push_remote(GProdSched *s, GProdTask *t) {
+    pthread_mutex_lock(&s->mu);
     t->next = NULL;
-    if (gq_tail) gq_tail->next = t; else gq_head = t;
-    gq_tail = t;
-    pthread_cond_signal(&gq_wake);
-    pthread_mutex_unlock(&gq_mu);
+    if (s->tail) s->tail->next = t; else s->head = t;
+    s->tail = t;
+    pthread_mutex_unlock(&s->mu);
+    reactor_wake(s);   // break the scheduler out of its idle-wait (no lost wakeup)
+}
+
+// Enqueue onto s's LOCAL ready queue with NO lock. ONLY valid on s's own
+// scheduler thread (a yield, or a wake whose waker runs on s's thread).
+static void sched_push_local(GProdSched *s, GProdTask *t) {
+    t->next = NULL;
+    if (s->local_tail) s->local_tail->next = t; else s->local_head = t;
+    s->local_tail = t;
 }
 
 static void *prime_ctx(char *stack_top, void (*entry)(void)) {
@@ -140,77 +333,108 @@ static void *prime_ctx(char *stack_top, void (*entry)(void)) {
 
 // ── Cooperative primitives (called from fiber context) ───────────────────────
 
-// The currently-running fiber, or NULL if the caller is not a scheduler fiber
-// (an ordinary pthread or the main thread). Lets await/channel ops choose
-// between parking (fiber) and a blocking cond wait (pthread/main).
+// The currently-running fiber, or NULL if the caller is not a scheduler fiber.
 void *__pluto_green_self(void) {
-    return gt_on_sched ? (void *)gsched_current : NULL;
+    return cur_sched ? (void *)cur_sched->current : NULL;
 }
 
-// Yield the scheduler to ready peers, then resume. No-op cost beyond two
-// register-only switches when the fiber is the only one ready.
+// Yield to ready peers on this scheduler, then resume.
 void __pluto_green_yield(void) {
-    GProdTask *t = gsched_current;
-    if (!t) return;
-    t->state = GYIELD;
-    pluto_ctx_swap(&t->sp, gsched_sp);
+    GProdSched *s = cur_sched;
+    if (!s || !s->current) return;
+    s->current->state = GYIELD;
+    pluto_ctx_swap(&s->current->sp, s->sched_sp);
 }
 
-// Suspend the current fiber. After it has fully switched out, the scheduler
-// runs handoff(arg) on its own stack; handoff publishes this fiber as a waiter
-// on whatever it is blocked on (under that object's lock), or re-readies it at
-// once if the event already happened. The fiber resumes here once woken.
+// Suspend the current fiber; the scheduler runs handoff(arg) on its own stack
+// once the fiber has switched out (publishes it as a waiter, or re-readies it).
 void __pluto_green_park(void (*handoff)(void *), void *arg) {
-    GProdTask *t = gsched_current;
+    GProdSched *s = cur_sched;
+    GProdTask *t = s->current;
     t->park_fn = handoff;
     t->park_arg = arg;
     t->state = GPARK;
-    pluto_ctx_swap(&t->sp, gsched_sp);
+    pluto_ctx_swap(&t->sp, s->sched_sp);
+}
+
+// Cooperative socket readiness. Called from a running fiber: arm one-shot
+// interest in `fd` becoming readable (for_write=0) or writable (for_write=1) on
+// THIS scheduler's reactor, carrying the fiber, then park. When the fd is ready
+// the scheduler's event drain re-readies the fiber (sched_push_local), and this
+// returns so the caller can retry the syscall.
+//
+// No lost-wakeup window: the scheduler thread is single-threaded and is right
+// now executing this very fiber, so it cannot be servicing its own reactor.
+// Arming before the swap is therefore race-free — the event can only be
+// observed after we have switched out. The arm is one-shot, so each wait arms
+// fresh and nothing leaks across retries.
+void __pluto_green_prod_wait_fd(int fd, int for_write) {
+    GProdSched *s = cur_sched;
+    if (!s || !s->current) return;   // not on a scheduler fiber — caller handles
+    reactor_arm_fd(s, fd, for_write, s->current);
+    s->fd_waiters++;
+    __pluto_green_park(NULL, NULL);  // the reactor registration IS the waiter
 }
 
 // cp6 sleep handoff: on the scheduler stack with the fiber switched out, insert
-// it into the timer list (under gq_mu). The scheduler fires it at its deadline.
+// it into its home scheduler's timer list.
 static void sleep_handoff(void *arg) {
     GProdTask *t = (GProdTask *)arg;
-    pthread_mutex_lock(&gq_mu);
-    timer_insert(t);
-    pthread_mutex_unlock(&gq_mu);
+    GProdSched *s = t->home;
+    pthread_mutex_lock(&s->mu);
+    timer_insert(s, t);
+    pthread_mutex_unlock(&s->mu);
 }
 
-// Cooperative sleep: park the current fiber until `ns` from now, yielding the
-// scheduler to its peers (instead of a nanosleep that would stall them all).
-// Caller must be a fiber (the runtime routes non-fiber sleep to nanosleep).
+// Cooperative sleep: park the current fiber until `ns` from now.
 void __pluto_green_sleep_ns(long ns) {
-    GProdTask *t = gsched_current;
-    if (!t) return;
-    t->deadline_ns = gprod_now_ns() + (ns > 0 ? ns : 0);
-    __pluto_green_park(sleep_handoff, t);   // resumes once the deadline fires
+    GProdSched *s = cur_sched;
+    if (!s || !s->current) return;
+    s->current->deadline_ns = gprod_now_ns() + (ns > 0 ? ns : 0);
+    __pluto_green_park(sleep_handoff, s->current);
 }
 
-// Re-ready a parked fiber. Thread-safe — called from the completer's thread
-// (a pthread finishing a spawn task, a peer fiber, or the main thread). The
-// handoff that published `fiber` as a waiter ran before any wake could see it,
-// so `fiber` is guaranteed fully switched out here.
+// Re-ready a parked fiber. Thread-safe and cross-scheduler: the fiber is
+// enqueued onto its HOME scheduler — where it ran before parking and will run
+// again — never the waker's. A fiber is PINNED to its home for life (no
+// migration): that is what keeps thread-local runtime state, pthread-mutex
+// ownership, and the single-writer GC live_sp invariant valid.
+//
+// Wake-locality (migrate the woken fiber to the waker's scheduler so
+// communicating partners converge) is available behind PLUTO_GREEN_WAKE_LOCALITY
+// but OFF by default and INCOMPLETE. Investigation so far: the first crash was a
+// stale thread-local current_task left on the origin thread after migration —
+// fixed by the per-fiber TLS save/restore around each run in the scheduler
+// loop. A second channel-migration bug remains (the ping-pong exits with an
+// uncaught error), so for now a fiber stays on its home and co-location is
+// achieved statically via parent-locality placement at spawn. Finishing
+// wake-locality (or a full work-stealing design) is the path to making
+// multi-scheduler the default; see rfc-green-tasks.md.
 void __pluto_green_wake(void *fiber) {
     GProdTask *t = (GProdTask *)fiber;
     t->state = GRUN;
-    gq_push(t);
+    GProdSched *w = cur_sched;
+    if (g_wake_local && w) { t->home = w; }  // experimental migration (off)
+    // Fast path: the waker runs on the fiber's home scheduler thread, so the
+    // local (lockless) queue is safe. Otherwise it's a cross-thread wake.
+    if (w == t->home) sched_push_local(t->home, t);
+    else              sched_push_remote(t->home, t);
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
 
 static void gprod_trampoline(void) {
-    GProdTask *t = gsched_current;
-    // Running fiber: register its context with live_sp = stack base, so a
-    // collection mid-run conservatively scans the WHOLE fiber stack and never
-    // misses a live frame (cp2 running-fiber resolution). Held across parks so
-    // a suspended fiber's stack stays scannable; torn down only at finish.
+    GProdSched *s = cur_sched;
+    GProdTask *t = s->current;
+    // Running fiber: register its context with live_sp = stack base so a
+    // collection mid-run conservatively scans the whole stack. Held across
+    // parks; torn down at finish.
     t->gc_ctx = __pluto_gc_register_green_context(t->stack + t->stack_size, t->stack);
     if (t->submit_run) {
         t->submit_run(t->submit_job);
         __pluto_gc_unregister_green_context(t->gc_ctx);
         t->state = GDONE;
-        pluto_ctx_swap(&t->sp, gsched_sp);   // back to scheduler, no return
+        pluto_ctx_swap(&t->sp, s->sched_sp);   // back to scheduler, no return
     }
     long r = t->fn(t->arg);
     __pluto_gc_unregister_green_context(t->gc_ctx);
@@ -220,13 +444,13 @@ static void gprod_trampoline(void) {
     pthread_cond_signal(&t->cv);
     pthread_mutex_unlock(&t->mu);
     t->state = GDONE;
-    pluto_ctx_swap(&t->sp, gsched_sp);   // back to scheduler, no return
+    pluto_ctx_swap(&t->sp, s->sched_sp);   // back to scheduler, no return
 }
 
-static void *gprod_scheduler(void *_unused) {
-    (void)_unused;
-    gt_on_sched = 1;
-    // Register the scheduler thread's own C stack so the collector scans the
+static void *gprod_scheduler(void *arg) {
+    GProdSched *s = (GProdSched *)arg;
+    cur_sched = s;
+    // Register this scheduler thread's own C stack so the collector scans the
     // scheduler loop's frames (and any suspended-at-swap state) as roots.
     {
         pthread_t self = pthread_self();
@@ -241,53 +465,93 @@ static void *gprod_scheduler(void *_unused) {
         __pluto_gc_register_thread_stack(lo, hi);
     }
     for (;;) {
-        pthread_mutex_lock(&gq_mu);
-        timer_fire_expired(gprod_now_ns());
-        // Idle wait counts as a GC-safe region so stop-the-world converges
-        // while the scheduler sleeps (it holds no heap, like a channel wait).
-        // With timers pending, wait only until the nearest deadline, then fire.
-        while (!gq_head) {
-            __pluto_gc_enter_safe_region();
-            if (timer_head) {
-                long d = timer_head->deadline_ns;
-                struct timespec ts = { (time_t)(d / 1000000000L), (long)(d % 1000000000L) };
-                pthread_cond_timedwait(&gq_wake, &gq_mu, &ts);
-            } else {
-                pthread_cond_wait(&gq_wake, &gq_mu);
+        // Fast path: run the local queue (no lock) until it drains. Only when
+        // it is empty do we take the lock to pull in remote wakes / fire timers
+        // / idle-wait. For a workload whose fibers hand off among themselves on
+        // one scheduler (channels, await, yield), the mutex is never touched.
+        if (!s->local_head) {
+            for (;;) {
+                pthread_mutex_lock(&s->mu);
+                timer_fire_expired(s, gprod_now_ns());  // fires into the remote queue
+                if (s->head) {
+                    // Move the whole remote chain into the local queue at once.
+                    s->local_head = s->head; s->local_tail = s->tail;
+                    s->head = s->tail = NULL;
+                    pthread_mutex_unlock(&s->mu);
+                    break;
+                }
+                // Nothing ready: block in the reactor until a cross-thread wake,
+                // socket readiness, or the nearest timer. The reactor wait must
+                // not hold s->mu (it blocks), so drop it first; a wake that races
+                // this gap is latched and returned immediately (no lost wakeup).
+                // Timeout is RELATIVE, negative = block forever.
+                long timeout_ns = -1;
+                if (s->timer_head) {
+                    timeout_ns = s->timer_head->deadline_ns - gprod_now_ns();
+                    if (timeout_ns < 0) timeout_ns = 0;
+                }
+                pthread_mutex_unlock(&s->mu);
+                REvent evs[16];
+                __pluto_gc_enter_safe_region();  // idle wait = GC-safe region
+                int n = reactor_wait(s, evs, 16, timeout_ns);
+                __pluto_gc_leave_safe_region();
+                reactor_drain(s, evs, n);
+                // reactor_drain re-readies socket fibers into the LOCAL queue,
+                // which the remote-queue check above does not see — so break out
+                // to run them. Without this the loop would re-enter the reactor
+                // and strand the just-woken fibers (deadlock once the scheduler
+                // is otherwise idle).
+                if (s->local_head) break;
             }
-            __pluto_gc_leave_safe_region();
-            timer_fire_expired(gprod_now_ns());
+        } else if (s->fd_waiters) {
+            // Busy path WITH sockets parked: poll the reactor non-blocking
+            // (timeout 0) so a ready fd re-readies its fiber promptly instead of
+            // starving behind a scheduler that never goes idle. Gated on
+            // fd_waiters so a socket-free workload never pays a syscall per run.
+            REvent evs[16];
+            int n = reactor_wait(s, evs, 16, 0);
+            if (n > 0) reactor_drain(s, evs, n);
         }
-        GProdTask *t = gq_head;
-        gq_head = t->next;
-        if (!gq_head) gq_tail = NULL;
-        pthread_mutex_unlock(&gq_mu);
+        GProdTask *t = s->local_head;
+        s->local_head = t->next;
+        if (!s->local_head) s->local_tail = NULL;
 
-        gsched_current = t;
+        s->current = t;
         int is_submit = (t->submit_run != NULL);
-        // About to run: the fiber's sp will move, so scan its whole stack
-        // conservatively (live_sp = base) for any collection while it runs.
-        // (On first run gc_ctx is NULL until the trampoline registers it, also
-        // at base.) A plain store — see __pluto_gc_green_set_live_sp.
+        if (g_sp_check && ((char *)t->sp < t->stack || (char *)t->sp > t->stack + t->stack_size)) {
+            fprintf(stderr, "green: BAD sp %p not in [%p,%p) task=%p state=%d gc_ctx=%p\n",
+                    t->sp, (void *)t->stack, (void *)(t->stack + t->stack_size), (void *)t, t->state, t->gc_ctx);
+            abort();
+        }
+        // Running: sp moves, so scan the whole stack conservatively (plain
+        // store — single writer, read only during STW).
         if (t->gc_ctx) __pluto_gc_green_set_live_sp(t->gc_ctx, t->stack);
-        pluto_ctx_swap(&gsched_sp, t->sp);   // run until it yields/parks/finishes
-        gsched_current = NULL;
-        // Switched back out: unless finished, the fiber is suspended at t->sp,
-        // so only [t->sp, stack_top) is live — scan precisely. Without this a
-        // parked fiber would be scanned [base, top) every collection, faulting
-        // in its whole 512 KB stack (idle fibers must stay cheap).
+        // Load this fiber's thread-local runtime state onto the current thread,
+        // so cancellation checks etc. see its task even after a migration.
+        __pluto_current_task = t->sv_task;
+        __pluto_current_error = t->sv_error;
+        __pluto_current_error_type = t->sv_error_type;
+        pluto_ctx_swap(&s->sched_sp, t->sp);   // run until yield/park/finish
+        s->current = NULL;
+        // Save the fiber's thread-local state back onto the fiber and clear it
+        // from this thread, so nothing leaks to the next fiber or is left stale
+        // for another thread after the fiber migrates away.
+        t->sv_task = __pluto_current_task;
+        t->sv_error = __pluto_current_error;
+        t->sv_error_type = __pluto_current_error_type;
+        __pluto_current_task = NULL;
+        __pluto_current_error = NULL;
+        __pluto_current_error_type = NULL;
+        // Suspended: only [t->sp, top) is live — scan precisely so idle fibers
+        // do not fault in their whole stack.
         if (t->gc_ctx && t->state != GDONE) __pluto_gc_green_set_live_sp(t->gc_ctx, t->sp);
 
         switch (t->state) {
         case GYIELD:
             t->state = GRUN;
-            gq_push(t);                      // round-robin: back of the queue
+            sched_push_local(s, t);          // same thread → lockless local queue
             break;
         case GPARK: {
-            // Fiber fully switched out: run its handoff on the scheduler stack.
-            // The handoff either re-readies t (event already happened) or
-            // records t as a waiter to be woken later. Until then t is off all
-            // queues — only a future __pluto_green_wake re-enqueues it.
             void (*pf)(void *) = t->park_fn; void *pa = t->park_arg;
             t->park_fn = NULL; t->park_arg = NULL;
             if (pf) pf(pa);
@@ -296,10 +560,6 @@ static void *gprod_scheduler(void *_unused) {
         case GDONE:
         default:
             munmap(t->stack_map, t->stack_map_size);
-            // Submit tasks have no awaiter on the GProdTask (delivery went
-            // through the callback), so the scheduler owns and frees the
-            // handle too. cp1 tasks are read via __pluto_green_prod_get, so
-            // only their stack is freed here.
             if (is_submit) free(t);
             break;
         }
@@ -307,20 +567,62 @@ static void *gprod_scheduler(void *_unused) {
     return NULL;
 }
 
-static void gprod_ensure_started(void) {
-    pthread_mutex_lock(&gq_mu);
-    if (!gq_started) {
-        gq_started = 1;
-        pthread_create(&gq_thread, NULL, gprod_scheduler, NULL);
+// Number of schedulers to run. DEFAULT 1 (single scheduler) — deliberately:
+// with >1 scheduler and a fiber pinned to its home (no migration yet), a
+// tightly-coupled pair spawned from a non-fiber can land on different
+// schedulers and pay a ~5 us cross-thread wakeup per message instead of a
+// ~30 ns register switch (a ~16x regression on fine-grained ping-pong). So
+// multi-scheduler is OPT-IN via PLUTO_GREEN_SCHEDULERS=N, which buys CPU-bound
+// green fan-out ~5x parallelism without regressing the default. Flipping the
+// default to one-per-core awaits work-stealing / wake-locality (safe migration).
+static int desired_nsched(void) {
+    const char *env = getenv("PLUTO_GREEN_SCHEDULERS");
+    int n;
+    if (env && (n = atoi(env)) > 0) {
+        return n > MAX_SCHED ? MAX_SCHED : n;
     }
-    pthread_mutex_unlock(&gq_mu);
+    return 1;
+}
+
+static void gprod_ensure_started(void) {
+    pthread_mutex_lock(&g_start_mu);
+    if (!g_started) {
+        g_started = 1;
+        g_wake_local = getenv("PLUTO_GREEN_WAKE_LOCALITY") != NULL;
+        g_sp_check = getenv("PLUTO_GREEN_SP_CHECK") != NULL;
+        g_nsched = desired_nsched();
+        for (int i = 0; i < g_nsched; i++) {
+            GProdSched *s = &g_scheds[i];
+            pthread_mutex_init(&s->mu, NULL);
+            reactor_init(s);   // kqueue + EVFILT_USER / epoll + eventfd
+            s->head = s->tail = s->timer_head = NULL;
+            s->local_head = s->local_tail = NULL;
+            s->fd_waiters = 0;
+            s->sched_sp = NULL; s->current = NULL;
+            pthread_create(&s->thread, NULL, gprod_scheduler, s);
+        }
+    }
+    pthread_mutex_unlock(&g_start_mu);
+}
+
+// Choose a home scheduler for a new task. PARENT-LOCALITY: a task spawned by a
+// fiber inherits that fiber's scheduler, so a fiber and the sub-tasks it
+// spawns-and-talks-to stay co-located (handoffs are register switches, no
+// cross-thread wakeups). A task spawned by a NON-fiber (main / a spawn thread)
+// has no parent scheduler, so it goes round-robin — spreading top-level fan-out
+// across cores for parallelism. Since a fiber never migrates, its home is
+// fixed here for life.
+static GProdSched *pick_sched(void) {
+    if (cur_sched) return cur_sched;   // parent-locality: child joins parent
+    unsigned long i = __atomic_fetch_add(&g_rr, 1, __ATOMIC_RELAXED);
+    return &g_scheds[i % (unsigned)g_nsched];
 }
 
 static GProdTask *gprod_alloc(size_t stack_size) {
     GProdTask *t = (GProdTask *)calloc(1, sizeof(GProdTask));
     // Fiber stacks grow DOWN, so a one-page PROT_NONE guard at the LOW end
-    // turns a stack overflow (deep green recursion) into an immediate SIGSEGV
-    // instead of silent corruption of whatever the old malloc'd block abutted.
+    // turns a stack overflow into an immediate fault instead of silent
+    // corruption of whatever abutted the old malloc'd block.
     long pg = sysconf(_SC_PAGESIZE);
     size_t guard = (pg > 0) ? (size_t)pg : 16384;
     size_t total = guard + stack_size;
@@ -330,9 +632,9 @@ static GProdTask *gprod_alloc(size_t stack_size) {
     mprotect(map, guard, PROT_NONE);          // low guard page
     t->stack_map = map;
     t->stack_map_size = total;
-    t->stack = map + guard;                   // usable region above the guard
+    t->stack = map + guard;
     t->stack_size = stack_size;
-    t->sp = prime_ctx(t->stack + stack_size, gprod_trampoline);  // top (high)
+    t->sp = prime_ctx(t->stack + stack_size, gprod_trampoline);
     t->state = GRUN;
     return t;
 }
@@ -343,7 +645,8 @@ GProdTask *__pluto_green_prod_spawn(long (*fn)(void *), void *arg, size_t stack_
     t->fn = fn; t->arg = arg;
     pthread_mutex_init(&t->mu, NULL);
     pthread_cond_init(&t->cv, NULL);
-    gq_push(t);
+    t->home = pick_sched();
+    sched_push_remote(t->home, t);
     return t;
 }
 
@@ -355,15 +658,15 @@ long __pluto_green_prod_get(GProdTask *t) {
     return r;
 }
 
-// Submit a green task that runs `run(job)` to completion on the scheduler, with
-// its fiber GC-context registered. Result delivery is the callback's job (e.g.
-// into a Pluto Task<T> via its TaskSync). The scheduler owns and frees the
-// fiber. This is the entry point threading.c's __pluto_green_spawn uses.
+// Submit a green task that runs `run(job)` to completion on its home scheduler,
+// GC-context registered. Result delivery is the callback's job. The scheduler
+// owns and frees the fiber. Entry point for threading.c's __pluto_green_spawn.
 void __pluto_green_submit(void (*run)(void *), void *job, size_t stack_size) {
     gprod_ensure_started();
     GProdTask *t = gprod_alloc(stack_size);
     t->submit_run = run;
     t->submit_job = job;
-    gq_push(t);
+    t->home = pick_sched();
+    sched_push_remote(t->home, t);
 }
 #endif

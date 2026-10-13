@@ -35,23 +35,44 @@ use crate::visit::{walk_expr, walk_stmt, Visitor};
 /// (e.g. `std.fs.read_all`) inherit the effect through the fixed point. Names
 /// are the extern symbols as declared in the stdlib `extern fn` bindings.
 pub const BLOCKING_EXTERN_LEAVES: &[&str] = &[
-    // filesystem — no portable async form; a green scheduler must offload these
-    "__pluto_fs_open", "__pluto_fs_open_read", "__pluto_fs_open_write",
-    "__pluto_fs_read", "__pluto_fs_write", "__pluto_fs_pread", "__pluto_fs_pwrite",
-    "__pluto_fs_sync", "__pluto_fs_fsync", "__pluto_fs_fdatasync",
-    "__pluto_fs_read_all", "__pluto_fs_write_all", "__pluto_fs_copy",
-    // sockets — kqueue-readiness convertible, but blocking today
+    // filesystem metadata reads that allocate a STRUCTURED GC result (a stat
+    // record / a directory listing). Unlike the byte-buffer reads, these are not
+    // expressible via the scratch-split offload, so they stay green-illegal.
+    "__pluto_fs_stat", "__pluto_fs_list_dir",
+    // stdin / http — no cooperative form yet (stdin has no readiness model that
+    // composes with the scheduler; http_read_request layers on raw reads but is
+    // not yet converted).
+    "__pluto_io_read_line",
+    "__pluto_http_read_request",
+    // NOTE: __pluto_time_sleep_ns and the ops in COOPERATIVE_EXTERN_LEAVES are
+    // deliberately NOT here. Under the green scheduler they are cooperative
+    // yields (timer wheel / kqueue-epoll reactor / fs offload pool), so they
+    // block a plain thread but are legal in green — handled as `coop` in the
+    // collector, like channel/task ops (feeds blocking_fns, not
+    // green_illegal_fns).
+];
+
+/// Extern leaves that BLOCK a plain thread but YIELD under the green scheduler.
+/// Sockets park the fiber on the scheduler's reactor (kqueue/epoll) until the fd
+/// is ready; the primitive fs writes/opens are OFFLOADED to a worker pool (the
+/// fiber parks, a pool thread runs the blocking syscall, then wakes it). Like
+/// `__pluto_time_sleep_ns`, these feed `blocking_fns` but NOT `green_illegal_fns`
+/// — reaching one does not make a function illegal to call from `green`.
+pub const COOPERATIVE_EXTERN_LEAVES: &[&str] = &[
+    // sockets — reactor readiness (runtime `socket_*` / `__pluto_green_prod_wait_fd`)
     "__pluto_socket_accept", "__pluto_socket_connect",
     "__pluto_socket_read", "__pluto_socket_read_bytes",
     "__pluto_socket_write", "__pluto_socket_write_bytes",
     "__pluto_write_framed", "__pluto_read_framed",
-    // stdin / http
-    "__pluto_io_read_line",
-    "__pluto_http_read_request",
-    // NOTE: __pluto_time_sleep_ns is deliberately NOT here. Under the green
-    // scheduler it is a cooperative yield (the cp6 timer wheel), so it blocks a
-    // plain thread but is legal in green — handled as `coop` in the collector,
-    // like channel/task ops (feeds blocking_fns, not green_illegal_fns).
+    // filesystem — offloaded to the worker pool (`__pluto_green_fs_offload`):
+    //   writes/opens/close pass a raw variant (primitive, return-encoded);
+    //   byte-buffer reads use the scratch-split (worker reads into malloc, the
+    //   fiber allocates the GC result on resume).
+    "__pluto_fs_open_read", "__pluto_fs_open_write", "__pluto_fs_open_append",
+    "__pluto_fs_close", "__pluto_fs_write",
+    "__pluto_fs_write_all", "__pluto_fs_append_all",
+    "__pluto_fs_read", "__pluto_fs_read_bytes", "__pluto_fs_read_at",
+    "__pluto_fs_read_all", "__pluto_fs_read_all_bytes",
 ];
 
 /// Is this method resolution a blocking leaf? Channel recv/send and task join
@@ -202,11 +223,12 @@ impl Visitor for BlockingCollector<'_> {
         match &expr.node {
             Expr::Call { name, .. } => {
                 let n = name.node.clone();
-                if n == "__pluto_time_sleep_ns" {
-                    // Sleep blocks a plain thread but is a cooperative yield
-                    // under the green scheduler (cp6 timer wheel): like
-                    // channel/task, it feeds blocking_fns but NOT
-                    // green_illegal_fns. (Args still recurse via walk_expr.)
+                if n == "__pluto_time_sleep_ns" || COOPERATIVE_EXTERN_LEAVES.contains(&n.as_str()) {
+                    // Blocks a plain thread but is a cooperative yield under the
+                    // green scheduler: sleep via the timer wheel, sockets via the
+                    // kqueue reactor (park until fd-ready). Like channel/task, it
+                    // feeds blocking_fns but NOT green_illegal_fns. (Args still
+                    // recurse via walk_expr.)
                     self.coop = true;
                 } else {
                     // An extern blocking leaf is caught by the fixpoint through
@@ -384,14 +406,15 @@ fn main() {
     fn green_guardrail_leaf_set_is_narrower_than_blocking() {
         // A fn that only recv()s a channel blocks the OS thread today, but under
         // green that recv is a cooperative yield — so it is NOT green-illegal.
-        // A fn that touches fs has no cooperative form — green-illegal.
+        // A fn that stats a path has no cooperative form (fs reads/writes are now
+        // offloaded, but metadata reads like stat are not) — green-illegal.
         let src = r#"
-extern fn __pluto_fs_read(fd: int) int
+extern fn __pluto_fs_stat(path: string) int
 fn chan_only(rx: Receiver<int>) int {
     return rx.recv() catch 0
 }
 fn fs_only() int {
-    return __pluto_fs_read(3)
+    return __pluto_fs_stat("/x")
 }
 fn main() {
     let (tx, rx) = chan<int>(1)
@@ -406,8 +429,8 @@ fn main() {
         let env = crate::run_frontend(&mut program, false).unwrap().env;
         assert!(env.blocking_fns.contains("chan_only"), "chan recv blocks the OS thread today");
         assert!(!env.green_illegal_fns.contains("chan_only"), "chan recv yields under green — not green-illegal");
-        assert!(env.blocking_fns.contains("fs_only"), "fs blocks");
-        assert!(env.green_illegal_fns.contains("fs_only"), "fs has no cooperative form — green-illegal");
+        assert!(env.blocking_fns.contains("fs_only"), "fs stat blocks");
+        assert!(env.green_illegal_fns.contains("fs_only"), "fs stat has no cooperative form — green-illegal");
     }
 
     #[test]

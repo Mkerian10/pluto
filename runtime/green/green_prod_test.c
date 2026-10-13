@@ -7,6 +7,10 @@ extern long __pluto_green_prod_get(GProdTask *);
 // Stubs for GC coordination (real impls live in marksweep.c).
 static int reg_calls=0, unreg_calls=0, threadreg=0;
 void *__pluto_gc_register_green_context(void *top,void *sp){(void)top;(void)sp;__sync_fetch_and_add(&reg_calls,1);return (void*)1;}
+__thread void *__pluto_current_error = 0;
+__thread void *__pluto_current_error_type = 0;
+__thread long *__pluto_current_task = 0;
+void __pluto_gc_green_set_live_sp(void *h, void *sp) { (void)h; (void)sp; }
 void __pluto_gc_unregister_green_context(void *h){(void)h;__sync_fetch_and_add(&unreg_calls,1);}
 void __pluto_gc_register_thread_stack(void *l,void *h){(void)l;(void)h;threadreg=1;}
 void __pluto_gc_enter_safe_region(void){}

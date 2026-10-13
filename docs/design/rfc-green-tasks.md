@@ -188,17 +188,23 @@ Checkpoints 1–5 are LANDED and staged (not merged). All on `green-cp4-park`.
   parked fiber). Demonstrated ~19× over the pthread tier on a fiber-to-fiber
   ping-pong (`benchmarks/concurrency/green_pingpong.pt`).
 - **CP5 (guardrail):** a `green f()` whose target reaches a blocking op with no
-  cooperative form (fs/stdin/sleep/blocking-sockets) is a compile error.
+  cooperative form (fs/stdin) is a compile error. Sleep, channels, and sockets
+  have cooperative forms (they park/yield) and are allowed.
 - **Stacks:** fiber stacks are mmap'd with a `PROT_NONE` guard page — overflow
   faults instead of corrupting the heap.
 
 Remaining / known gaps:
 
-- **CP6 (not started):** fs/stdin/sleep/sockets are *rejected* from green, not
-  yet *offloaded*. Making them usable needs a kqueue/epoll readiness loop +
-  a thread-pool offload for fs, and a scheduler timer wheel (which also lets
-  `recv_timeout` and `select` park a fiber instead of blocking — today those
-  take the cond path from a fiber).
+- **CP6 (partly landed):** the scheduler timer wheel, cooperative `sleep`,
+  `recv_timeout`, and `select` park a fiber instead of blocking it. **Sockets
+  are now cooperative** (branch `green-kqueue`): each scheduler owns a `kqueue`,
+  and a socket op from a green fiber parks on fd readiness (`EVFILT_READ`/
+  `WRITE`) instead of blocking the thread, so one scheduler drives many
+  connections (demonstrated: 1000 concurrent on one thread). Off a fiber the
+  ops stay blocking. Still open: a Linux `epoll` sibling (the reactor is
+  kqueue-only today), a thread-pool offload for fs/stdin (no readiness model),
+  and cooperative read-timeout for a fiber awaiting a socket with a deadline
+  (currently forced to the blocking path so `SO_RCVTIMEO` applies).
 - **Opaque-target soundness:** a green fn that calls through a closure or a
   trait-dynamic dispatch (`blocking_opaque_fns`) is NOT rejected, because that
   would reject most legitimate green code. A call reached that way which turns

@@ -1164,7 +1164,13 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     GreenWaiter *green_waiters;   // guarded by `mutex`
+    GreenWaiter *gw_cache;        // one-slot node cache (see gw_alloc/gw_free)
 } TaskSync;
+
+// GreenWaiter node (de)allocation via a one-slot cache; defined with the
+// channel code below, used here too to avoid a malloc/free per await.
+static GreenWaiter *gw_alloc(GreenWaiter **cache);
+static void gw_free(GreenWaiter **cache, GreenWaiter *w);
 
 // Re-ready every green fiber parked on this task. Caller holds sync->mutex;
 // the list is detached first, then the wakes run (each takes the scheduler's
@@ -1175,8 +1181,9 @@ static void task_wake_green_waiters(TaskSync *sync) {
     sync->green_waiters = NULL;
     while (w) {
         GreenWaiter *n = w->next;
-        __pluto_green_wake(w->fiber);
-        free(w);
+        void *f = w->fiber;
+        gw_free(&sync->gw_cache, w);
+        __pluto_green_wake(f);
         w = n;
     }
 }
@@ -1192,7 +1199,7 @@ static void task_await_handoff(void *p) {
         pthread_mutex_unlock(&a->sync->mutex);
         __pluto_green_wake(a->self);
     } else {
-        GreenWaiter *w = (GreenWaiter *)malloc(sizeof(GreenWaiter));
+        GreenWaiter *w = gw_alloc(&a->sync->gw_cache);
         w->fiber = a->self;
         w->next = a->sync->green_waiters;
         a->sync->green_waiters = w;
@@ -1435,6 +1442,101 @@ long __pluto_green_spawn(long closure_ptr) {
     j->task = task;
     __pluto_green_submit(green_run_cb, j, PLUTO_GREEN_STACK);
     return (long)task;
+}
+
+// ── Blocking-op offload pool (fs from a green fiber) ─────────────────────────
+// A regular file has no readiness model, so a green fiber's blocking fs syscall
+// cannot park on the reactor the way a socket does. Instead it is OFFLOADED to
+// a small pool of worker threads: the fiber submits the op and PARKS (yielding
+// the scheduler to its peers); a worker runs the blocking syscall and then wakes
+// the fiber, which resumes with the result.
+//
+// SOUNDNESS — why the workers need no GC registration: these offload only
+// PRIMITIVE-returning fs ops (fd/int results). The worker allocates nothing on
+// the GC heap and only READS the fiber's argument strings. Mark-sweep never
+// moves objects, and those strings are reachable from the parked fiber's own
+// stack (its saved args), so they are marked and never swept while in use.
+// stop-the-world waits only for *registered* threads, so an unregistered worker
+// that never touches the GC heap may run freely during a collection — which is
+// exactly the case here. Allocating reads (read/read_all/stat/list_dir) return
+// GC objects and would need a registered worker + result-root handling; they
+// stay green-illegal pending that follow-up.
+typedef long (*PlutoFsFn)(long, long, long);
+
+typedef struct FsJob {
+    PlutoFsFn fn;
+    long a0, a1, a2;
+    long result;
+    void *fiber;            // parked green fiber to wake on completion
+    struct FsJob *next;
+} FsJob;
+
+static pthread_mutex_t fs_pool_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  fs_pool_cv = PTHREAD_COND_INITIALIZER;
+static FsJob *fs_job_head = NULL, *fs_job_tail = NULL;
+static int fs_pool_started = 0;
+
+#define FS_POOL_WORKERS 4
+
+static void *fs_worker(void *arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&fs_pool_mu);
+        while (!fs_job_head) pthread_cond_wait(&fs_pool_cv, &fs_pool_mu);
+        FsJob *j = fs_job_head;
+        fs_job_head = j->next;
+        if (!fs_job_head) fs_job_tail = NULL;
+        pthread_mutex_unlock(&fs_pool_mu);
+
+        // Run the blocking op. It brackets its own syscalls in GC safe regions;
+        // on this unregistered worker those are no-ops, which is fine (see the
+        // soundness note above — the worker touches no GC heap).
+        j->result = j->fn(j->a0, j->a1, j->a2);
+
+        // Publish the result, then wake the parked fiber on its home scheduler.
+        // The store to j->result is ordered before the wake by the scheduler
+        // queue lock the fiber re-acquires on resume. `j` lives on the fiber's
+        // parked stack, valid until it resumes.
+        __pluto_green_wake(j->fiber);
+    }
+    return NULL;
+}
+
+static void fs_pool_ensure_started(void) {
+    pthread_mutex_lock(&fs_pool_mu);
+    if (!fs_pool_started) {
+        fs_pool_started = 1;
+        for (int i = 0; i < FS_POOL_WORKERS; i++) {
+            pthread_t t;
+            if (pthread_create(&t, NULL, fs_worker, NULL) == 0) pthread_detach(t);
+        }
+    }
+    pthread_mutex_unlock(&fs_pool_mu);
+}
+
+// Handoff (runs on the scheduler stack once the fiber has switched out): enqueue
+// the job and signal a worker. Enqueuing only now is the gopark invariant — a
+// worker cannot wake the fiber before it has fully switched out.
+static void fs_offload_handoff(void *arg) {
+    FsJob *j = (FsJob *)arg;
+    pthread_mutex_lock(&fs_pool_mu);
+    j->next = NULL;
+    if (fs_job_tail) fs_job_tail->next = j; else fs_job_head = j;
+    fs_job_tail = j;
+    pthread_cond_signal(&fs_pool_cv);
+    pthread_mutex_unlock(&fs_pool_mu);
+}
+
+// Offload a primitive blocking fs op from the CURRENT green fiber: park the
+// fiber, run fn(a0,a1,a2) on a pool worker, return its result. Only called when
+// already on a green fiber (the fs intrinsics guard with __pluto_green_self()).
+long __pluto_green_fs_offload(PlutoFsFn fn, long a0, long a1, long a2) {
+    fs_pool_ensure_started();
+    FsJob job;
+    job.fn = fn; job.a0 = a0; job.a1 = a1; job.a2 = a2;
+    job.result = 0; job.fiber = __pluto_green_self(); job.next = NULL;
+    __pluto_green_park(fs_offload_handoff, &job);
+    return job.result;
 }
 
 long __pluto_task_get(long task_ptr) {
@@ -2256,6 +2358,17 @@ static int chan_cond_timedwait(pthread_cond_t *cond, ChannelSync *sync,
 // (a peer can consume/produce between wake and resume), so the caller re-checks
 // under the lock in its wait loop, exactly like chan_cond_wait.
 
+// GreenWaiter node (de)allocation via a one-slot per-channel cache. Both run
+// under the channel mutex. Reuse avoids a malloc/free on every park/wake.
+static GreenWaiter *gw_alloc(GreenWaiter **cache) {
+    GreenWaiter *w = *cache;
+    if (w) { *cache = NULL; return w; }
+    return (GreenWaiter *)malloc(sizeof(GreenWaiter));
+}
+static void gw_free(GreenWaiter **cache, GreenWaiter *w) {
+    if (!*cache) *cache = w; else free(w);   // retain at most one
+}
+
 // Park handoff: runs on the scheduler stack with the channel mutex still held
 // by this (scheduler) thread. Enqueues the fiber on `*tail` FIFO, then releases
 // the mutex — publishing the waiter atomically w.r.t. any waker, which must
@@ -2263,7 +2376,7 @@ static int chan_cond_timedwait(pthread_cond_t *cond, ChannelSync *sync,
 typedef struct { ChannelSync *sync; GreenWaiter **head; GreenWaiter **tail; void *self; } ChanPark;
 static void chan_green_handoff(void *p) {
     ChanPark *cp = (ChanPark *)p;
-    GreenWaiter *w = (GreenWaiter *)malloc(sizeof(GreenWaiter));
+    GreenWaiter *w = gw_alloc(&cp->sync->gw_cache);
     w->fiber = cp->self; w->next = NULL;
     if (*cp->tail) (*cp->tail)->next = w; else *cp->head = w;
     *cp->tail = w;
@@ -2281,12 +2394,13 @@ static void chan_green_park(ChannelSync *sync, GreenWaiter **head, GreenWaiter *
 
 // Wake one waiter from a green queue (FIFO). Caller holds sync->mutex. Returns
 // 1 if a green fiber was woken, 0 if the queue was empty.
-static int chan_wake_one_green(GreenWaiter **head, GreenWaiter **tail) {
+static int chan_wake_one_green(ChannelSync *sync, GreenWaiter **head, GreenWaiter **tail) {
     GreenWaiter *w = *head;
     if (!w) return 0;
     *head = w->next;
     if (!*head) *tail = NULL;
-    void *f = w->fiber; free(w);
+    void *f = w->fiber;
+    gw_free(&sync->gw_cache, w);
     __pluto_green_wake(f);
     return 1;
 }
@@ -2295,11 +2409,11 @@ static int chan_wake_one_green(GreenWaiter **head, GreenWaiter **tail) {
 // waiter. Caller holds sync->mutex. (A woken loser simply re-checks and
 // re-waits, so waking the "wrong" tier is never incorrect, only wasteful.)
 static void chan_wake_one_recv(ChannelSync *sync) {
-    if (chan_wake_one_green(&sync->green_recv_head, &sync->green_recv_tail)) return;
+    if (chan_wake_one_green(sync, &sync->green_recv_head, &sync->green_recv_tail)) return;
     if (sync->recv_waiters > 0) pthread_cond_signal(&sync->not_empty);
 }
 static void chan_wake_one_send(ChannelSync *sync) {
-    if (chan_wake_one_green(&sync->green_send_head, &sync->green_send_tail)) return;
+    if (chan_wake_one_green(sync, &sync->green_send_head, &sync->green_send_tail)) return;
     if (sync->send_waiters > 0) pthread_cond_signal(&sync->not_full);
 }
 
@@ -2307,8 +2421,8 @@ static void chan_wake_one_send(ChannelSync *sync) {
 // sync->mutex. Used by close, which must wake all waiters so each re-checks and
 // sees the closed flag.
 static void chan_wake_all_green(ChannelSync *sync) {
-    while (chan_wake_one_green(&sync->green_recv_head, &sync->green_recv_tail)) {}
-    while (chan_wake_one_green(&sync->green_send_head, &sync->green_send_tail)) {}
+    while (chan_wake_one_green(sync, &sync->green_recv_head, &sync->green_recv_tail)) {}
+    while (chan_wake_one_green(sync, &sync->green_send_head, &sync->green_send_tail)) {}
 }
 
 long __pluto_chan_send(long handle, long value) {
