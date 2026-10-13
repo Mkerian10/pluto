@@ -253,7 +253,14 @@ schema LineItem {
     invariant self.quantity > 0                 // checked at the door
 }
 
-schema UpdateOrder partial of CreateOrder       // every field tri-state: absent | null | value
+// A PATCH body reuses CreateOrder's fields by inlining them. An inlined field
+// keeps the source field's type, claims, and identity; a trailing ? makes it
+// optional here. No derived-type keyword.
+schema UpdateOrder {
+    CreateOrder.note?
+    CreateOrder.currency?
+    CreateOrder.items?
+}
 ```
 
 **Semantics.**
@@ -269,17 +276,17 @@ schema UpdateOrder partial of CreateOrder       // every field tri-state: absent
 - **Presence.** Required fields are enforced at decode: a missing required
   field is a typed `DecodeError` naming the field. Inside the program
   `req.customer_email` is a plain `string`. `T?` reads absent and null as
-  `none`. Defaulted fields are filled at decode. In `partial` mode every field
-  is tri-state and narrows flow-sensitively:
-
-  ```pluto
-  if u.note is present { o.note = u.note }     // u.note: string? inside the branch
-  ```
-
-  `present` is a new flow-fact kind in `src/typeck/facts.rs`, structurally the
-  same as nullable narrowing. A partial schema is also the natural output of
-  a partial parse (see Streaming), so one concept serves PATCH bodies and
-  incremental decode.
+  `none`. Defaulted fields are filled at decode. Tri-state presence (absent
+  distinct from null) is not part of this phase; it arrives with streaming
+  decode in phase 3, where partial values exist for a structural reason.
+- **Inlined fields.** A line of the form `Other.field` inside a schema body
+  inlines that field: same name, type, claims, and UUID as the source, which
+  may be a schema or a class. A trailing `?` makes it optional here. Because
+  the identity is shared, admission between the two shapes and the evolution
+  diff both know they are the same field, and a rename at the source is not
+  a rename at the inlining site. Inlined fields cannot be renamed. This is how
+  request, response, and PATCH bodies share fields without a derived-type
+  form; whole-schema spread (`...Other`) stays deferred (D8).
 - **Unknown fields.** Captured by the decoder into a compiler-owned hidden
   bag, re-emitted by an encoder of the same family on encode, never visible as
   a user field (so the in-band `__variant`/`__bytes` collision of today's JSON
@@ -341,7 +348,13 @@ diffable, or plannable by the compiler; names no code.
 
 - **Streaming decoders** are values with `mut self` that accept bytes
   incrementally (`feed(chunk)`) and yield either a complete value or a
-  `partial` schema with presence facts for what has arrived (decision D5).
+  partial one: the same schema with every field tri-state (absent, null,
+  value) and `is present` narrowing on what has arrived (decision D5). A
+  PATCH body whose absent and null must differ is decoded the same way.
+
+  ```pluto
+  if u.note is present { o.note = u.note }     // u.note: string? inside the branch
+  ```
 - **Projection pushdown.** Whole-program compilation sees every field access
   on a decoded value. For each decode site the compiler computes the read set
   (conservatively: escapes to a function take that function's read set;
@@ -453,8 +466,7 @@ and is independently mergeable. Each names the dogfood that proves it.
 ### Phase 2 — Schema · XL
 
 - Lexer/parser/AST/binary (SCHEMA_VERSION bump); `PlutoType::Schema`; closure
-  check; presence modes; defaults; `partial of`; presence facts
-  and `is present` narrowing; tolerant decode lowering; unknown bag;
+  check; presence modes; defaults; field inlining; tolerant decode lowering; unknown bag;
   decode-coverage extension; SDK/MCP; `pluto analyze` perception surface.
 - `examples/schema/` (an HTTP API with `CreateOrder` → `Order` admission and a
   PATCH endpoint); book chapter "Schemas: the open world."
@@ -464,7 +476,9 @@ and is independently mergeable. Each names the dogfood that proves it.
 
 ### Phase 3 — Streaming and projection pushdown · L
 
-- Incremental `Decoder` feeding; partial-schema output; `skip()` on every
+- Incremental `Decoder` feeding; tri-state presence and `is present`
+  narrowing (a new flow-fact kind in `src/typeck/facts.rs`, structurally the
+  same as nullable narrowing); partial-value output; `skip()` on every
   decoder; read-set analysis per decode site; pruned walkers; raw retention
   and re-emit of skipped/unknown content.
 - **Acceptance:** Styx compaction reads record keys through a pruned decode
