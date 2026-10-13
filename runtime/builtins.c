@@ -2842,12 +2842,88 @@ long __pluto_fs_close(long fd) {
     return rc == 0 ? 0 : -err;
 }
 
+// ── Green read offload (scratch-split) ───────────────────────────────────────
+// Reads allocate a GC result, which an unregistered pool worker must not do. So
+// the worker reads into a plain malloc buffer written to a descriptor on the
+// PARKED FIBER's stack, and the fiber allocates the GC string/bytes from that
+// scratch after it resumes. The worker touches no GC heap (see the offload-pool
+// soundness note), reusing the same pool as the primitive writes. errno comes
+// back in the descriptor — no thread-local crossing.
+typedef struct {
+    const char *path;   // path-based whole-file read; NULL for an fd read
+    long fd;
+    long offset;        // >= 0 for a positioned (pread) read, else -1
+    long max_bytes;
+    char *buf;          // OUT: malloc'd scratch (fiber frees), or NULL
+    long n;             // OUT: bytes read (>= 0)
+    long err;           // OUT: errno (0 = ok)
+} FsReadReq;
+
+// Read up to req->max_bytes from req->fd (positioned if req->offset >= 0) into a
+// fresh malloc buffer. No GC allocation. Runs on a pool worker.
+static long fs_raw_read_fd(long req_l, long u1, long u2) {
+    (void)u1; (void)u2;
+    FsReadReq *r = (FsReadReq *)req_l;
+    r->buf = NULL; r->n = 0; r->err = 0;
+    char *buf = (char *)malloc((size_t)r->max_bytes);
+    if (!buf) { r->err = (long)ENOMEM; return 0; }
+    __pluto_gc_enter_safe_region();
+    ssize_t n = (r->offset >= 0)
+        ? pread((int)r->fd, buf, (size_t)r->max_bytes, (off_t)r->offset)
+        : read((int)r->fd, buf, (size_t)r->max_bytes);
+    long err = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (n < 0) { free(buf); r->err = err; return 0; }
+    r->buf = buf; r->n = (long)n;
+    return 0;
+}
+
+// open + fstat + read the whole file at req->path into a fresh malloc buffer.
+static long fs_raw_read_all_path(long req_l, long u1, long u2) {
+    (void)u1; (void)u2;
+    FsReadReq *r = (FsReadReq *)req_l;
+    r->buf = NULL; r->n = 0; r->err = 0;
+    __pluto_gc_enter_safe_region();
+    int fd = open(r->path, O_RDONLY);
+    if (fd < 0) { r->err = (long)errno; __pluto_gc_leave_safe_region(); return 0; }
+    struct stat st;
+    if (fstat(fd, &st) != 0) { r->err = (long)errno; close(fd); __pluto_gc_leave_safe_region(); return 0; }
+    size_t size = (size_t)st.st_size;
+    char *buf = (char *)malloc(size > 0 ? size : 1);
+    if (!buf) { r->err = (long)ENOMEM; close(fd); __pluto_gc_leave_safe_region(); return 0; }
+    size_t total = 0; long err = 0;
+    while (total < size) {
+        ssize_t n = read(fd, buf + total, size - total);
+        if (n < 0) { if (errno == EINTR) continue; err = (long)errno; break; }
+        if (n == 0) break;   // truncated under us: return what we got
+        total += (size_t)n;
+    }
+    int crc = close(fd); long cerr = (long)errno;
+    __pluto_gc_leave_safe_region();
+    if (err == 0 && crc < 0) err = cerr;
+    if (err != 0) { free(buf); r->err = err; return 0; }
+    r->buf = buf; r->n = (long)total;
+    return 0;
+}
+
 // EOF/error disambiguation (issue #367): "" with last_errno == 0 is EOF;
 // "" with last_errno != 0 is a read failure.
 void *__pluto_fs_read(long fd, long max_bytes) {
     __pluto_fs_saved_errno = 0;
     if (max_bytes <= 0) return __pluto_string_new("", 0);
     if (max_bytes > 104857600) max_bytes = 104857600; // 100MB cap
+#ifndef PLUTO_TEST_MODE
+    if (__pluto_green_self()) {
+        FsReadReq req = { NULL, fd, -1, max_bytes, NULL, 0, 0 };
+        __pluto_green_fs_offload(fs_raw_read_fd, (long)&req, 0, 0);  // park; worker reads
+        __pluto_fs_saved_errno = req.err;
+        void *result = (req.err != 0 || req.buf == NULL || req.n <= 0)
+            ? __pluto_string_new("", 0)
+            : __pluto_string_new(req.buf, req.n);
+        if (req.buf) free(req.buf);
+        return result;
+    }
+#endif
     char *buf = (char *)malloc((size_t)max_bytes);
     if (!buf) {
         __pluto_fs_saved_errno = (long)ENOMEM;
@@ -2924,6 +3000,18 @@ long __pluto_fs_read_bytes(long fd, long max_bytes) {
     __pluto_fs_saved_errno = 0;
     if (max_bytes <= 0) return __pluto_fs_bytes_from_scratch(NULL, 0);
     if (max_bytes > 104857600) max_bytes = 104857600; // 100MB cap
+#ifndef PLUTO_TEST_MODE
+    if (__pluto_green_self()) {
+        FsReadReq req = { NULL, fd, -1, max_bytes, NULL, 0, 0 };
+        __pluto_green_fs_offload(fs_raw_read_fd, (long)&req, 0, 0);
+        __pluto_fs_saved_errno = req.err;
+        long result = (req.err != 0 || req.buf == NULL)
+            ? __pluto_fs_bytes_from_scratch(NULL, 0)
+            : __pluto_fs_bytes_from_scratch(req.buf, req.n);
+        if (req.buf) free(req.buf);
+        return result;
+    }
+#endif
     char *buf = (char *)malloc((size_t)max_bytes);
     if (!buf) {
         __pluto_fs_saved_errno = (long)ENOMEM;
@@ -2948,6 +3036,18 @@ long __pluto_fs_read_at(long fd, long offset, long max_bytes) {
     __pluto_fs_saved_errno = 0;
     if (max_bytes <= 0) return __pluto_fs_bytes_from_scratch(NULL, 0);
     if (max_bytes > 104857600) max_bytes = 104857600; // 100MB cap
+#ifndef PLUTO_TEST_MODE
+    if (__pluto_green_self()) {
+        FsReadReq req = { NULL, fd, offset, max_bytes, NULL, 0, 0 };
+        __pluto_green_fs_offload(fs_raw_read_fd, (long)&req, 0, 0);
+        __pluto_fs_saved_errno = req.err;
+        long result = (req.err != 0 || req.buf == NULL)
+            ? __pluto_fs_bytes_from_scratch(NULL, 0)
+            : __pluto_fs_bytes_from_scratch(req.buf, req.n);
+        if (req.buf) free(req.buf);
+        return result;
+    }
+#endif
     char *buf = (char *)malloc((size_t)max_bytes);
     if (!buf) {
         __pluto_fs_saved_errno = (long)ENOMEM;
@@ -3466,8 +3566,20 @@ long __pluto_fs_replace_all(void *path_str, void *data_str) {
 }
 
 void *__pluto_fs_read_all(void *path_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
+    const char *path = __pluto_string_to_cstr(path_str);   // convert on this fiber
     __pluto_fs_saved_errno = 0;
+#ifndef PLUTO_TEST_MODE
+    if (__pluto_green_self()) {
+        FsReadReq req = { path, -1, -1, 0, NULL, 0, 0 };
+        __pluto_green_fs_offload(fs_raw_read_all_path, (long)&req, 0, 0);
+        __pluto_fs_saved_errno = req.err;
+        void *result = (req.err != 0 || req.buf == NULL)
+            ? __pluto_string_new("", 0)
+            : __pluto_string_new(req.buf, req.n);
+        if (req.buf) free(req.buf);
+        return result;
+    }
+#endif
     __pluto_gc_enter_safe_region();
     int fd = open(path, O_RDONLY);
     long err = (long)errno;
@@ -3591,8 +3703,20 @@ long __pluto_fs_append_all(void *path_str, void *data_str) {
 // Mirrors __pluto_fs_read_all: errors via last_errno + empty bytes; the GC
 // handle is allocated only after every syscall bracket is closed.
 long __pluto_fs_read_all_bytes(void *path_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
+    const char *path = __pluto_string_to_cstr(path_str);   // convert on this fiber
     __pluto_fs_saved_errno = 0;
+#ifndef PLUTO_TEST_MODE
+    if (__pluto_green_self()) {
+        FsReadReq req = { path, -1, -1, 0, NULL, 0, 0 };
+        __pluto_green_fs_offload(fs_raw_read_all_path, (long)&req, 0, 0);
+        __pluto_fs_saved_errno = req.err;
+        long result = (req.err != 0 || req.buf == NULL)
+            ? __pluto_fs_bytes_from_scratch(NULL, 0)
+            : __pluto_fs_bytes_from_scratch(req.buf, req.n);
+        if (req.buf) free(req.buf);
+        return result;
+    }
+#endif
     __pluto_gc_enter_safe_region();
     int fd = open(path, O_RDONLY);
     long err = (long)errno;

@@ -35,12 +35,9 @@ use crate::visit::{walk_expr, walk_stmt, Visitor};
 /// (e.g. `std.fs.read_all`) inherit the effect through the fixed point. Names
 /// are the extern symbols as declared in the stdlib `extern fn` bindings.
 pub const BLOCKING_EXTERN_LEAVES: &[&str] = &[
-    // filesystem READS that allocate a GC result (string/bytes/stat/dir list).
-    // These cannot yet run on an offload-pool worker (an unregistered worker
-    // must not touch the GC heap), so they stay green-illegal pending a
-    // registered-worker follow-up.
-    "__pluto_fs_read", "__pluto_fs_read_bytes", "__pluto_fs_read_at",
-    "__pluto_fs_read_all", "__pluto_fs_read_all_bytes",
+    // filesystem metadata reads that allocate a STRUCTURED GC result (a stat
+    // record / a directory listing). Unlike the byte-buffer reads, these are not
+    // expressible via the scratch-split offload, so they stay green-illegal.
     "__pluto_fs_stat", "__pluto_fs_list_dir",
     // stdin / http — no cooperative form yet (stdin has no readiness model that
     // composes with the scheduler; http_read_request layers on raw reads but is
@@ -67,11 +64,15 @@ pub const COOPERATIVE_EXTERN_LEAVES: &[&str] = &[
     "__pluto_socket_read", "__pluto_socket_read_bytes",
     "__pluto_socket_write", "__pluto_socket_write_bytes",
     "__pluto_write_framed", "__pluto_read_framed",
-    // filesystem — primitive-returning ops offloaded to the pool
-    // (`__pluto_green_fs_offload`): opens, writes, close.
+    // filesystem — offloaded to the worker pool (`__pluto_green_fs_offload`):
+    //   writes/opens/close pass a raw variant (primitive, return-encoded);
+    //   byte-buffer reads use the scratch-split (worker reads into malloc, the
+    //   fiber allocates the GC result on resume).
     "__pluto_fs_open_read", "__pluto_fs_open_write", "__pluto_fs_open_append",
     "__pluto_fs_close", "__pluto_fs_write",
     "__pluto_fs_write_all", "__pluto_fs_append_all",
+    "__pluto_fs_read", "__pluto_fs_read_bytes", "__pluto_fs_read_at",
+    "__pluto_fs_read_all", "__pluto_fs_read_all_bytes",
 ];
 
 /// Is this method resolution a blocking leaf? Channel recv/send and task join
@@ -405,14 +406,15 @@ fn main() {
     fn green_guardrail_leaf_set_is_narrower_than_blocking() {
         // A fn that only recv()s a channel blocks the OS thread today, but under
         // green that recv is a cooperative yield — so it is NOT green-illegal.
-        // A fn that touches fs has no cooperative form — green-illegal.
+        // A fn that stats a path has no cooperative form (fs reads/writes are now
+        // offloaded, but metadata reads like stat are not) — green-illegal.
         let src = r#"
-extern fn __pluto_fs_read(fd: int) int
+extern fn __pluto_fs_stat(path: string) int
 fn chan_only(rx: Receiver<int>) int {
     return rx.recv() catch 0
 }
 fn fs_only() int {
-    return __pluto_fs_read(3)
+    return __pluto_fs_stat("/x")
 }
 fn main() {
     let (tx, rx) = chan<int>(1)
@@ -427,8 +429,8 @@ fn main() {
         let env = crate::run_frontend(&mut program, false).unwrap().env;
         assert!(env.blocking_fns.contains("chan_only"), "chan recv blocks the OS thread today");
         assert!(!env.green_illegal_fns.contains("chan_only"), "chan recv yields under green — not green-illegal");
-        assert!(env.blocking_fns.contains("fs_only"), "fs blocks");
-        assert!(env.green_illegal_fns.contains("fs_only"), "fs has no cooperative form — green-illegal");
+        assert!(env.blocking_fns.contains("fs_only"), "fs stat blocks");
+        assert!(env.green_illegal_fns.contains("fs_only"), "fs stat has no cooperative form — green-illegal");
     }
 
     #[test]
