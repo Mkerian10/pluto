@@ -112,8 +112,8 @@ Admission from schema to class is ordinary code; the door already did the
 checking.
 
 **Byte relay is first-class.** `bytes` crosses every boundary as one opaque
-blob. A decoded value re-emits what it did not read from the original bytes.
-Nothing is ever re-encoded that was not changed.
+blob, and a payload a program only forwards stays `bytes` end to end. Nothing
+is ever decoded that the program did not ask to decode.
 
 ## Design
 
@@ -170,7 +170,7 @@ pub trait Encoder {
 
 pub trait Decoder {
     // pull-based; mirrors Encoder; every method is fallible (DecodeError)
-    // plus: fn skip(mut self)              — skip the current value without materializing
+    // plus: fn skip(mut self)              — skip one value (unknown fields in schema mode)
     //       fn begin_record_tolerant(...) — schema mode: returns a FieldCursor that
     //                                       yields known fields by uuid/name and
     //                                       captures unknowns
@@ -281,8 +281,7 @@ schema OrderResponse {
   field is a typed `DecodeError` naming the field. Inside the program
   `req.customer_email` is a plain `string`. `T?` reads absent and null as
   `none`. Defaulted fields are filled at decode. Tri-state presence (absent
-  distinct from null) is not part of this phase; it arrives with streaming
-  decode in phase 3, where partial values exist for a structural reason.
+  distinct from null) is a follow-on, not part of this RFC's phases.
 - **Inlining.** A line `...Other` inside a schema body inlines every field of
   `Other`, a schema or a class: the fields coalesce into this body with the
   same names, types, claims, and UUIDs, with no nesting. `...Other?` makes
@@ -350,29 +349,6 @@ diffable, or plannable by the compiler; names no code.
   until storage is a construct, listed so the claim form is designed with it
   in mind.
 
-### Streaming, partial decode, projection pushdown
-
-- **Streaming decoders** are values with `mut self` that accept bytes
-  incrementally (`feed(chunk)`) and yield either a complete value or a
-  partial one: the same schema with every field tri-state (absent, null,
-  value) and `is present` narrowing on what has arrived (decision D5). A
-  PATCH body whose absent and null must differ is decoded the same way.
-
-  ```pluto
-  if u.note is present { o.note = u.note }     // u.note: string? inside the branch
-  ```
-- **Projection pushdown.** Whole-program compilation sees every field access
-  on a decoded value. For each decode site the compiler computes the read set
-  (conservatively: escapes to a function take that function's read set;
-  escapes to a boundary or an encoder take everything) and specializes the
-  walker to `skip()` unread subtrees. Skipped and unknown content is retained
-  as raw bytes so the value can be re-emitted from its source. This is column
-  pruning applied to deserialization; it is the capability only
-  whole-program compilation can offer and the direct answer to Styx's
-  compaction-versus-relay conflict.
-- **Views** fall out: a value decoded with a maximal skip set is bytes plus a
-  proof they parse, with lazy field access. No separate construct.
-
 ### Time: evolution over the plan
 
 - **Identity.** Every field and declaration already has a stable UUID in the
@@ -405,8 +381,8 @@ diffable, or plannable by the compiler; names no code.
 - **Dependency.** The deployment plan as a compile-time artifact is still the
   open question in distributed-model.md and the boundary RFC's mechanism 3.
   This RFC defines only what it consumes from the plan: (a) which boundaries
-  are physical and which encoder each uses, (b) the predecessor builds. Phase 5
-  waits for the plan RFC; phases 0–4 do not.
+  are physical and which encoder each uses, (b) the predecessor builds. Phase 4
+  waits for the plan RFC; phases 0–3 do not.
 
 ### Foreign boundaries and the interface hash
 
@@ -466,7 +442,7 @@ and is independently mergeable. Each names the dogfood that proves it.
 - Delete `std.wire`; port `wire.rs` tests (including the four ignored ones).
 - **Acceptance:** Charon's `elemwire.pt` becomes `enum Elem` + one
   `TaggedBinary` encoder (format may change in this phase; byte-identity is
-  phase 4's job). Kerberos's `record.pt` becomes one encoder. A JSON
+  phase 3's job). Kerberos's `record.pt` becomes one encoder. A JSON
   round-trip of a nested class/enum with no DOM code.
 
 ### Phase 2 — Schema · XL
@@ -481,28 +457,17 @@ and is independently mergeable. Each names the dogfood that proves it.
   Nexus's manifest) with zero DOM calls; Styx's Kafka request/response types as
   schemas driven by a `KafkaWire` encoder, and `kafkawire.pt` deleted.
 
-### Phase 3 — Streaming and projection pushdown · L
-
-- Incremental `Decoder` feeding; tri-state presence and `is present`
-  narrowing (a new flow-fact kind in `src/typeck/facts.rs`, structurally the
-  same as nullable narrowing); partial-value output; `skip()` on every
-  decoder; read-set analysis per decode site; pruned walkers; raw retention
-  and re-emit of skipped/unknown content.
-- **Acceptance:** Styx compaction reads record keys through a pruned decode
-  and relays batches byte-identically; a benchmark showing skip cost ≪ parse
-  cost on a wide record.
-
-### Phase 4 — Claims · L
+### Phase 3 — Claims · L
 
 - Field-level `satisfies` and the claim test enforced at declaration;
   `std.width` range claims wired into the facts engine and `FieldCtx.range`;
   `std.privacy.pii` as a kernel flow atom (sink reachability; plan clearance
-  deferred to phase 5); the diagnostic for changing a foreign-spelled class.
+  deferred to phase 4); the diagnostic for changing a foreign-spelled class.
 - **Acceptance:** Charon's element frame byte-identical to its current format
   (`value` varint, `ts` fixed u64) via width claims; a program that logs a PII
   field fails to compile with both sites named.
 
-### Phase 5 — Time · XL, gated on the plan RFC
+### Phase 4 — Time · XL, gated on the plan RFC
 
 - Layout hash in frames and durable records; `from` clauses; predecessor
   `.pluto` as snapshot; UUID diff; evolution rules; compiled upgraders;
@@ -521,6 +486,14 @@ and is independently mergeable. Each names the dogfood that proves it.
   RFC.
 - Emitting OpenAPI / `.proto` from schemas.
 - Plan clearances for PII and residency.
+- Streaming and partial decode: incremental `Decoder` feeding, tri-state
+  presence, `is present` narrowing. Dropped from the phases 2026-10-13 as a
+  later addition; it layers on the same traits without changing them.
+- Projection pushdown, source-backed lazy records, views. Dropped 2026-10-13:
+  a program that wants to inspect a payload decodes it, and a program that
+  only forwards one keeps it as `bytes`. If a dogfood ever needs read-what-
+  you-touch decoding, it is an optimization over the same walkers, never a
+  prerequisite, and gets its own RFC.
 
 ## Owner decisions
 
@@ -535,10 +508,10 @@ and is independently mergeable. Each names the dogfood that proves it.
    (breaks "encoders know no types").
 4. **D4 — Enum representation in JSON.** Encoder parameter (*recommend*) vs a
    claim on the enum.
-5. **D5 — Decoder statefulness.** Values with `mut self` (*recommend*) vs
-   objects. Objects would serialize access and allow sharing a streaming
-   decoder across tasks; values keep the construct simple and let the copy
-   rule apply.
+5. **D5 — Encoder and decoder statefulness.** Values with `mut self`
+   (*recommend*) vs objects. Objects would serialize access and allow
+   sharing one across tasks; values keep the construct simple and let the
+   copy rule apply.
 6. **D6 — Legacy stage RPC.** Delete `lower_rpc_call`, `std.rpc`, and the HTTP
    stub in phase 0 (*recommend*); stages themselves stay as lifecycle shells.
 7. **D7 — Skew policy.** Strict reject unless the plan has verified the pair
@@ -547,7 +520,7 @@ and is independently mergeable. Each names the dogfood that proves it.
 8. **D8 — Inlining.** *Decided in review, 2026-10-13:* `...Other` is the
    primary composition form, `...Other?` the PATCH form, `Other.field` the
    subset form; collisions are declaration errors. No further decision owed.
-9. **D9 — Sequencing against the plan RFC.** Phases 0–4 proceed now; phase 5
+9. **D9 — Sequencing against the plan RFC.** Phases 0–3 proceed now; phase 4
    waits (*recommend*) vs designing the plan artifact inside this campaign.
 
 ## Risks
@@ -563,10 +536,7 @@ and is independently mergeable. Each names the dogfood that proves it.
   with state; a protocol with per-message shapes is many schemas, one encoder.
   Phase 2's Styx acceptance is the test; if `kafkawire.pt` cannot be deleted,
   the factoring is wrong and comes back here.
-- **Projection analysis precision.** Conservative read sets may prune nothing
-  in escape-heavy code. Acceptable: pruning is an optimization; correctness
-  does not depend on it.
-- **Phase 5 blocked on the plan.** Explicit by design; `from` clauses are
+- **Phase 4 blocked on the plan.** Explicit by design; `from` clauses are
   inert until then.
 - **Scope.** This is larger than any in-flight RFC. It is phased to be
   mergeable per phase with dogfood acceptance at each step so that stopping
