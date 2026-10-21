@@ -332,6 +332,7 @@ pub fn read_all(path: string) string                     // raises NotFound | Fi
 pub fn write_all(path: string, data: string)             // close errors surfaced (bug fix)
 pub fn append_all(path: string, data: string)            // close errors surfaced (bug fix)
 pub fn replace_all(path: string, data: string)           // NEW (#367): atomic durable replace
+pub fn replace_all_bytes(path: string, data: bytes)      // NEW (#495): same, for binary payloads
 pub fn sync_dir(path: string)                            // NEW (#367): fsync a directory
 pub fn read_all_bytes(path: string) bytes                // NEW (#368 slot)
 pub fn write_all_bytes(path: string, data: bytes)        // NEW (#368 slot)

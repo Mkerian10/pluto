@@ -111,6 +111,7 @@ extern fn __pluto_fs_sync(fd: int) int
 extern fn __pluto_fs_sync_data(fd: int) int
 extern fn __pluto_fs_sync_dir(path: string) int
 extern fn __pluto_fs_replace_all(path: string, data: string) int
+extern fn __pluto_fs_replace_all_bytes(path: string, data: bytes) int
 extern fn __pluto_fs_replace_phase() int
 extern fn __pluto_fs_read_all(path: string) string
 extern fn __pluto_fs_write_all(path: string, data: string) int
@@ -601,6 +602,21 @@ pub fn append_all_bytes(path: string, data: bytes) {
 // but its durability is unwarranted (the directory fsync failed).
 pub fn replace_all(path: string, data: string) {
     let r = __pluto_fs_replace_all(path, data)
+    if r < 0 {
+        let code = 0 - r
+        if __pluto_fs_replace_phase() == 1 {
+            raise SyncError { path: path, code: code, message: __pluto_fs_errstr(code) }
+        }
+        raise_path_error(path, code)!
+    }
+}
+
+// Bytes variant of replace_all (issue #495): the same packaged temp →
+// sync → rename → sync-dir sequence, for binary files (logs, snapshots,
+// indexes) that cannot be routed through a string. Same error contract:
+// FileError ⇒ old file intact; SyncError ⇒ replaced, durability unwarranted.
+pub fn replace_all_bytes(path: string, data: bytes) {
+    let r = __pluto_fs_replace_all_bytes(path, data)
     if r < 0 {
         let code = 0 - r
         if __pluto_fs_replace_phase() == 1 {
