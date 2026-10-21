@@ -180,6 +180,26 @@ impl<'a> LowerContext<'a> {
         }
     }
 
+    /// Count a Sender that escapes to the heap (issue #493).
+    ///
+    /// Sender liveness model: a channel's sender count is 1 per `let (tx, rx)
+    /// = chan` binding plus 1 per heap copy of a Sender value — a struct or
+    /// enum field, an array/map/set element, a closure capture, a value sent
+    /// through another channel, or a returned value. Decrements happen at the
+    /// creating function's exit (its LetChan binding), at a spawn closure's
+    /// exit (its capture), and on an explicit `close()`. Heap copies are never
+    /// decremented: while any copy may still be reachable the channel stays
+    /// open, and the memory is reclaimed by the GC like any other value.
+    /// Without this, storing a Sender in a map and returning left the count
+    /// at zero when the local binding died, closing a channel that still had
+    /// a live sender.
+    fn emit_sender_escape(&mut self, val: Value, ty: &PlutoType) -> Value {
+        if matches!(ty, PlutoType::Sender(_)) {
+            self.call_runtime_void("__pluto_chan_sender_inc", &[val]);
+        }
+        val
+    }
+
     /// Emit a coverage hit for the given file_id, byte offset and branch_id, if coverage is enabled.
     /// branch_id 0 = primary (statement/function entry), 1+ = branch variants.
     fn emit_coverage_hit(&mut self, file_id: u32, byte_offset: usize, branch_id: u32) {
@@ -544,6 +564,7 @@ impl<'a> LowerContext<'a> {
                         let val_type = infer_type_for_expr(&expr.node, self.env, &self.var_types);
                         // Materialize string slices at function return boundary
                         let val = self.emit_string_escape(val, &val_type);
+                        let val = self.emit_sender_escape(val, &val_type);
 
                         // If returning a void expression (e.g., spawn closure wrapping a void function),
                         // lower the expr for side effects but emit default return
@@ -602,6 +623,7 @@ impl<'a> LowerContext<'a> {
                 let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
                 // Materialize string slices before storing into struct fields
                 let val = self.emit_string_escape(val, &val_type);
+                let val = self.emit_sender_escape(val, &val_type);
                 let obj_type = infer_type_for_expr(&object.node, self.env, &self.var_types);
                 if let PlutoType::Class(class_name) = &obj_type
                     && let Some(class_info) = self.env.classes.get(class_name)
@@ -627,6 +649,7 @@ impl<'a> LowerContext<'a> {
                     let val_type = infer_type_for_expr(&value.node, self.env, &self.var_types);
                     let val = self.coerce_to_expected_type(val, &val_type, elem)?;
                     let val = self.emit_string_escape(val, elem);
+                    let val = self.emit_sender_escape(val, elem);
                     let slot = to_array_slot(val, elem, &mut self.builder);
                     self.call_runtime_void("__pluto_array_set", &[handle, idx, slot]);
                 } else if obj_type == PlutoType::Bytes {
@@ -638,6 +661,7 @@ impl<'a> LowerContext<'a> {
                     let tag = self.builder.ins().iconst(types::I64, key_type_tag(key_ty));
                     let idx = self.emit_string_escape(idx, key_ty);
                     let val = self.emit_string_escape(val, val_ty);
+                    let val = self.emit_sender_escape(val, val_ty);
                     let key_slot = to_array_slot(idx, key_ty, &mut self.builder);
                     let val_slot = to_array_slot(val, val_ty, &mut self.builder);
                     self.call_runtime_void("__pluto_map_insert", &[handle, tag, key_slot, val_slot]);
@@ -3431,6 +3455,7 @@ impl<'a> LowerContext<'a> {
                         let actual = infer_type_for_expr(&elem.node, self.env, &self.var_types);
                         let val = self.coerce_to_expected_type(val, &actual, &elem_type)?;
                         let val = self.emit_string_escape(val, &elem_type);
+                        let val = self.emit_sender_escape(val, &elem_type);
                         let slot = to_array_slot(val, &elem_type, &mut self.builder);
                         let func_ref_push = self.module.declare_func_in_func(self.runtime.get("__pluto_array_push"), self.builder.func);
                         self.builder.ins().call(func_ref_push, &[handle, slot]);
@@ -3451,6 +3476,7 @@ impl<'a> LowerContext<'a> {
                     let v_val = self.coerce_to_expected_type(v_val, &actual_v, &vt)?;
                     let k_val = self.emit_string_escape(k_val, &kt);
                     let v_val = self.emit_string_escape(v_val, &vt);
+                    let v_val = self.emit_sender_escape(v_val, &vt);
                     let key_slot = to_array_slot(k_val, &kt, &mut self.builder);
                     let val_slot = to_array_slot(v_val, &vt, &mut self.builder);
                     self.call_runtime_void("__pluto_map_insert", &[handle, tag, key_slot, val_slot]);
@@ -3464,6 +3490,7 @@ impl<'a> LowerContext<'a> {
                 for elem in elements {
                     let val = self.lower_expr(&elem.node)?;
                     let val = self.emit_string_escape(val, &et);
+                    let val = self.emit_sender_escape(val, &et);
                     let slot = to_array_slot(val, &et, &mut self.builder);
                     self.call_runtime_void("__pluto_set_insert", &[handle, tag, slot]);
                 }
@@ -3630,15 +3657,8 @@ impl<'a> LowerContext<'a> {
                                 );
                             }
                         }
-                        // Inc refcount for each captured Sender
-                        for cap_name in captures {
-                            if let Some(PlutoType::Sender(_)) = self.var_types.get(cap_name) {
-                                let var = self.variables.get(cap_name)
-                                    .expect("captured sender should have a variable in scope");
-                                let val = self.builder.use_var(*var);
-                                self.call_runtime_void("__pluto_chan_sender_inc", &[val]);
-                            }
-                        }
+                        // Captured Senders were counted by lower_closure_create
+                        // (emit_sender_escape); the spawn closure's exit decs them.
                         // `green` picks the executor: a cooperative green task
                         // on the scheduler vs a preemptive OS thread. Both return
                         // the same Task<T> handle, so `.get()` is unchanged.
@@ -4210,6 +4230,7 @@ impl<'a> LowerContext<'a> {
             let val_type = infer_type_for_expr(&lit_val.node, self.env, &self.var_types);
             // Materialize string slices before storing into struct fields
             let val = self.emit_string_escape(val, &val_type);
+            let val = self.emit_sender_escape(val, &val_type);
 
             let field_idx = field_info.iter()
                 .position(|(n, _, _)| *n == lit_name.node)
@@ -4251,6 +4272,7 @@ impl<'a> LowerContext<'a> {
             let val_type = infer_type_for_expr(&lit_val.node, self.env, &self.var_types);
             // Materialize string slices before storing into enum variant fields
             let val = self.emit_string_escape(val, &val_type);
+            let val = self.emit_sender_escape(val, &val_type);
 
             let field_idx = variant_fields.iter().position(|(n, _)| *n == lit_name.node)
                 .expect("field should exist after typeck validation");
@@ -4742,7 +4764,8 @@ impl<'a> LowerContext<'a> {
                 SymTy::Elem | SymTy::Key | SymTy::Value => {
                     let ty = param.ty.resolve(obj_type);
                     let val = if param.escape {
-                        self.emit_string_escape(val, &ty)
+                        let val = self.emit_string_escape(val, &ty);
+                        self.emit_sender_escape(val, &ty)
                     } else {
                         val
                     };
@@ -4912,6 +4935,7 @@ impl<'a> LowerContext<'a> {
                     let inner = inner.clone();
                     let arg_val = self.lower_expr(&args[0].node)?;
                     let arg_val = self.copy_for_channel_send(arg_val, &inner);
+                    let arg_val = self.emit_sender_escape(arg_val, &inner);
                     let slot = to_array_slot(arg_val, &inner, &mut self.builder);
                     self.call_runtime("__pluto_chan_send", &[obj_ptr, slot]);
                     return Ok(self.builder.ins().iconst(types::I64, 0));
@@ -4920,6 +4944,7 @@ impl<'a> LowerContext<'a> {
                     let inner = inner.clone();
                     let arg_val = self.lower_expr(&args[0].node)?;
                     let arg_val = self.copy_for_channel_send(arg_val, &inner);
+                    let arg_val = self.emit_sender_escape(arg_val, &inner);
                     let slot = to_array_slot(arg_val, &inner, &mut self.builder);
                     self.call_runtime("__pluto_chan_try_send", &[obj_ptr, slot]);
                     return Ok(self.builder.ins().iconst(types::I64, 0));
@@ -5330,6 +5355,7 @@ impl<'a> LowerContext<'a> {
             let cap_type = self.var_types.get(cap_name).cloned().unwrap_or(PlutoType::Int);
             // Materialize string slices before capturing into closures
             let cap_val = self.emit_string_escape(cap_val, &cap_type);
+            let cap_val = self.emit_sender_escape(cap_val, &cap_type);
             let slot = to_array_slot(cap_val, &cap_type, &mut self.builder);
             let offset = (1 + i) as i32 * POINTER_SIZE;
             self.builder.ins().store(MemFlags::new(), slot, closure_ptr, Offset32::new(offset));

@@ -221,7 +221,7 @@ Both `Sender<T>` and `Receiver<T>` are I64 pointers to the same underlying chann
 
 ## Deferred to Later Phases
 
-- **Reference counting / implicit close-on-drop** — Auto-close when last sender goes out of scope. Needs scope-exit hooks. Phase 2.
+- ~~**Reference counting / implicit close-on-drop**~~ — Implemented. A channel's sender count is 1 per `let (tx, rx) = chan` binding plus 1 per heap copy of a Sender (struct/enum field, array/map/set element, closure capture, value sent through another channel, returned value — issue #493). It is decremented at the creating function's exit, at a spawn closure's exit, and on explicit `close()`; when it reaches zero the channel closes. Heap copies are never decremented, so a channel stays open while any copy may still be reachable (the handle itself is reclaimed by the GC).
 - **True rendezvous (capacity 0)** — Sender blocks until receiver is ready. Phase 2.
 - **Stdlib channel methods** (`.connections()`, `.lines()`, `.stream()`) — Expose I/O as channels.
 - ~~**Select/race** — Multiplexing across multiple channels.~~ Implemented: `select { val = rx.recv() { ... } tx.send(v) { ... } default { ... } }`, plus the timeout arm (Erlang `receive ... after` lineage):
