@@ -3,7 +3,7 @@ import std.fs
 // Demonstrates file I/O: write, read, append, copy, directory ops.
 //
 // Run:
-//   cargo run --release -- run --stdlib stdlib examples/file_io/main.pluto
+//   cargo run --release -- run --stdlib stdlib examples/file_io/main.pt
 
 fn main() {
     let tmp = fs.temp_dir()

@@ -4,7 +4,7 @@ import std.socket
 // A tiny HTTP server you can hit with curl or a browser.
 //
 // Run:
-//   cargo run --release -- run --stdlib stdlib examples/networking/main.pluto
+//   cargo run --release -- run --stdlib stdlib examples/networking/main.pt
 //
 // Then visit the URL printed to the console, or:
 //   curl http://127.0.0.1:<port>
