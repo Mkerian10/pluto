@@ -1632,13 +1632,45 @@ long __pluto_socket_create(long domain, long type, long protocol) {
     return (long)socket((int)domain, (int)type, (int)protocol);
 }
 
+// Fill an IPv4 socket address for (host, port). `host` may be a dotted
+// IPv4 literal or a hostname (issue #520): literals are parsed locally,
+// anything else goes through the system resolver (getaddrinfo, AF_INET
+// only — stdlib/net creates AF_INET sockets). Resolution can block on
+// DNS, so it runs inside a GC safe region like the syscalls around it.
+// Returns 0 on success, -1 if the host could not be parsed or resolved.
+static int socket_resolve_ipv4(const char *host, long port, struct sockaddr_in *addr) {
+    memset(addr, 0, sizeof(*addr));
+    addr->sin_family = AF_INET;
+    addr->sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &addr->sin_addr) == 1) return 0;
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = NULL;
+    __pluto_gc_enter_safe_region();
+    int rc = getaddrinfo(host, NULL, &hints, &res);
+    __pluto_gc_leave_safe_region();
+    if (rc != 0 || !res) {
+        if (res) freeaddrinfo(res);
+        return -1;
+    }
+    int found = -1;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        if (ai->ai_family == AF_INET && ai->ai_addrlen >= sizeof(struct sockaddr_in)) {
+            addr->sin_addr = ((struct sockaddr_in *)ai->ai_addr)->sin_addr;
+            found = 0;
+            break;
+        }
+    }
+    freeaddrinfo(res);
+    return found;
+}
+
 long __pluto_socket_bind(long fd, void *host_str, long port) {
     const char *host = __pluto_string_to_cstr(host_str);
     struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)port);
-    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return -1;
+    if (socket_resolve_ipv4(host, port, &addr) != 0) return -1;
     return bind((int)fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 ? 0 : -1;
 }
 
@@ -1665,10 +1697,7 @@ long __pluto_socket_accept(long fd) {
 long __pluto_socket_connect(long fd, void *host_str, long port) {
     const char *host = __pluto_string_to_cstr(host_str);
     struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)port);
-    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return -1;
+    if (socket_resolve_ipv4(host, port, &addr) != 0) return -1;
     int green = socket_is_green();
     if (green) socket_set_nonblocking((int)fd);
     __pluto_gc_enter_safe_region();

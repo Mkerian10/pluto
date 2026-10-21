@@ -2004,3 +2004,79 @@ fn stdlib_diamond_module_shared_with_entry() {
     ]);
     assert_eq!(out, "42\n");
 }
+
+#[test]
+fn stdlib_net_connect_resolves_hostname() {
+    // Issue #520: `host` may be a name, not only an IPv4 literal. The
+    // listener binds the loopback literal; the client dials "localhost",
+    // which must resolve through the system resolver to the same socket.
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.net
+
+fn main() {
+    let server = net.listen("127.0.0.1", 0)
+    let port = server.port()
+
+    let client = net.connect("localhost", port)
+    print(client.fd >= 0)
+    let conn = server.accept()
+
+    client.write("hello by name")
+    let msg = conn.read(1024) catch ""
+    print(msg)
+
+    conn.close()
+    client.close()
+    server.close()
+}
+"#),
+    ]);
+    assert_eq!(out, "true\nhello by name\n");
+}
+
+#[test]
+fn stdlib_net_listen_resolves_hostname() {
+    // Bind by name too: "localhost" resolves to a loopback address the
+    // literal client can reach.
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.net
+
+fn main() {
+    let server = net.listen("localhost", 0)
+    print(server.fd >= 0)
+    let port = server.port()
+
+    let client = net.connect("127.0.0.1", port)
+    let conn = server.accept()
+
+    client.write("bound by name")
+    let msg = conn.read(1024) catch ""
+    print(msg)
+
+    conn.close()
+    client.close()
+    server.close()
+}
+"#),
+    ]);
+    assert_eq!(out, "true\nbound by name\n");
+}
+
+#[test]
+fn stdlib_net_connect_unresolvable_host_fails_cleanly() {
+    // A name that cannot resolve (.invalid is reserved to never resolve)
+    // is the same failure as a bad literal: a connection with fd -1, no
+    // hang, no crash.
+    let out = run_project_with_stdlib(&[
+        ("main.pluto", r#"import std.net
+
+fn main() {
+    let client = net.connect("no-such-host.invalid", 1)
+    print(client.fd)
+    let bad = net.connect("", 1)
+    print(bad.fd)
+}
+"#),
+    ]);
+    assert_eq!(out, "-1\n-1\n");
+}
