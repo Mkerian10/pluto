@@ -4,7 +4,7 @@ import std.fs
 // A static file HTTP server written in Pluto.
 //
 // Run:
-//   cargo run --release -- run --stdlib stdlib examples/http_server/main.pluto
+//   cargo run --release -- run --stdlib stdlib examples/http_server/main.pt
 //
 // Then visit http://127.0.0.1:8080 in your browser.
 // Serves files from examples/http_server/public/

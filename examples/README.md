@@ -112,14 +112,6 @@ Demonstrates `green` for cheap cooperative concurrency: launching tasks on a sha
 cargo run -- run examples/green/main.pt
 ```
 
-## rust_ffi
-
-Demonstrates calling plain Rust functions from Pluto via `extern rust`. A normal Rust crate with `pub fn` functions is imported with zero boilerplate — supported types (`i64`, `f64`, `bool`) are bridged automatically.
-
-```bash
-cargo run -- run examples/rust_ffi/main.pt
-```
-
 ## testing
 
 Demonstrates Pluto's built-in test framework with `test` blocks, `expect()` assertions, and multiple assertion methods (`to_equal`, `to_be_true`, `to_be_false`); raises assertions (`expect_raises(ErrorType) { ... }` asserts the block raises that error type — checked against the compiler's inferred error sets at compile time — and bare `expect_raises { ... }` asserts it raises anything); and test-local DI containers: seeding singleton classes inside test scope blocks to override what the graph wires (`scope(PriceFeed { quote: 50 }) |p: Portfolio| { ... }`).
@@ -198,7 +190,7 @@ cargo run -- run examples/pattern_matching/main.pt
 Demonstrates if-as-expression: using `if` as an expression that returns a value, basic if-expressions in variable assignments, nested if-expressions for multi-way branches, if-expressions as function arguments, and if-expressions in conditions. All if-expressions require an else clause and all branches must return compatible types (with nullable coercion support).
 
 ```bash
-cargo run -- run examples/if_expressions.pt
+cargo run -- run examples/if_expressions/main.pt
 ```
 
 ## chained_comparisons
@@ -407,7 +399,7 @@ cargo run -- run examples/regex/main.pt --stdlib stdlib
 Demonstrates Phase 1 compile-time reflection with the `TypeInfo` trait: `TypeInfo::type_name<T>()` returns type names as strings, `TypeInfo::kind<T>()` provides detailed metadata (field names, types, offsets for classes; variant information for enums). Reflection intrinsics are generated at compile time with zero runtime overhead.
 
 ```bash
-cargo run -- run examples/reflection_demo.pt
+cargo run -- run examples/reflection_demo/main.pt
 ```
 
 ## rpc
@@ -571,4 +563,108 @@ loopback while the main task relays it into a byte-exact copy.
 
 ```bash
 cargo run -- run examples/relay/main.pt --stdlib stdlib
+```
+
+## add
+
+The smallest Pluto program: a function with typed parameters and a return type, called from `main`. A good first file to compile.
+
+```bash
+cargo run -- run examples/add/main.pt
+```
+
+## point
+
+A class with fields and a method: struct-literal construction (`Point { x: 3, y: 4 }`), field access, and a `self` method.
+
+```bash
+cargo run -- run examples/point/main.pt
+```
+
+## arrays
+
+Array basics: literals, `len()`, indexing, `push`, and passing an array to a function that sums it with a `while` loop.
+
+```bash
+cargo run -- run examples/arrays/main.pt
+```
+
+## control_flow
+
+FizzBuzz with early returns, range iteration (`for i in 1..=20`), iterating over an array literal, and accumulating over a range.
+
+```bash
+cargo run -- run examples/control_flow/main.pt
+```
+
+## enums
+
+Unit variants (`Color.Red`) and data-carrying variants (`Result.Ok { value: int }`), constructed and taken apart with exhaustive `match`.
+
+```bash
+cargo run -- run examples/enums/main.pt
+```
+
+## closures
+
+Arrow-function closures: a closure bound to a variable, a closure passed to a function taking `fn(int) int`, a closure returned from a function that captures its argument, and parameter-type inference when the context fixes the type.
+
+```bash
+cargo run -- run examples/closures/main.pt
+```
+
+## string_interp
+
+f-strings: `f"Welcome to {name} v{version}!"` with identifiers, arithmetic, floats, and booleans interpolated. Plain strings do not interpolate.
+
+```bash
+cargo run -- run examples/string_interp/main.pt
+```
+
+## numeric
+
+Bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`), named numeric conversions (`to_float`, the `int?`-returning float-to-int conversion with literal narrowing), and the math builtins.
+
+```bash
+cargo run -- run examples/numeric/main.pt
+```
+
+## collections
+
+Maps and sets as builtins: map literals, `keys()`, index read and assignment, `contains`, `remove`, `len`, and set insert/contains/remove.
+
+```bash
+cargo run -- run examples/collections/main.pt
+```
+
+## app_demo
+
+The `app` declaration with constructor-injected dependencies: `Database`, `UserService[db: Database]`, and `OrderService[db: Database]` are declared as objects (entities with identity), and `app MyApp[users: UserService, orders: OrderService]` is wired at compile time with a single shared `Database`.
+
+```bash
+cargo run -- run examples/app_demo/main.pt
+```
+
+## ambient-di
+
+Ambient dependencies with `uses`: a class declares `uses Logger` and reaches it as a bare name (no `self.` prefix), and the app registers the type with `ambient Logger`. Here the ambient `Logger` wraps `std.log`.
+
+```bash
+cargo run -- run examples/ambient-di/main.pt --stdlib stdlib
+```
+
+## networking
+
+A tiny TCP server on `std.net`: `net.listen`, an accept loop, `conn.read` with `catch`, and a hand-written HTTP response. Hit it with curl or a browser at the URL it prints.
+
+```bash
+cargo run -- run examples/networking/main.pt --stdlib stdlib
+```
+
+## http_server
+
+A static-file HTTP server on `std.net` and `std.fs`: parses the request line, maps the path to `examples/http_server/public/`, picks a content type from the extension, and serves the file or a 404.
+
+```bash
+cargo run -- run examples/http_server/main.pt --stdlib stdlib
 ```

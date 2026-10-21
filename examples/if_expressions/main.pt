@@ -34,8 +34,8 @@ fn main() {
     // If-expression with numeric values
     let a = 5
     let b = 10
-    let max = if a > b { a } else { b }
-    print(max)  // Output: 10
+    let larger = if a > b { a } else { b }
+    print(larger)  // Output: 10
 
     // If-expression in condition
     if (if x > 5 { true } else { false }) {
