@@ -605,6 +605,53 @@ fn main() {
 }
 
 // ============================================================
+// replace_all_bytes: the bytes variant (issue #495)
+// ============================================================
+
+#[test]
+fn fs_replace_all_bytes() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let path = tmp + "/log.bin"
+    fs.write_all(path, "old contents")!
+
+    // Every byte value, including NUL and non-UTF-8 — the payload a
+    // string could not carry.
+    let mut payload = bytes_new()
+    let mut i = 0
+    while i < 256 {
+        payload.push(i.low_byte())
+        i = i + 1
+    }
+    fs.replace_all_bytes(path, payload)!
+
+    let back = fs.read_all_bytes(path)!
+    let mut ok = back.len() == 256
+    let mut j = 0
+    while j < back.len() {
+        if (back[j].to_int()) != j {
+            ok = false
+        }
+        j = j + 1
+    }
+    print(ok)
+    // No temp file left behind: the directory holds exactly one entry.
+    print(fs.list_dir(tmp)!.len())
+    // Works when the target does not exist yet.
+    fs.replace_all_bytes(tmp + "/fresh.bin", "fresh".to_bytes())!
+    print(fs.read_all(tmp + "/fresh.bin")!)
+    fs.remove_dir_all(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(out, "true\n1\nfresh\n");
+}
+
+// ============================================================
 // sync_dir on a real directory
 // ============================================================
 

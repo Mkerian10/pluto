@@ -26,7 +26,7 @@ cargo run -- run examples/file_io/main.pt --stdlib stdlib
 
 ## durable_config
 
-Durability with `std.fs`: `replace_all` (atomic durable config replace — same-dir temp write, full sync, rename, parent-directory fsync) with its two-sided error contract (`FileError` ⇒ old file intact, `SyncError` ⇒ rename landed without a durability warrant), and the handle-level WAL shape — `open_append`, `write` + `sync_data` per batch, where a failed sync raises `Degraded` carrying the handle as `File<Write, Poisoned>` and `discard()` is the only exit (retrying a failed sync is a compile error).
+Durability with `std.fs`: `replace_all` (atomic durable config replace — same-dir temp write, full sync, rename, parent-directory fsync) with its two-sided error contract (`FileError` ⇒ old file intact, `SyncError` ⇒ rename landed without a durability warrant), its binary twin `replace_all_bytes` for snapshots and indexes that cannot pass through a string, and the handle-level WAL shape — `open_append`, `write` + `sync_data` per batch, where a failed sync raises `Degraded` carrying the handle as `File<Write, Poisoned>` and `discard()` is the only exit (retrying a failed sync is a compile error).
 
 ```bash
 cargo run -- run examples/durable_config/main.pt --stdlib stdlib

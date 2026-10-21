@@ -3,8 +3,8 @@ import std.fs
 // Durable configuration updates with std.fs (docs/design/rfc-fs-api.md,
 // issue #367).
 //
-// fs.replace_all is the packaged atomic durable replace: it writes a
-// temp file in the SAME directory, syncs it to full durability (fsync
+// fs.replace_all (and its bytes twin, fs.replace_all_bytes) is the
+// packaged atomic durable replace: it writes a temp file in the SAME directory, syncs it to full durability (fsync
 // on Linux, F_FULLFSYNC on Darwin), renames it over the target, then
 // fsyncs the parent directory — because the name→inode mapping is the
 // directory's dirty page, not the file's. Readers see either the old
@@ -74,6 +74,19 @@ fn main() {
         return
     }
     print(f"after:  {fs.read_all(config)!}")
+
+    // 1b. The same one-shot for binary files (issue #495): a snapshot or
+    //     index holds arbitrary bytes that cannot be routed through a
+    //     string. replace_all_bytes has the identical four-step sequence
+    //     and the identical FileError / SyncError contract.
+    let snapshot = dir + "/state.snap"
+    let mut frame = bytes_new()
+    frame.push(0.low_byte())      // NUL — fine in bytes, fatal in a C string
+    frame.push(255.low_byte())
+    frame.push(42.low_byte())
+    fs.replace_all_bytes(snapshot, frame)!
+    let back = fs.read_all_bytes(snapshot)!
+    print(f"snapshot: {back.len()} bytes, last = {back[2].to_int()}")
 
     // 2. The WAL shape: a long-lived handle held in a local, synced per
     //    batch, with honest degradation on failure.

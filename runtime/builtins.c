@@ -3499,11 +3499,9 @@ long __pluto_fs_replace_phase(void) {
     return __pluto_fs_replace_phase_v;
 }
 
-long __pluto_fs_replace_all(void *path_str, void *data_str) {
-    const char *path = __pluto_string_to_cstr(path_str);
-    const char *data;
-    long len;
-    __pluto_string_data(data_str, &data, &len);
+// Shared body for the string and bytes one-shots: `path` is a C string,
+// `data`/`len` the raw payload (no NUL assumption — bytes may hold any value).
+static long __pluto_fs_replace_whole(const char *path, const char *data, long len) {
     __pluto_fs_replace_phase_v = 0;
 
     size_t plen = strlen(path);
@@ -3592,6 +3590,23 @@ long __pluto_fs_replace_all(void *path_str, void *data_str) {
         return err;
     }
     return 0;
+}
+
+long __pluto_fs_replace_all(void *path_str, void *data_str) {
+    const char *path = __pluto_string_to_cstr(path_str);
+    const char *data;
+    long len;
+    __pluto_string_data(data_str, &data, &len);
+    return __pluto_fs_replace_whole(path, data, len);
+}
+
+// Bytes variant (issue #495): the same temp → sync → rename → sync-dir
+// sequence and the same phase contract, for binary payloads (logs,
+// snapshots, indexes) that cannot safely round-trip through a string.
+long __pluto_fs_replace_all_bytes(void *path_str, long bytes_handle) {
+    const char *path = __pluto_string_to_cstr(path_str);
+    long *h = (long *)bytes_handle;
+    return __pluto_fs_replace_whole(path, (const char *)h[2], h[0]);
 }
 
 void *__pluto_fs_read_all(void *path_str) {
