@@ -86,7 +86,7 @@ impl Module {
 
     /// Begin editing this module. Consumes the Module.
     pub fn edit(self) -> ModuleEditor {
-        ModuleEditor::new(self.program, self.source)
+        ModuleEditor::new(self.program)
     }
 
     /// Construct from parts (used by ModuleEditor::commit).

@@ -1,7 +1,7 @@
 // Category 1: Type Representation Tests (80 tests)
 // Validates that all PlutoType variants correctly map to Cranelift types
 
-use super::common::{compile_and_run, compile_and_run_output, compile_and_run_stdout};
+use super::common::{compile_and_run, compile_and_run_stdout};
 
 // ============================================================================
 // Primitives (20 tests)
@@ -30,7 +30,7 @@ fn test_int_positive() {
 
 #[test]
 fn test_int_negative() {
-    let src = r#"
+    let _src = r#"
         fn main() int {
             return -17
         }

@@ -8,7 +8,7 @@
 //! is a compile error.
 
 mod common;
-use common::{compile_and_run_stdout, compile_should_fail, compile_should_fail_with};
+use common::{compile_and_run_stdout, compile_should_fail_with};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Discharging positives

@@ -1,7 +1,7 @@
 // Category 6: Error Handling Tests (30+ tests)
 // Validates error handling codegen: raise, propagate (!), catch, TLS error state
 
-use super::common::{compile_and_run, compile_and_run_stdout, compile_and_run_output, compile_should_fail};
+use super::common::{compile_and_run_stdout, compile_and_run_output};
 
 // ============================================================================
 // Raise (5 tests)

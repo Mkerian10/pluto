@@ -322,7 +322,6 @@ fn test_large_struct_50_fields() {
     // Generate a struct with 50 int fields
     let mut fields = String::new();
     let mut init = String::new();
-    let mut access = String::new();
 
     for i in 1..=50 {
         fields.push_str(&format!("            f{}: int\n", i));
@@ -331,7 +330,7 @@ fn test_large_struct_50_fields() {
     }
 
     // Access fields 1, 25, 50
-    access = "x.f1 + x.f25 + x.f50".to_string();
+    let access = "x.f1 + x.f25 + x.f50".to_string();
 
     let src = format!(r#"
         class Large50 {{

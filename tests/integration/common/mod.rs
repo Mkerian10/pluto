@@ -5,6 +5,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod compiler;
+// Re-exported for test crates that drive compiler stages directly; not every
+// crate including this file uses them.
+#[allow(unused_imports)]
 pub use compiler::{CompiledTestBinary, TestCompiler, TestOutput};
 
 /// Returns a Command for the pluto binary. Use for CLI smoke tests only —
