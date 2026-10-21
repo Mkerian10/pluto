@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn validate_float_literal() {
-        let expr = Expr::FloatLit(3.14);
+        let expr = Expr::FloatLit(2.5);
         assert!(validate_decidable_fragment(&expr, dummy_span(), ContractKind::Invariant).is_ok());
     }
 

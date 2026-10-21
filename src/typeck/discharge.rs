@@ -2046,7 +2046,6 @@ fn summarize_function(
         .unwrap_or_default();
 
     struct Scan<'a> {
-        env: &'a TypeEnv,
         owner: Option<&'a str>,
         param_types: &'a HashMap<String, PlutoType>,
         owner_fields: &'a [(String, PlutoType)],
@@ -2143,7 +2142,6 @@ fn summarize_function(
         }
     }
     let mut scan = Scan {
-        env,
         owner,
         param_types: &param_types,
         owner_fields: &owner_fields,
@@ -3504,7 +3502,7 @@ fn apply_len_delta(
     // affine-bound engine sums it with `l`'s known bounds — so a lower bound
     // on `l` (e.g. the invariant `len > 0`) carries through the insert. (A
     // bare relation `new >= l` would not combine with `l`'s interval.)
-    let mut add_delta = |scope: &mut InvariantScope, lo: i64, hi: Option<i64>| -> Option<Affine> {
+    let add_delta = |scope: &mut InvariantScope, lo: i64, hi: Option<i64>| -> Option<Affine> {
         scope.next_ghost += 1;
         let d = format!("<delta:{field}>@{}", scope.next_ghost);
         let iv = match hi {

@@ -823,13 +823,6 @@ fn offset_enum_spans(edecl: &mut EnumDecl, offset: usize) {
     }
 }
 
-fn offset_block_spans(block: &mut Block, offset: usize) {
-    let mut offsetter = SpanOffsetter { offset };
-    for stmt in &mut block.stmts {
-        offsetter.visit_stmt_mut(stmt);
-    }
-}
-
 // ── Phase 2: Rewrite call sites ─────────────────────────────────────
 
 fn rewrite_program(program: &mut Program, rewrites: &HashMap<(usize, usize), String>) {

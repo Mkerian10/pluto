@@ -1,6 +1,6 @@
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use crate::span::{Span, Spanned};
+use crate::span::Spanned;
 use crate::visit::{walk_expr_mut, VisitMut};
 
 /// Desugar `spawn func(args)` into `spawn (=> { return func(args) })`.
@@ -56,6 +56,7 @@ pub fn desugar_spawn(program: &mut Program) -> Result<(), CompileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::span::Span;
 
     fn dummy_span() -> Span {
         Span::new(0, 0)

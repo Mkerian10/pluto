@@ -600,7 +600,7 @@ mod tests {
     fn test_display_literals() {
         assert_eq!(Token::IntLit(42).to_string(), "42");
         assert_eq!(Token::IntLit(-123).to_string(), "-123");
-        assert_eq!(Token::FloatLit(3.14).to_string(), "3.14");
+        assert_eq!(Token::FloatLit(2.5).to_string(), "2.5");
         assert_eq!(Token::FloatLit(-0.5).to_string(), "-0.5");
         assert_eq!(Token::StringLit("hello".to_string()).to_string(), "\"hello\"");
         assert_eq!(Token::FStringLit("world".to_string()).to_string(), "f\"world\"");
@@ -840,8 +840,8 @@ mod tests {
 
     #[test]
     fn test_float_literal() {
-        let mut lex = Token::lexer("3.14");
-        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(3.14))));
+        let mut lex = Token::lexer("2.5");
+        assert_eq!(lex.next(), Some(Ok(Token::FloatLit(2.5))));
     }
 
     #[test]

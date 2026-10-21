@@ -3857,7 +3857,7 @@ impl<'a> Parser<'a> {
             // handlers may follow a newline after the previous handler block.
             if self.peek_raw().is_some() && matches!(self.peek_raw().unwrap().node, Token::Catch) {
                 let mut handlers = Vec::new();
-                let mut end = lhs.span.end;
+                let mut end;
                 loop {
                     self.advance(); // consume 'catch'
                     let (handler, h_end) = self.parse_catch_handler()?;
@@ -4934,42 +4934,6 @@ impl<'a> Parser<'a> {
             ));
         }
         Ok(())
-    }
-
-    /// Lookahead to determine if we have a static trait call: `TraitName::method<TypeArgs>`
-    fn is_static_trait_call_ahead(&self) -> bool {
-        // Pattern: Ident :: Ident <
-        let mut i = self.pos;
-        // skip newlines
-        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
-            i += 1;
-        }
-        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
-            return false;
-        }
-        i += 1;
-        // skip newlines
-        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
-            i += 1;
-        }
-        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::DoubleColon) {
-            return false;
-        }
-        i += 1;
-        // skip newlines
-        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
-            i += 1;
-        }
-        if i >= self.tokens.len() || !matches!(self.tokens[i].node, Token::Ident) {
-            return false;
-        }
-        i += 1;
-        // skip newlines
-        while i < self.tokens.len() && matches!(self.tokens[i].node, Token::Newline) {
-            i += 1;
-        }
-        // Must be followed by `<` for type args
-        i < self.tokens.len() && matches!(self.tokens[i].node, Token::Lt)
     }
 }
 

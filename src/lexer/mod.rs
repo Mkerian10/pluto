@@ -367,9 +367,7 @@ pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, CompileError> {
                     }
 
                     // Try parsing as i128 to see if it's just out of range
-                    let cleaned = if is_hex {
-                        slice[2..].replace('_', "")
-                    } else if is_binary {
+                    let cleaned = if is_hex || is_binary {
                         slice[2..].replace('_', "")
                     } else {
                         slice.replace('_', "")

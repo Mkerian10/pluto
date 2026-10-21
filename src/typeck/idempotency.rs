@@ -170,8 +170,6 @@ struct Obligation {
     /// and (dotted keys) on anything that could mutate the field.
     stable: bool,
     provenance: PropertyProvenance,
-    /// The provides clause span (method-level diagnostics).
-    clause_span: Span,
 }
 
 impl Obligation {
@@ -224,7 +222,6 @@ pub(crate) fn check_idempotency(program: &Program, env: &TypeEnv) -> Result<(), 
                         line: spec.atom_line,
                         bindings: crate::properties::render_provides_args(&clause.node),
                     },
-                    clause_span: clause.span,
                 });
             }
             if !obls.is_empty() {
