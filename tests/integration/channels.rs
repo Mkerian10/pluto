@@ -1631,3 +1631,179 @@ fn main() {
 "#);
     assert_eq!(out.trim(), "1001\n1");
 }
+
+// ── Sender escape counting (issue #493) ─────────────────────────────────────
+//
+// A Sender copied to the heap (map/array element, struct field, closure
+// capture, return value) must keep the channel open after the local binding
+// that created it goes out of scope.
+
+#[test]
+fn chan_sender_stored_in_map_outlives_scope() {
+    let out = compile_and_run_stdout(r#"
+fn stash(mut m: Map<int, Sender<int>>, key: int) Receiver<int> {
+    let (tx, rx) = chan<int>(1)
+    m[key] = tx
+    return rx
+}
+
+fn main() {
+    let mut m = Map<int, Sender<int>> {}
+    let rx = stash(m, 0)
+    m[0].send(42)!
+    print(f"got {rx.recv()!}")
+}
+"#);
+    assert_eq!(out.trim(), "got 42");
+}
+
+#[test]
+fn chan_sender_in_struct_literal_returned() {
+    let out = compile_and_run_stdout(r#"
+class Pair {
+    tx: Sender<int>
+    rx: Receiver<int>
+}
+
+fn make() Pair {
+    let (tx, rx) = chan<int>(1)
+    return Pair { tx: tx, rx: rx }
+}
+
+fn main() {
+    let p = make()
+    p.tx.send(7)!
+    print(f"got {p.rx.recv()!}")
+}
+"#);
+    assert_eq!(out.trim(), "got 7");
+}
+
+#[test]
+fn chan_sender_field_assigned_outlives_scope() {
+    let out = compile_and_run_stdout(r#"
+class Holder {
+    tx: Sender<int>
+}
+
+fn stash(mut h: Holder) Receiver<int> {
+    let (tx, rx) = chan<int>(1)
+    h.tx = tx
+    return rx
+}
+
+fn main() {
+    let (t0, r0) = chan<int>(1)
+    let mut h = Holder { tx: t0 }
+    let rx = stash(h)
+    h.tx.send(9)!
+    print(f"got {rx.recv()!}")
+}
+"#);
+    assert_eq!(out.trim(), "got 9");
+}
+
+#[test]
+fn chan_sender_pushed_into_array_outlives_scope() {
+    let out = compile_and_run_stdout(r#"
+fn stash(mut arr: [Sender<int>]) Receiver<int> {
+    let (tx, rx) = chan<int>(1)
+    arr.push(tx)
+    return rx
+}
+
+fn lit() [Sender<int>] {
+    let (tx, rx) = chan<int>(1)
+    return [tx]
+}
+
+fn main() {
+    let mut arr: [Sender<int>] = []
+    let rx = stash(arr)
+    arr[0].send(11)!
+    print(f"got {rx.recv()!}")
+    let senders = lit()
+    print(senders.len())
+}
+"#);
+    assert_eq!(out.trim(), "got 11\n1");
+}
+
+#[test]
+fn chan_sender_captured_by_stored_closure_outlives_scope() {
+    let out = compile_and_run_stdout(r#"
+class Emitter {
+    fire: fn() void
+    rx: Receiver<int>
+}
+
+fn make() Emitter {
+    let (tx, rx) = chan<int>(1)
+    let f = () => {
+        tx.send(13) catch e { print("send failed") }
+    }
+    return Emitter { fire: f, rx: rx }
+}
+
+fn main() {
+    let e = make()
+    let fire = e.fire
+    fire()
+    print(f"got {e.rx.recv()!}")
+}
+"#);
+    assert_eq!(out.trim(), "got 13");
+}
+
+#[test]
+fn chan_sender_returned_directly_outlives_scope() {
+    let out = compile_and_run_stdout(r#"
+class Link {
+    rx: Receiver<int>
+}
+
+fn make(mut l: Link) Sender<int> {
+    let (tx, rx) = chan<int>(1)
+    l.rx = rx
+    return tx
+}
+
+fn main() {
+    let (t0, r0) = chan<int>(1)
+    let mut l = Link { rx: r0 }
+    let tx = make(l)
+    tx.send(5)!
+    print(f"got {l.rx.recv()!}")
+}
+"#);
+    assert_eq!(out.trim(), "got 5");
+}
+
+#[test]
+fn chan_auto_close_still_fires_after_spawn_capture() {
+    // Regression guard for the counting model: the creating function's
+    // binding and the spawn capture are the only counts, so the channel
+    // closes once the producer finishes and `for` terminates.
+    let out = compile_and_run_stdout_timeout(r#"
+fn producer(tx: Sender<int>) {
+    tx.send(1)!
+    tx.send(2)!
+    tx.send(3)!
+}
+
+fn start() Receiver<int> {
+    let (tx, rx) = chan<int>(4)
+    spawn producer(tx).detach()
+    return rx
+}
+
+fn main() {
+    let rx = start()
+    for v in rx {
+        print(v)
+    }
+    print("done")
+}
+"#, 15);
+    assert_eq!(out.trim(), "1\n2\n3\ndone");
+}
