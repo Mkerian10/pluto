@@ -17,6 +17,8 @@ pub fn create(domain: int, sock_type: int, protocol: int) int {
     return __pluto_socket_create(domain, sock_type, protocol)
 }
 
+// `host` is an IPv4 literal or a hostname (resolved via the system
+// resolver, IPv4 only for now). Returns -1 if it cannot be resolved.
 pub fn bind(fd: int, host: string, port: int) int {
     return __pluto_socket_bind(fd, host, port)
 }
@@ -29,6 +31,9 @@ pub fn accept(fd: int) int {
     return __pluto_socket_accept(fd)
 }
 
+// `host` is an IPv4 literal or a hostname (resolved via the system
+// resolver, IPv4 only for now). Returns -1 if it cannot be resolved or
+// the connect fails.
 pub fn connect(fd: int, host: string, port: int) int {
     return __pluto_socket_connect(fd, host, port)
 }

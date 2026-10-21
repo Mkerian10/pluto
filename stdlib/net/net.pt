@@ -83,6 +83,10 @@ pub object TcpConnection {
     }
 }
 
+// `host` is an IPv4 literal ("127.0.0.1", "0.0.0.0") or a hostname
+// ("localhost"), resolved through the system resolver (IPv4 only for now).
+// Port 0 asks the kernel for a free port; read it back with `port()`.
+// Returns a listener with fd -1 on failure (bind, listen, or resolution).
 pub fn listen(host: string, port: int) TcpListener {
     let fd = socket.create(2, 1, 0)
     if fd < 0 {
@@ -100,6 +104,9 @@ pub fn listen(host: string, port: int) TcpListener {
     return TcpListener { fd: fd }
 }
 
+// `host` is an IPv4 literal or a hostname, resolved through the system
+// resolver (IPv4 only for now). Returns a connection with fd -1 when the
+// host cannot be resolved or the connect fails.
 pub fn connect(host: string, port: int) TcpConnection {
     let fd = socket.create(2, 1, 0)
     if fd < 0 {
