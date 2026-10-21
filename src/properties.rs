@@ -1245,7 +1245,9 @@ fn process_fn_provides(
     let Program { properties, functions, classes, app, stages, .. } = program;
 
     for func in functions.iter() {
-        for clause in &func.node.provides {
+        // Every fn-level provides clause is rejected, so only the first one
+        // on a function needs a diagnostic.
+        if let Some(clause) = func.node.provides.first() {
             let prop = lookup_property(table, properties, &clause.node.name)?;
             let desc = format!("function '{}'", func.node.name.node);
             let target = ProvidesTarget {

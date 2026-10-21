@@ -695,7 +695,7 @@ mod tests {
 
     #[test]
     fn infer_float_literal() {
-        let expr = Expr::FloatLit(3.14);
+        let expr = Expr::FloatLit(2.5);
         assert_eq!(infer_type_from_expr(&expr), PlutoType::Float);
     }
 
@@ -773,7 +773,7 @@ mod tests {
     fn infer_unary_neg_returns_operand_type() {
         let expr = Expr::UnaryOp {
             op: UnaryOp::Neg,
-            operand: Box::new(spanned(Expr::FloatLit(3.14))),
+            operand: Box::new(spanned(Expr::FloatLit(2.5))),
         };
         assert_eq!(infer_type_from_expr(&expr), PlutoType::Float);
     }

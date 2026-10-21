@@ -1978,7 +1978,7 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
     // no seed mechanism, so non-injected fields would be silently
     // zero-filled. Manual construction (`let x = T { ... }`) stays legal.
     {
-        let mut check_dep = |dep_name: &str, holder: &str| -> Result<(), CompileError> {
+        let check_dep = |dep_name: &str, holder: &str| -> Result<(), CompileError> {
             if let Some(dep_info) = env.classes.get(dep_name)
                 && dep_info.lifecycle == Lifecycle::Transient
                 && dep_info.fields.iter().any(|(_, _, inj)| !*inj)
@@ -2756,7 +2756,7 @@ pub(crate) fn check_expanding_reference_cycles(env: &TypeEnv) -> Result<(), Comp
     // Build edge lists over generic classes + enums.
     let mut edges: HashMap<String, Vec<String>> = HashMap::new();
     let mut expanding_edges: Vec<(String, String)> = Vec::new();
-    let mut add_refs = |from: &str, refs: Vec<(String, bool)>,
+    let add_refs = |from: &str, refs: Vec<(String, bool)>,
                         edges: &mut HashMap<String, Vec<String>>,
                         expanding: &mut Vec<(String, String)>| {
         for (target, is_expanding) in refs {

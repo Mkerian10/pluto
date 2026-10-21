@@ -2308,20 +2308,6 @@ fn mk_encode_value_at(ty: &TypeExpr, value_expr: Expr, depth: usize) -> Result<V
     }
 }
 
-/// Helper to convert simple expressions to strings for method calls
-fn value_expr_to_string(expr: &Expr) -> Result<String, CompileError> {
-    match expr {
-        Expr::Ident(name) => Ok(name.clone()),
-        Expr::FieldAccess { object, field } => {
-            let obj_str = value_expr_to_string(&object.node)?;
-            Ok(format!("{}.{}", obj_str, field.node))
-        }
-        _ => Err(CompileError::codegen(
-            "Complex expression not supported in array length call"
-        )),
-    }
-}
-
 /// Helper to mangle generic type names
 fn mangle_generic_name(base_name: &str, type_args: &[Spanned<TypeExpr>]) -> String {
     let mut result = base_name.to_string();
@@ -3455,63 +3441,6 @@ mod tests {
         collect_types_from_type_expr(&ty, &mut types);
         assert_eq!(types.len(), 1);
         assert!(types.contains("User"));
-    }
-
-    // ===== Phase 1: value_expr_to_string tests =====
-
-    #[test]
-    fn test_value_expr_to_string_ident() {
-        let expr = Expr::Ident("myVar".to_string());
-        let result = value_expr_to_string(&expr).unwrap();
-        assert_eq!(result, "myVar");
-    }
-
-    #[test]
-    fn test_value_expr_to_string_field_access() {
-        let expr = Expr::FieldAccess {
-            object: Box::new(Spanned {
-                node: Expr::Ident("obj".to_string()),
-                span: mk_span(),
-            }),
-            field: Spanned {
-                node: "field".to_string(),
-                span: mk_span(),
-            },
-        };
-        let result = value_expr_to_string(&expr).unwrap();
-        assert_eq!(result, "obj.field");
-    }
-
-    #[test]
-    fn test_value_expr_to_string_nested_field_access() {
-        let expr = Expr::FieldAccess {
-            object: Box::new(Spanned {
-                node: Expr::FieldAccess {
-                    object: Box::new(Spanned {
-                        node: Expr::Ident("a".to_string()),
-                        span: mk_span(),
-                    }),
-                    field: Spanned {
-                        node: "b".to_string(),
-                        span: mk_span(),
-                    },
-                },
-                span: mk_span(),
-            }),
-            field: Spanned {
-                node: "c".to_string(),
-                span: mk_span(),
-            },
-        };
-        let result = value_expr_to_string(&expr).unwrap();
-        assert_eq!(result, "a.b.c");
-    }
-
-    #[test]
-    fn test_value_expr_to_string_complex_expr_fails() {
-        let expr = Expr::IntLit(42);
-        let result = value_expr_to_string(&expr);
-        assert!(result.is_err());
     }
 
     // ===== Phase 2: Generic instantiation tests =====

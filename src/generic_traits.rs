@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostics::CompileError;
 use crate::parser::ast::{ImplTraitRef, Program, TraitDecl, TypeExpr};
 use crate::span::{Span, Spanned};
-use crate::visit::{walk_program_mut, walk_type_expr_mut, VisitMut};
+use crate::visit::{walk_type_expr_mut, VisitMut};
 
 pub fn instantiate_generic_traits(program: &mut Program) -> Result<(), CompileError> {
     // Collect templates. They STAY in the program: registration skips them,

@@ -136,7 +136,10 @@ fn count_exprs_in_stmt_manual(stmt: &Stmt) -> usize {
         Stmt::Scope { body, .. } => {
             count += count_exprs_in_block_manual(&body.node);
         }
-        Stmt::Select { arms, default } => {
+        Stmt::ExpectRaises { body, .. } => {
+            count += count_exprs_in_block_manual(&body.node);
+        }
+        Stmt::Select { arms, default, .. } => {
             for arm in arms {
                 match &arm.op {
                     SelectOp::Recv { channel, .. } => {
@@ -223,11 +226,13 @@ fn count_exprs_manual_expr(expr: &Expr) -> usize {
             count += count_exprs_in_block_manual(&body.node);
         }
         Expr::ClosureCreate { .. } => {}
-        Expr::Cast { expr, .. } => {
-            count += count_exprs_manual_expr(&expr.node);
-        }
         Expr::Propagate { expr } => {
             count += count_exprs_manual_expr(&expr.node);
+        }
+        Expr::CompareChain { operands, .. } => {
+            for operand in operands {
+                count += count_exprs_manual_expr(&operand.node);
+            }
         }
         Expr::Catch { expr, handlers } => {
             count += count_exprs_manual_expr(&expr.node);
@@ -263,7 +268,7 @@ fn count_exprs_manual_expr(expr: &Expr) -> usize {
                 count += count_exprs_manual_expr(&elem.node);
             }
         }
-        Expr::Spawn { call } => {
+        Expr::Spawn { call, .. } => {
             count += count_exprs_manual_expr(&call.node);
         }
         Expr::Range {
@@ -390,7 +395,10 @@ fn count_stmts_in_block_manual(block: &Block) -> usize {
             Stmt::Scope { body, .. } => {
                 count += count_stmts_in_block_manual(&body.node);
             }
-            Stmt::Select { arms, default } => {
+            Stmt::ExpectRaises { body, .. } => {
+                count += count_stmts_in_block_manual(&body.node);
+            }
+            Stmt::Select { arms, default, .. } => {
                 for arm in arms {
                     count += count_stmts_in_block_manual(&arm.body.node);
                 }

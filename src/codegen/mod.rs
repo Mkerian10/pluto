@@ -1962,8 +1962,8 @@ mod tests {
 
     #[test]
     fn test_format_invariant_expr_float_lit() {
-        let expr = Expr::FloatLit(3.14);
-        assert_eq!(format_invariant_expr(&expr), "3.14");
+        let expr = Expr::FloatLit(2.5);
+        assert_eq!(format_invariant_expr(&expr), "2.5");
     }
 
     #[test]

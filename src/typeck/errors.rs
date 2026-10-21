@@ -609,7 +609,7 @@ fn collect_expr_effects(expr: &Spanned<Expr>, ctx: &mut EffectCtx) {
                                 .env
                                 .classes
                                 .iter()
-                                .filter(|(_, info)| info.impl_traits.iter().any(|t| *t == trait_name))
+                                .filter(|(_, info)| info.impl_traits.contains(&trait_name))
                                 .map(|(class_name, _)| mangle_method(class_name, &method_name))
                                 .collect();
                             for m in impls {
@@ -1147,14 +1147,14 @@ fn enforce_expr(
             }
             // A placement boundary is fallible in every physical plan — an
             // unhandled `at` is rejected even when the domain is colocated.
-            return Err(CompileError::type_err(
+            Err(CompileError::type_err(
                 format!(
                     "placement expression `at` (calling '{}') must be handled with ! or catch: \
                      the domain boundary can fail in any deployment plan",
                     method.node
                 ),
                 span,
-            ));
+            ))
         }
         Expr::MethodCall { object, method, args, .. } => {
             enforce_expr(&object.node, object.span, current_fn, env, lenient)?;
@@ -1792,7 +1792,7 @@ mod tests {
     fn test_contains_propagate_literals_false() {
         // Test that all literal types return false
         assert!(!contains_propagate(&sp(Expr::IntLit(42))));
-        assert!(!contains_propagate(&sp(Expr::FloatLit(3.14))));
+        assert!(!contains_propagate(&sp(Expr::FloatLit(2.5))));
         assert!(!contains_propagate(&sp(Expr::BoolLit(true))));
         assert!(!contains_propagate(&sp(Expr::StringLit("hello".to_string()))));
         assert!(!contains_propagate(&sp(Expr::NoneLit)));

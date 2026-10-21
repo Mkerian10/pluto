@@ -207,6 +207,203 @@ pub fn pluto_type_to_type_expr(ty: &PlutoType) -> TypeExpr {
     }
 }
 
+/// Whether a type can cross a domain boundary (the schema-level wire surface).
+/// The single predicate shared by `at` placement checking, the serve dispatch
+/// filter, the interface hash, and both marshal directions — per
+/// docs/design/distributed-model.md, this is checked identically whatever
+/// physical plan the boundary gets.
+pub(crate) fn wire_supported(t: &PlutoType) -> bool {
+    match t {
+        PlutoType::Int
+        | PlutoType::Float
+        | PlutoType::Bool
+        | PlutoType::String
+        // Opaque binary payload: crosses as ONE blob (see rfc-wire-format.md)
+        | PlutoType::Bytes
+        | PlutoType::Class(_)
+        | PlutoType::Enum(_) => true,
+        PlutoType::Nullable(inner) => wire_supported(inner),
+        PlutoType::Array(elem) => wire_supported(elem),
+        PlutoType::Set(elem) => wire_supported(elem),
+        PlutoType::Map(k, v) => wire_supported(k) && wire_supported(v),
+        _ => false,
+    }
+}
+
+/// Deep transferability for `at` placement boundaries: `wire_supported` plus
+/// a transitive walk of class fields and enum variant fields, so a value
+/// whose SHAPE cannot marshal (a closure field, a trait field) is rejected
+/// by typeck's boundary diagnostic instead of surfacing as a missing
+/// generated function during codegen. Deliberately NOT used by the interface
+/// hash or the serve dispatch filter — their method set (and thus the hash,
+/// PR #335) must stay stable.
+pub(crate) fn wire_transferable(t: &PlutoType, env: &crate::typeck::env::TypeEnv) -> bool {
+    fn shape_ok(
+        t: &PlutoType,
+        env: &crate::typeck::env::TypeEnv,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        match t {
+            PlutoType::Int
+            | PlutoType::Float
+            | PlutoType::Bool
+            | PlutoType::String
+            // Marshalable in FIELD position (encoded as int); top-level args
+            // are still gated by wire_supported.
+            | PlutoType::Byte
+            | PlutoType::Bytes => true,
+            PlutoType::Nullable(inner)
+            | PlutoType::Array(inner)
+            | PlutoType::Set(inner) => shape_ok(inner, env, visiting),
+            PlutoType::Map(k, v) => shape_ok(k, env, visiting) && shape_ok(v, env, visiting),
+            PlutoType::Class(n) => {
+                if !visiting.insert(n.clone()) {
+                    return true; // recursive type — already being examined
+                }
+                // Unknown class: no field info to falsify — leave it to the
+                // existing (shallow) acceptance rather than reject blind.
+                let ok = env.classes.get(n).is_none_or(|info| {
+                    info.fields
+                        .iter()
+                        .all(|(_, ft, is_injected)| *is_injected || shape_ok(ft, env, visiting))
+                });
+                visiting.remove(n);
+                ok
+            }
+            PlutoType::Enum(n) => {
+                if !visiting.insert(n.clone()) {
+                    return true;
+                }
+                let ok = env.enums.get(n).is_none_or(|info| {
+                    info.variants
+                        .iter()
+                        .all(|(_, fields)| fields.iter().all(|(_, ft)| shape_ok(ft, env, visiting)))
+                });
+                visiting.remove(n);
+                ok
+            }
+            _ => false,
+        }
+    }
+    wire_supported(t) && shape_ok(t, env, &mut std::collections::HashSet::new())
+}
+
+/// Whether a type contains entity (object) types anywhere in its shape —
+/// directly, in containers, or TRANSITIVELY through class/enum fields.
+/// Top-level entities cross boundaries as identity handles; entities nested
+/// inside values are untransferable (a copy would fork their identity).
+pub(crate) fn contains_object_type(
+    t: &PlutoType,
+    env: &crate::typeck::env::TypeEnv,
+) -> bool {
+    find_object_type(t, env).is_some()
+}
+
+/// Like `contains_object_type`, but returns the NAME of the first entity
+/// type found, so boundary diagnostics can name the offender.
+pub(crate) fn find_object_type(
+    t: &PlutoType,
+    env: &crate::typeck::env::TypeEnv,
+) -> Option<String> {
+    fn walk(
+        t: &PlutoType,
+        env: &crate::typeck::env::TypeEnv,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> Option<String> {
+        match t {
+            PlutoType::Class(n) => {
+                if env.object_types.contains(n) {
+                    return Some(n.clone());
+                }
+                if !visiting.insert(n.clone()) {
+                    return None; // recursive type — already being examined
+                }
+                let hit = env.classes.get(n).and_then(|info| {
+                    info.fields.iter().find_map(|(_, ft, _)| walk(ft, env, visiting))
+                });
+                visiting.remove(n);
+                hit
+            }
+            PlutoType::Enum(n) => {
+                if env.object_types.contains(n) {
+                    return Some(n.clone());
+                }
+                if !visiting.insert(n.clone()) {
+                    return None;
+                }
+                let hit = env.enums.get(n).and_then(|info| {
+                    info.variants.iter().find_map(|(_, fields)| {
+                        fields.iter().find_map(|(_, ft)| walk(ft, env, visiting))
+                    })
+                });
+                visiting.remove(n);
+                hit
+            }
+            PlutoType::Nullable(inner)
+            | PlutoType::Array(inner)
+            | PlutoType::Set(inner) => walk(inner, env, visiting),
+            PlutoType::Map(k, v) => {
+                walk(k, env, visiting).or_else(|| walk(v, env, visiting))
+            }
+            // Symbolic generic reference (pre-resolution): a generic OBJECT
+            // base name marks every instantiation as an entity; also look
+            // through the args.
+            PlutoType::GenericInstance(_, name, args) => {
+                if env.object_types.contains(name) {
+                    return Some(name.clone());
+                }
+                args.iter().find_map(|a| walk(a, env, visiting))
+            }
+            _ => None,
+        }
+    }
+    let mut visiting = std::collections::HashSet::new();
+    walk(t, env, &mut visiting)
+}
+
+/// A value type that smuggles an entity: contains an object anywhere in its
+/// shape but is not ITSELF a top-level entity. Top-level entities cross
+/// boundaries as identity handles; an entity nested inside a value would be
+/// copied, forking its identity — rejected at every boundary (#426).
+pub(crate) fn nested_entity_in_value(
+    t: &PlutoType,
+    env: &crate::typeck::env::TypeEnv,
+) -> Option<String> {
+    if matches!(t, PlutoType::Class(n) if env.object_types.contains(n)) {
+        return None;
+    }
+    find_object_type(t, env)
+}
+
+/// Whether an entity field of this type may be read from outside the
+/// entity's own methods (rfc-module-semantics.md section 3). Scalar-shaped
+/// types cannot smuggle mutation: the locked 8-byte load hands out a value
+/// (or an immutable string, or an entity HANDLE — sharing handles is what
+/// entities are for; the handle's own lock governs its use). Everything
+/// reference-shaped — arrays, maps, sets, bytes, value classes, data-carrying
+/// enums, traits, fn values, tasks, channels, streams — hands out a live
+/// reference into serialized state, so it goes through a method returning a
+/// deliberate copy instead.
+pub fn entity_field_externally_readable(t: &PlutoType, env: &crate::typeck::env::TypeEnv) -> bool {
+    match t {
+        PlutoType::Int
+        | PlutoType::Float
+        | PlutoType::Bool
+        | PlutoType::Byte
+        | PlutoType::String => true,
+        // Unit-only enums are tags; a data-carrying variant is heap state.
+        PlutoType::Enum(name) => env
+            .enums
+            .get(name)
+            .is_some_and(|e| e.variants.iter().all(|(_, fields)| fields.is_empty())),
+        // An entity handle: identity is meant to be shared; its own lock
+        // serializes whatever is done with it.
+        PlutoType::Class(name) => env.object_types.contains(name),
+        PlutoType::Nullable(inner) => entity_field_externally_readable(inner, env),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,202 +892,5 @@ mod tests {
             result,
             PlutoType::Array(Box::new(PlutoType::Nullable(Box::new(PlutoType::Float))))
         );
-    }
-}
-
-/// Whether a type can cross a domain boundary (the schema-level wire surface).
-/// The single predicate shared by `at` placement checking, the serve dispatch
-/// filter, the interface hash, and both marshal directions — per
-/// docs/design/distributed-model.md, this is checked identically whatever
-/// physical plan the boundary gets.
-pub(crate) fn wire_supported(t: &PlutoType) -> bool {
-    match t {
-        PlutoType::Int
-        | PlutoType::Float
-        | PlutoType::Bool
-        | PlutoType::String
-        // Opaque binary payload: crosses as ONE blob (see rfc-wire-format.md)
-        | PlutoType::Bytes
-        | PlutoType::Class(_)
-        | PlutoType::Enum(_) => true,
-        PlutoType::Nullable(inner) => wire_supported(inner),
-        PlutoType::Array(elem) => wire_supported(elem),
-        PlutoType::Set(elem) => wire_supported(elem),
-        PlutoType::Map(k, v) => wire_supported(k) && wire_supported(v),
-        _ => false,
-    }
-}
-
-/// Deep transferability for `at` placement boundaries: `wire_supported` plus
-/// a transitive walk of class fields and enum variant fields, so a value
-/// whose SHAPE cannot marshal (a closure field, a trait field) is rejected
-/// by typeck's boundary diagnostic instead of surfacing as a missing
-/// generated function during codegen. Deliberately NOT used by the interface
-/// hash or the serve dispatch filter — their method set (and thus the hash,
-/// PR #335) must stay stable.
-pub(crate) fn wire_transferable(t: &PlutoType, env: &crate::typeck::env::TypeEnv) -> bool {
-    fn shape_ok(
-        t: &PlutoType,
-        env: &crate::typeck::env::TypeEnv,
-        visiting: &mut std::collections::HashSet<String>,
-    ) -> bool {
-        match t {
-            PlutoType::Int
-            | PlutoType::Float
-            | PlutoType::Bool
-            | PlutoType::String
-            // Marshalable in FIELD position (encoded as int); top-level args
-            // are still gated by wire_supported.
-            | PlutoType::Byte
-            | PlutoType::Bytes => true,
-            PlutoType::Nullable(inner)
-            | PlutoType::Array(inner)
-            | PlutoType::Set(inner) => shape_ok(inner, env, visiting),
-            PlutoType::Map(k, v) => shape_ok(k, env, visiting) && shape_ok(v, env, visiting),
-            PlutoType::Class(n) => {
-                if !visiting.insert(n.clone()) {
-                    return true; // recursive type — already being examined
-                }
-                // Unknown class: no field info to falsify — leave it to the
-                // existing (shallow) acceptance rather than reject blind.
-                let ok = env.classes.get(n).is_none_or(|info| {
-                    info.fields
-                        .iter()
-                        .all(|(_, ft, is_injected)| *is_injected || shape_ok(ft, env, visiting))
-                });
-                visiting.remove(n);
-                ok
-            }
-            PlutoType::Enum(n) => {
-                if !visiting.insert(n.clone()) {
-                    return true;
-                }
-                let ok = env.enums.get(n).is_none_or(|info| {
-                    info.variants
-                        .iter()
-                        .all(|(_, fields)| fields.iter().all(|(_, ft)| shape_ok(ft, env, visiting)))
-                });
-                visiting.remove(n);
-                ok
-            }
-            _ => false,
-        }
-    }
-    wire_supported(t) && shape_ok(t, env, &mut std::collections::HashSet::new())
-}
-
-/// Whether a type contains entity (object) types anywhere in its shape —
-/// directly, in containers, or TRANSITIVELY through class/enum fields.
-/// Top-level entities cross boundaries as identity handles; entities nested
-/// inside values are untransferable (a copy would fork their identity).
-pub(crate) fn contains_object_type(
-    t: &PlutoType,
-    env: &crate::typeck::env::TypeEnv,
-) -> bool {
-    find_object_type(t, env).is_some()
-}
-
-/// Like `contains_object_type`, but returns the NAME of the first entity
-/// type found, so boundary diagnostics can name the offender.
-pub(crate) fn find_object_type(
-    t: &PlutoType,
-    env: &crate::typeck::env::TypeEnv,
-) -> Option<String> {
-    fn walk(
-        t: &PlutoType,
-        env: &crate::typeck::env::TypeEnv,
-        visiting: &mut std::collections::HashSet<String>,
-    ) -> Option<String> {
-        match t {
-            PlutoType::Class(n) => {
-                if env.object_types.contains(n) {
-                    return Some(n.clone());
-                }
-                if !visiting.insert(n.clone()) {
-                    return None; // recursive type — already being examined
-                }
-                let hit = env.classes.get(n).and_then(|info| {
-                    info.fields.iter().find_map(|(_, ft, _)| walk(ft, env, visiting))
-                });
-                visiting.remove(n);
-                hit
-            }
-            PlutoType::Enum(n) => {
-                if env.object_types.contains(n) {
-                    return Some(n.clone());
-                }
-                if !visiting.insert(n.clone()) {
-                    return None;
-                }
-                let hit = env.enums.get(n).and_then(|info| {
-                    info.variants.iter().find_map(|(_, fields)| {
-                        fields.iter().find_map(|(_, ft)| walk(ft, env, visiting))
-                    })
-                });
-                visiting.remove(n);
-                hit
-            }
-            PlutoType::Nullable(inner)
-            | PlutoType::Array(inner)
-            | PlutoType::Set(inner) => walk(inner, env, visiting),
-            PlutoType::Map(k, v) => {
-                walk(k, env, visiting).or_else(|| walk(v, env, visiting))
-            }
-            // Symbolic generic reference (pre-resolution): a generic OBJECT
-            // base name marks every instantiation as an entity; also look
-            // through the args.
-            PlutoType::GenericInstance(_, name, args) => {
-                if env.object_types.contains(name) {
-                    return Some(name.clone());
-                }
-                args.iter().find_map(|a| walk(a, env, visiting))
-            }
-            _ => None,
-        }
-    }
-    let mut visiting = std::collections::HashSet::new();
-    walk(t, env, &mut visiting)
-}
-
-/// A value type that smuggles an entity: contains an object anywhere in its
-/// shape but is not ITSELF a top-level entity. Top-level entities cross
-/// boundaries as identity handles; an entity nested inside a value would be
-/// copied, forking its identity — rejected at every boundary (#426).
-pub(crate) fn nested_entity_in_value(
-    t: &PlutoType,
-    env: &crate::typeck::env::TypeEnv,
-) -> Option<String> {
-    if matches!(t, PlutoType::Class(n) if env.object_types.contains(n)) {
-        return None;
-    }
-    find_object_type(t, env)
-}
-
-/// Whether an entity field of this type may be read from outside the
-/// entity's own methods (rfc-module-semantics.md section 3). Scalar-shaped
-/// types cannot smuggle mutation: the locked 8-byte load hands out a value
-/// (or an immutable string, or an entity HANDLE — sharing handles is what
-/// entities are for; the handle's own lock governs its use). Everything
-/// reference-shaped — arrays, maps, sets, bytes, value classes, data-carrying
-/// enums, traits, fn values, tasks, channels, streams — hands out a live
-/// reference into serialized state, so it goes through a method returning a
-/// deliberate copy instead.
-pub fn entity_field_externally_readable(t: &PlutoType, env: &crate::typeck::env::TypeEnv) -> bool {
-    match t {
-        PlutoType::Int
-        | PlutoType::Float
-        | PlutoType::Bool
-        | PlutoType::Byte
-        | PlutoType::String => true,
-        // Unit-only enums are tags; a data-carrying variant is heap state.
-        PlutoType::Enum(name) => env
-            .enums
-            .get(name)
-            .is_some_and(|e| e.variants.iter().all(|(_, fields)| fields.is_empty())),
-        // An entity handle: identity is meant to be shared; its own lock
-        // serializes whatever is done with it.
-        PlutoType::Class(name) => env.object_types.contains(name),
-        PlutoType::Nullable(inner) => entity_field_externally_readable(inner, env),
-        _ => false,
     }
 }
