@@ -699,7 +699,7 @@ pub enum Expr {
     Spawn {
         call: Box<Spanned<Expr>>,
         /// Executor: false = `spawn` (preemptive OS thread, parallelism);
-        /// true = `green` (cooperative green task on a scheduler). Same Task<T>
+        /// true = `green` (cooperative green task on a scheduler). Same `Task<T>`
         /// and sharing rules — only the executor differs (rfc-green-tasks.md).
         green: bool,
     },
@@ -712,7 +712,7 @@ pub enum Expr {
     NullPropagate {
         expr: Box<Spanned<Expr>>,
     },
-    /// Static trait method call: TypeInfo::kind<User>()
+    /// Static trait method call: `TypeInfo::kind<User>()`
     StaticTraitCall {
         trait_name: Spanned<String>,
         method_name: Spanned<String>,

@@ -14,14 +14,14 @@ use crate::typeck::types::PlutoType;
 ///
 /// Non-serializable types:
 /// - fn(...) — closures (can't serialize code)
-/// - Task<T> — runtime handle
-/// - Sender<T> / Receiver<T> — channel endpoints (runtime handles)
+/// - `Task<T>` — runtime handle
+/// - `Sender<T>` / `Receiver<T>` — channel endpoints (runtime handles)
 /// - Trait types — vtable pointers with no concrete type info
 ///
 /// Serializable types:
 /// - Primitives: int, float, bool, string, byte, bytes
 /// - T? — if T is serializable
-/// - [T], Map<K,V>, Set<T> — if element/key/value types are serializable
+/// - `[T]`, `Map<K,V>`, `Set<T>` — if element/key/value types are serializable
 /// - Classes — if all data fields (excluding bracket deps) are serializable
 /// - Enums — if all variant fields are serializable
 pub fn validate_serializable_types(program: &Program, env: &TypeEnv) -> Result<(), CompileError> {

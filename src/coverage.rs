@@ -772,6 +772,8 @@ pub fn print_terminal_summary(stats: &[FileCoverage]) {
 /// Format spec: https://ltp.sourceforge.net/coverage/lcov/geninfo.1.php
 ///
 /// Records per file:
+///
+/// ```text
 ///   TN: (test name, blank)
 ///   SF:<path>
 ///   FN:<line>,<name>
@@ -785,6 +787,7 @@ pub fn print_terminal_summary(stats: &[FileCoverage]) {
 ///   BRF:<total_branches>
 ///   BRH:<hit_branches>
 ///   end_of_record
+/// ```
 pub fn generate_lcov(map: &CoverageMap, data: &CoverageData) -> String {
     let mut output = String::new();
 

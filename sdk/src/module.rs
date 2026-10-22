@@ -77,7 +77,7 @@ impl Module {
 
     /// Create an edit-friendly Module from source text.
     /// Parses without transforms (no monomorphize/closure-lift/spawn-desugar).
-    /// Does NOT inject prelude (avoids serializing Option<T> etc. into committed source).
+    /// Does NOT inject prelude (avoids serializing `Option<T>` etc. into committed source).
     pub fn from_source(source: &str) -> Result<Self, SdkError> {
         let program = pluto::parse_for_editing(source)?;
         let index = ModuleIndex::build(&program);

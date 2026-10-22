@@ -49,7 +49,7 @@
 //! call-like expression (the call could mutate state between evaluation
 //! and use); builtin `len` on a collection-typed path is pure and exempt.
 //!
-//! Separately from flow facts, [`expr_bounds`] answers point-wise interval
+//! Separately from flow facts, `expr_bounds` answers point-wise interval
 //! queries for int-valued expressions *outside* the affine fragment: masks
 //! (`x & c`), remainders (`x % c`), and byte-typed values widened to int
 //! (`[0, 255]` by construction — a type fact that survives loops and
@@ -65,7 +65,7 @@
 //!   about the other).
 //! - Any statement whose immediate expressions contain a call-like node
 //!   (call, method call, static trait call, `at`, `spawn`) kills facts
-//!   according to the call's *severity* ([`call_severity`], the one shared
+//!   according to the call's *severity* (`call_severity`, the one shared
 //!   exemption predicate — invariant discharge and `guarded_by` dominance
 //!   consume the same classification rather than keeping their own copies):
 //!
@@ -76,9 +76,9 @@
 //!   - [`CallSeverity::Collections`] — calls that may mutate collection
 //!     contents/lengths but provably cannot write any class's int fields:
 //!     builtin *methods* (receiver of primitive/collection type — see the
-//!     load-bearing survey on [`call_severity`]), and direct calls to known
+//!     load-bearing survey on `call_severity`), and direct calls to known
 //!     functions/methods none of whose declared parameter types can reach a
-//!     class value ([`type_reaches_class`]). These kill all *length terms*
+//!     class value (`type_reaches_class`). These kill all *length terms*
 //!     (a builtin `push`/`pop`/`clear` on an alias changes `xs.len()`) but
 //!     leave field-path facts alone.
 //!   - [`CallSeverity::All`] — everything else (the callee may reach and
