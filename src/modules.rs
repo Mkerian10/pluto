@@ -1158,10 +1158,16 @@ fn resolve_modules_inner(
     // Load sibling .pluto files (excluding the entry file and imported single-file modules)
     // Skip this step when compiling system members in isolation
     if !skip_siblings {
-        // Collect sibling source files (.pluto and .pt), deduplicated by stem
+        // Collect sibling source files (.pluto and .pt), deduplicated by stem.
+        // The entry's own twin in the other format (main.pluto next to
+        // main.pt, as `pluto analyze` / `pluto sync` produce) is the same
+        // module, not a sibling: comparing paths alone let it merge back in
+        // and every declaration showed up twice ("'main' is already declared").
+        let entry_stem = entry_file.file_stem().map(|s| s.to_os_string());
         let all_siblings = collect_source_files(entry_dir)?;
         let sibling_files: Vec<PathBuf> = all_siblings.into_iter()
             .filter(|p| p.canonicalize().unwrap_or(p.clone()) != entry_file)
+            .filter(|p| p.file_stem().map(|s| s.to_os_string()) != entry_stem)
             .collect();
 
         // Transitive import closure over the sibling space (issue #437,

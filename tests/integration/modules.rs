@@ -1324,6 +1324,31 @@ fn main() {
 ");
 }
 
+// `pluto analyze` / `pluto sync` leave main.pluto next to main.pt. The twin
+// is the same module in the other format, not a sibling: merging it back in
+// made every declaration appear twice ("function 'main' is already declared").
+#[test]
+fn entry_pt_with_pluto_twin_is_not_merged_as_sibling() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = "fn main() {\n    print(7)\n}\n";
+    std::fs::write(dir.path().join("main.pt"), src).unwrap();
+    // The twin is text here (format is auto-detected by magic bytes); the
+    // bug was in path comparison, so a text twin reproduces it exactly.
+    std::fs::write(dir.path().join("main.pluto"), src).unwrap();
+    let bin = dir.path().join("test_bin");
+
+    pluto::compile_file(&dir.path().join("main.pt"), &bin)
+        .unwrap_or_else(|e| panic!("entry main.pt with a main.pluto twin should compile: {e}"));
+    let out = Command::new(&bin).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n");
+
+    // And the other way round: the .pluto entry must not pick up main.pt.
+    pluto::compile_file(&dir.path().join("main.pluto"), &bin)
+        .unwrap_or_else(|e| panic!("entry main.pluto with a main.pt twin should compile: {e}"));
+    let out = Command::new(&bin).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n");
+}
+
 #[test]
 fn test_sibling_file_error_attribution() {
     // When a sibling file has a syntax error, the error message should
