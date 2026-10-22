@@ -16,7 +16,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # The macOS job normally takes 9-12 minutes; a slow runner pushed it past
+    # the old 15-minute cap and the whole job was canceled mid-suite.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
