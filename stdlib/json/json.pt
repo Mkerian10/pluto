@@ -183,13 +183,6 @@ fn escape_string(s: string) string {
     return __pluto_json_escape_string(s)
 }
 
-fn hex_digit(v: int) string {
-    if v < 10 {
-        return strings.char_at("0123456789abcdef", v)
-    }
-    return strings.char_at("0123456789abcdef", v)
-}
-
 fn stringify(j: Json) string {
     if j.tag == 0 {
         return "null"
