@@ -1171,6 +1171,16 @@ long __pluto_json_parse_int(void *s) {
     return strtol(cstr, NULL, 10);
 }
 
+// 1 when the integer literal fits in a 64-bit int, 0 when strtoll would
+// saturate it (ERANGE). The JSON parser promotes the latter to a float
+// instead of silently returning INT64_MAX/MIN.
+long __pluto_json_int_fits(void *s) {
+    const char *cstr = __pluto_string_to_cstr(s);
+    errno = 0;
+    strtoll(cstr, NULL, 10);
+    return errno == ERANGE ? 0 : 1;
+}
+
 double __pluto_json_parse_float(void *s) {
     const char *cstr = __pluto_string_to_cstr(s);
     return strtod(cstr, NULL);
@@ -1186,11 +1196,20 @@ void *__pluto_codepoint_to_string(long cp) {
         buf[0] = (char)(0xC0 | (cp >> 6));
         buf[1] = (char)(0x80 | (cp & 0x3F));
         len = 2;
-    } else {
+    } else if (cp < 0x10000) {
         buf[0] = (char)(0xE0 | (cp >> 12));
         buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
         buf[2] = (char)(0x80 | (cp & 0x3F));
         len = 3;
+    } else {
+        // Supplementary planes (emoji, rare CJK): four bytes. Without this
+        // branch a decoded surrogate pair was squeezed into three bytes and
+        // came out as invalid UTF-8.
+        buf[0] = (char)(0xF0 | (cp >> 18));
+        buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[3] = (char)(0x80 | (cp & 0x3F));
+        len = 4;
     }
     void *header = gc_alloc(8 + len + 1, GC_TAG_STRING, 0);
     *(long *)header = len;

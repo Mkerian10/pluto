@@ -602,3 +602,56 @@ fn main() {
     )]);
     assert_eq!(out, "true\n3\n");
 }
+
+// ============================================================
+// Surrogate pairs decode to one four-byte code point
+// ============================================================
+
+#[test]
+fn json_parse_surrogate_pair_is_four_byte_utf8() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.json
+
+fn main() {
+    let j = json.parse("\"\\ud83d\\ude00\"")!
+    let s = j.get_string()
+    print(s.len())
+    print(s == "😀")
+    print(s.byte_at(0))
+    print(s.byte_at(3))
+    print(j.to_string() == "\"😀\"")
+}
+"#,
+    )]);
+    assert_eq!(out, "4\ntrue\n240\n128\ntrue\n");
+}
+
+// ============================================================
+// Integers beyond int range become floats instead of saturating
+// ============================================================
+
+#[test]
+fn json_parse_huge_integer_becomes_float() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.json
+
+fn main() {
+    let big = json.parse("12345678901234567890")!
+    print(big.is_float())
+    print(big.get_float() > 1.2e19)
+    let neg = json.parse("-99999999999999999999")!
+    print(neg.is_float())
+    print(neg.get_float() < -9.9e19)
+    let hi = json.parse("9223372036854775807")!
+    print(hi.is_int())
+    print(hi.get_int()!)
+    let lo = json.parse("-9223372036854775808")!
+    print(lo.is_int())
+    print(lo.get_int()!)
+}
+"#,
+    )]);
+    assert_eq!(out, "true\ntrue\ntrue\ntrue\ntrue\n9223372036854775807\ntrue\n-9223372036854775808\n");
+}
