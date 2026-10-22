@@ -655,6 +655,57 @@ impl DiagnosticSpan {
 
 // ========== CompilerService Implementation ==========
 
+/// Wait for a spawned child whose stdout/stderr are piped, with a deadline.
+///
+/// Both pipes are drained on background threads from the moment the child
+/// starts, so (a) a child that writes more than the pipe buffer never
+/// deadlocks waiting for a reader that only shows up at exit, and (b) on
+/// timeout the output produced so far is returned instead of discarded —
+/// a server that printed its port and then blocked on accept reports what
+/// it printed (issue #506). Returns (stdout, stderr, exit_code, timed_out).
+fn wait_with_timeout(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+) -> Result<(String, String, Option<i32>, bool), String> {
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    }
+    let out_reader = drain(child.stdout.take());
+    let err_reader = drain(child.stderr.take());
+
+    let start = Instant::now();
+    let (code, timed_out) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break (status.code(), false),
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait(); // reap; also closes our end of the pipes
+                break (None, true);
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+
+    let stdout = out_reader.join().unwrap_or_default();
+    let stderr = err_reader.join().unwrap_or_default();
+    Ok((
+        String::from_utf8_lossy(&stdout).to_string(),
+        String::from_utf8_lossy(&stderr).to_string(),
+        code,
+        timed_out,
+    ))
+}
+
 impl CompilerService for InProcessServer {
     // ===== Module Management =====
 
@@ -1179,7 +1230,7 @@ impl CompilerService for InProcessServer {
 
     fn run(&self, path: &Path, opts: &RunOptions) -> RunResult {
         use std::process::{Command, Stdio};
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
 
         let temp_dir = std::env::temp_dir();
         let output = temp_dir.join(format!("pluto_run_{}", uuid::Uuid::new_v4()));
@@ -1199,40 +1250,9 @@ impl CompilerService for InProcessServer {
                 }
 
                 let timeout = Duration::from_millis(opts.timeout_ms.unwrap_or(10000));
-                let start = Instant::now();
-
                 match cmd.spawn() {
-                    Ok(mut child) => {
-                        let result = loop {
-                            if start.elapsed() >= timeout {
-                                let _ = child.kill();
-                                break Ok((String::new(), String::new(), None, true));
-                            }
-
-                            match child.try_wait() {
-                                Ok(Some(status)) => {
-                                    let out = child
-                                        .wait_with_output()
-                                        .unwrap_or_else(|_| std::process::Output {
-                                            status,
-                                            stdout: vec![],
-                                            stderr: vec![],
-                                        });
-                                    break Ok((
-                                        String::from_utf8_lossy(&out.stdout).to_string(),
-                                        String::from_utf8_lossy(&out.stderr).to_string(),
-                                        status.code(),
-                                        false,
-                                    ));
-                                }
-                                Ok(None) => {
-                                    std::thread::sleep(Duration::from_millis(50));
-                                }
-                                Err(e) => {
-                                    break Err(e.to_string());
-                                }
-                            }
-                        };
+                    Ok(child) => {
+                        let result = wait_with_timeout(child, timeout);
 
                         let _ = std::fs::remove_file(&output);
 
@@ -1285,7 +1305,7 @@ impl CompilerService for InProcessServer {
 
     fn test(&self, path: &Path, opts: &TestOptions) -> TestResult {
         use std::process::{Command, Stdio};
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
 
         let temp_dir = std::env::temp_dir();
         let output = temp_dir.join(format!("pluto_test_{}", uuid::Uuid::new_v4()));
@@ -1300,40 +1320,9 @@ impl CompilerService for InProcessServer {
                 }
 
                 let timeout = Duration::from_millis(opts.timeout_ms.unwrap_or(30000));
-                let start = Instant::now();
-
                 match cmd.spawn() {
-                    Ok(mut child) => {
-                        let result = loop {
-                            if start.elapsed() >= timeout {
-                                let _ = child.kill();
-                                break Ok((String::new(), String::new(), None, true));
-                            }
-
-                            match child.try_wait() {
-                                Ok(Some(status)) => {
-                                    let out = child
-                                        .wait_with_output()
-                                        .unwrap_or_else(|_| std::process::Output {
-                                            status,
-                                            stdout: vec![],
-                                            stderr: vec![],
-                                        });
-                                    break Ok((
-                                        String::from_utf8_lossy(&out.stdout).to_string(),
-                                        String::from_utf8_lossy(&out.stderr).to_string(),
-                                        status.code(),
-                                        false,
-                                    ));
-                                }
-                                Ok(None) => {
-                                    std::thread::sleep(Duration::from_millis(50));
-                                }
-                                Err(e) => {
-                                    break Err(e.to_string());
-                                }
-                            }
-                        };
+                    Ok(child) => {
+                        let result = wait_with_timeout(child, timeout);
 
                         let _ = std::fs::remove_file(&output);
 
@@ -1434,5 +1423,58 @@ mod tests {
     fn test_usages_of_empty() {
         let server = InProcessServer::new();
         assert_eq!(server.usages_of(Uuid::new_v4()).len(), 0);
+    }
+
+    fn write_temp_program(name: &str, source: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pluto_inproc_{}_{}", name, Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.pt");
+        std::fs::write(&path, source).unwrap();
+        path
+    }
+
+    fn stdlib_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib")
+    }
+
+    // A child killed at the deadline still reports what it printed before
+    // the kill (issue #506): a server that prints its port and then blocks
+    // must not look silent.
+    #[test]
+    fn run_keeps_partial_output_on_timeout() {
+        let path = write_temp_program(
+            "timeout",
+            "import std.time\nfn main() {\n    print(\"listening\")\n    time.sleep(60000)\n}\n",
+        );
+        let server = InProcessServer::new();
+        let result = server.run(
+            &path,
+            &RunOptions { stdlib: Some(stdlib_dir()), timeout_ms: Some(1500), cwd: None },
+        );
+        assert!(result.compile_errors.is_empty(), "{:?}", result.compile_errors);
+        assert!(result.timed_out);
+        assert!(!result.success);
+        assert_eq!(result.stdout.trim(), "listening");
+    }
+
+    // The pipes are drained while the child runs, so output larger than
+    // the kernel pipe buffer cannot wedge a child that nobody reads until
+    // it exits.
+    #[test]
+    fn run_drains_output_larger_than_pipe_buffer() {
+        let path = write_temp_program(
+            "bigout",
+            "fn main() {\n    for i in 0..20000 {\n        print(f\"line {i} padding padding padding\")\n    }\n}\n",
+        );
+        let server = InProcessServer::new();
+        let result = server.run(
+            &path,
+            &RunOptions { stdlib: None, timeout_ms: Some(30000), cwd: None },
+        );
+        assert!(result.compile_errors.is_empty(), "{:?}", result.compile_errors);
+        assert!(!result.timed_out);
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.stdout.lines().count(), 20000);
+        assert!(result.stdout.ends_with("line 19999 padding padding padding\n"));
     }
 }
