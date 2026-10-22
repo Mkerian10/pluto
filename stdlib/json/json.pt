@@ -626,7 +626,9 @@ class Parser {
             }
         }
         let numstr = strings.substring(self.src, start, self.pos - start)
-        if is_float {
+        // An integer literal too large for int becomes a float rather than
+        // saturating at the int limits.
+        if is_float || __pluto_json_int_fits(numstr) == 0 {
             return float(parse_float_value(numstr))
         }
         return int(parse_int_value(numstr))
@@ -757,6 +759,7 @@ class Parser {
 // Helpers using extern C functions
 extern fn __pluto_json_escape_string(s: string) string
 extern fn __pluto_json_parse_int(s: string) int
+extern fn __pluto_json_int_fits(s: string) int
 extern fn __pluto_json_parse_float(s: string) float
 extern fn __pluto_codepoint_to_string(cp: int) string
 
