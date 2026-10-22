@@ -135,11 +135,11 @@ line3"
 // ============================================================
 
 #[test]
-#[ignore] // Test bug: main() returns void, not int. Should be "fn main() int { return 0 }" or "fn main() { print(42) }"
 fn return_at_eof_no_newline() {
-    // File ends immediately after return statement
-    let stdout = compile_and_run_stdout(r#"fn main() { return 0 }"#);
-    assert_eq!(compile_and_run(r#"fn main() { return 0 }"#), 0);
+    // File ends immediately after the closing brace, with no trailing newline
+    assert_eq!(compile_and_run(r#"fn main() int { return 7 }"#), 7);
+    let stdout = compile_and_run_stdout(r#"fn main() { print(42) }"#);
+    assert_eq!(stdout.trim(), "42");
 }
 
 #[test]

@@ -33,12 +33,12 @@ fn main() {
 
     let files = fs.list_dir(data_dir)!
 
-    let pass = 0
-    let fail = 0
-    let skip = 0
-    let total = 0
+    let mut pass = 0
+    let mut fail = 0
+    let mut skip = 0
+    let mut total = 0
 
-    let i = 0
+    let mut i = 0
     while i < files.len() {
         let name = files[i]
         i = i + 1
