@@ -757,7 +757,24 @@ Compile with `--stdlib <path-to-stdlib-dir>`.
 | `std.time` | Time utilities: now, sleep, elapsed, monotonic clock |
 | `std.compress` | Compression: gzip/gunzip and raw deflate/inflate over bytes (one-shot) |
 
-Use `stdlib_docs` with a module name for detailed function signatures."#
+Use `stdlib_docs` with a module name for detailed function signatures.
+
+The following modules also ship in `stdlib/` but have no `stdlib_docs` entry yet; see the book's stdlib chapters or the module source for their full API.
+
+| Module | Description |
+|--------|-------------|
+| `std.base64` | Standard and URL-safe base64: encode/decode for strings and for bytes |
+| `std.blob` | Lockless single-writer blob store with fenced atomic writes |
+| `std.env` | Environment variables: get, get_or, set, exists, remove, list_names |
+| `std.hash` | Data-integrity hashes: CRC-32C, SHA-256, FNV-1a 64, hex encoding (one-shot and incremental) |
+| `std.log` | Leveled logging: debug, info, warn, log_error, with set_level/get_level |
+| `std.path` | Path manipulation: join, basename, dirname, ext, split_ext, normalize, is_absolute |
+| `std.regex` | Simple pattern matching: literals, `.`, `^`/`$`, `*`/`+`/`?`, `\d`/`\w`/`\s`, backslash escapes |
+| `std.rpc` | HTTP RPC client for cross-stage method calls |
+| `std.uuid` | UUID generation: `generate()` |
+| `std.verify` | Named proof bundles over the verification atoms |
+| `std.wal` | Write-ahead log with recovery as a typestate (`Wal<Unrecovered → Ready>`) |
+| `std.wire` | Schema-level wire values and encoders used by `serve`/`remote` marshaling |"#
         .to_string()
 }
 
