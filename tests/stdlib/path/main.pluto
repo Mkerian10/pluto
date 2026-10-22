@@ -137,6 +137,20 @@ test "normalize handles parent directory" {
     expect(path.normalize("foo/../bar")).to_equal("bar")
 }
 
+test "normalize keeps leading parent references on relative paths" {
+    expect(path.normalize("../../a")).to_equal("../../a")
+    expect(path.normalize("a/../..")).to_equal("..")
+    expect(path.normalize("a/../../b")).to_equal("../b")
+    expect(path.normalize("../a/..")).to_equal("..")
+    expect(path.normalize("..")).to_equal("..")
+}
+
+test "normalize clamps parent references at the root" {
+    expect(path.normalize("/a/b/../../..")).to_equal("/")
+    expect(path.normalize("/../a")).to_equal("/a")
+    expect(path.normalize("/..")).to_equal("/")
+}
+
 test "normalize empty string" {
     expect(path.normalize("")).to_equal(".")
 }
