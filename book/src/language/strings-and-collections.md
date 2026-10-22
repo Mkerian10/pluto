@@ -41,13 +41,21 @@ for c in "abc" {
 | `.starts_with(pre)` | `(string) bool` | Prefix check |
 | `.ends_with(suf)` | `(string) bool` | Suffix check |
 | `.index_of(sub)` | `(string) int` | First occurrence, or -1 |
+| `.last_index_of(sub)` | `(string) int` | Last occurrence, or -1 |
+| `.count(sub)` | `(string) int` | Non-overlapping occurrences |
 | `.trim()` | `() string` | Strip leading/trailing whitespace |
+| `.trim_start()` | `() string` | Strip leading whitespace |
+| `.trim_end()` | `() string` | Strip trailing whitespace |
+| `.is_empty()` | `() bool` | Length == 0 |
+| `.is_whitespace()` | `() bool` | Empty or all whitespace |
+| `.repeat(n)` | `(int) string` | Concatenate `n` copies (`0` or less gives `""`) |
 | `.to_upper()` | `() string` | Uppercase copy |
 | `.to_lower()` | `() string` | Lowercase copy |
 | `.replace(old, new)` | `(string, string) string` | Replace all occurrences |
 | `.split(delim)` | `(string) [string]` | Split into array; `""` splits by char |
 | `.substring(offset, len)` | `(int, int) string` | Substring by offset and length |
 | `.char_at(idx)` | `(int) string` | Single character at index |
+| `.byte_at(idx)` | `(int) int` | Byte value at index (0-255) |
 | `.to_int()` | `() int?` | Parse as integer, `none` on failure |
 | `.to_float()` | `() float?` | Parse as float, `none` on failure |
 | `.to_bytes()` | `() bytes` | Convert to byte buffer |
