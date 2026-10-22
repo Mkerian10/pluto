@@ -120,7 +120,7 @@ pub fn parse_source(source: &str) -> Result<Program, CompileError> {
 }
 
 /// Parse source for editing — no transforms (no monomorphize, no closure lift, no spawn desugar).
-/// Does NOT inject prelude (avoids serializing Option<T> etc. into user source).
+/// Does NOT inject prelude (avoids serializing `Option<T>` etc. into user source).
 /// Resolves cross-references so xref IDs are available for user-defined declarations.
 pub fn parse_for_editing(source: &str) -> Result<parser::ast::Program, CompileError> {
     let tokens = lexer::lex(source)?;
@@ -541,7 +541,7 @@ pub fn compile_file_for_tests_with_gc(
 }
 
 /// Compile a file in test mode with optional coverage instrumentation.
-/// Returns Option<CoverageMap> when coverage is enabled.
+/// Returns `Option<CoverageMap>` when coverage is enabled.
 pub fn compile_file_for_tests_with_coverage(
     entry_file: &Path,
     output_path: &Path,
