@@ -1,6 +1,6 @@
 // Simple regex pattern matcher
-// Supports: literals, . (any char), ^ $ anchors
-// Limited quantifier support
+// Supports: literals, . (any char), ^ $ anchors, * + ? quantifiers on a
+// single token, and backslash escapes: \d \w \s classes, \x for a literal x.
 
 pub fn matches(pattern: string, text: string) bool {
     let mut i = 0
@@ -106,7 +106,13 @@ fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
     let mut t = t_idx
 
     while p < pattern.len() && t <= text.len() {
-        let pc = pattern.char_at(p)
+        // A pattern token is one character, or a backslash escape such as
+        // \d / \w / \s / \. (two characters). Quantifiers follow the token.
+        let mut pw = 1
+        if pattern.char_at(p) == "\\" && p + 1 < pattern.len() {
+            pw = 2
+        }
+        let pc = pattern.substring(p, pw)
 
         // Handle anchors
         if pc == "^" {
@@ -131,8 +137,8 @@ fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
         let mut has_star = false
         let mut has_plus = false
         let mut has_question = false
-        if p + 1 < pattern.len() {
-            let next = pattern.char_at(p + 1)
+        if p + pw < pattern.len() {
+            let next = pattern.char_at(p + pw)
             has_star = next == "*"
             has_plus = next == "+"
             has_question = next == "?"
@@ -140,16 +146,14 @@ fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
 
         if has_star {
             // * = zero or more
-            let mut matched = false
             while t < text.len() {
-                let mut tc = text.char_at(t)
+                let tc = text.char_at(t)
                 if !single_match(pc, tc) {
                     break
                 }
                 t = t + 1
-                matched = true
             }
-            p = p + 2
+            p = p + pw + 1
         } else if has_plus {
             // + = one or more
             if t >= text.len() {
@@ -167,7 +171,7 @@ fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
                 }
                 t = t + 1
             }
-            p = p + 2
+            p = p + pw + 1
         } else if has_question {
             // ? = zero or one
             if t < text.len() {
@@ -176,7 +180,7 @@ fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
                     t = t + 1
                 }
             }
-            p = p + 2
+            p = p + pw + 1
         } else {
             // Regular character
             if t >= text.len() {
@@ -187,7 +191,7 @@ fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
                 return -1
             }
             t = t + 1
-            p = p + 1
+            p = p + pw
         }
     }
 
@@ -201,6 +205,21 @@ fn pattern_at(pattern: string, p_idx: int, text: string, t_idx: int) int {
 fn single_match(p: string, t: string) bool {
     if p == "." {
         return true
+    }
+    if p.len() == 2 && p.char_at(0) == "\\" {
+        let e = p.char_at(1)
+        let b = t.byte_at(0)
+        if e == "d" {
+            return b >= 48 && b <= 57
+        }
+        if e == "w" {
+            return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57) || b == 95
+        }
+        if e == "s" {
+            return b == 32 || b == 9 || b == 10 || b == 13
+        }
+        // Any other escaped character matches itself: \. \* \\ \$ ...
+        return e == t
     }
     if p == t {
         return true

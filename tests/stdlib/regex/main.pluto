@@ -116,8 +116,21 @@ test "find_middle_of_string" {
 }
 
 test "split_with_dot" {
-    let parts = regex.split(".", "a.b.c")
+    // An unescaped "." matches every character; a literal dot is "\\."
+    let parts = regex.split("\\.", "a.b.c")
     expect(parts.len()).to_equal(3)
+    expect(regex.split(".", "a.b.c").len()).to_equal(5)
+}
+
+test "escaped_metacharacters_match_literally" {
+    expect(regex.matches("\\.", "x")).to_be_false()
+    expect(regex.matches("\\.", ".")).to_be_true()
+    expect(regex.matches("^\\*\\+\\?$", "*+?")).to_be_true()
+    expect(regex.matches("\\\\", "\\")).to_be_true()
+    expect(regex.find("\\d+", "ab12")).to_equal(2)
+    expect(regex.replace_all("\\s+", "_", "a b  c")).to_equal("a_b_c")
+    expect(regex.matches("^\\w+$", "abc_123")).to_be_true()
+    expect(regex.matches("^\\w+$", "abc-123")).to_be_false()
 }
 
 test "replace_multiple_same_pattern" {
