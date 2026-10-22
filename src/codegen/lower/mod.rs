@@ -5733,6 +5733,11 @@ pub fn lower_function(
         ctx.emit_marshal_cycle_guard(&value_param)?;
     }
 
+    // Function-entry coverage point: the map records one per function at the
+    // name's span (coverage.rs scan_function_with_name); without this hit every
+    // report showed 0 covered functions no matter what ran.
+    ctx.emit_coverage_hit(func.name.span.file_id, func.name.span.start, 0);
+
     let mut terminated = false;
     for stmt in &func.body.node.stmts {
         if terminated {
