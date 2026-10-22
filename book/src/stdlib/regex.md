@@ -1,6 +1,6 @@
 # std.regex
 
-Simple pattern matching. Supports literals, `.` (any character), `^`/`$` anchors, and `*`/`+`/`?` quantifiers.
+Simple pattern matching. Supports literals, `.` (any character), `^`/`$` anchors, `*`/`+`/`?` quantifiers on a single token, the classes `\d` (digit), `\w` (letter, digit or `_`) and `\s` (space, tab, newline), and `\x` for a literal metacharacter (`\.`, `\*`, `\\`). No alternation, groups or bracket classes.
 
 ```
 import std.regex
