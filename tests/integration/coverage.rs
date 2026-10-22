@@ -436,6 +436,9 @@ fn main() {
     assert!(stats[0].covered_lines > 0, "some lines should be covered");
     // At least 3 of the lines should be covered (add body + main body)
     assert!(stats[0].covered_lines >= 3, "expected at least 3 covered lines, got {}", stats[0].covered_lines);
+    // Both functions ran, so both function-entry points must have been hit.
+    assert_eq!(stats[0].total_functions, 2);
+    assert_eq!(stats[0].covered_functions, 2);
 }
 
 #[test]
@@ -476,9 +479,11 @@ fn main() {
     assert!(stats[0].covered_lines < stats[0].total_lines,
         "not all lines should be covered (unused function), covered={} total={}",
         stats[0].covered_lines, stats[0].total_lines);
-    assert!(stats[0].covered_functions < stats[0].total_functions,
-        "not all functions should be covered, covered={} total={}",
-        stats[0].covered_functions, stats[0].total_functions);
+    // Exactly main ran: one of the two function-entry points was hit.
+    // (A plain "covered < total" would also pass if entries were never
+    // counted at all, which is the bug this guards against.)
+    assert_eq!(stats[0].total_functions, 2);
+    assert_eq!(stats[0].covered_functions, 1);
 }
 
 #[test]
