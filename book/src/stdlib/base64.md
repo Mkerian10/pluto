@@ -59,7 +59,7 @@ fn main() {
     let original = "hello world"
     let encoded = base64.encode(original)
     let decoded = base64.decode(encoded)
-    print("Encoded: {encoded}")
-    print("Decoded: {decoded}")
+    print(f"Encoded: {encoded}")
+    print(f"Decoded: {decoded}")
 }
 ```

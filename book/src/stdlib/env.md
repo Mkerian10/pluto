@@ -68,6 +68,6 @@ import std.env
 fn main() {
     let host = env.get_or("DATABASE_HOST", "localhost")
     let port = env.get_or("DATABASE_PORT", "5432")
-    print("Connecting to {host}:{port}")
+    print(f"Connecting to {host}:{port}")
 }
 ```

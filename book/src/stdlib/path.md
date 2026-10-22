@@ -105,8 +105,8 @@ import std.path
 
 fn main() {
     let p = "/home/user/documents/report.pdf"
-    print("Dir: {path.dirname(p)}")
-    print("File: {path.basename(p)}")
-    print("Ext: {path.ext(p)}")
+    print(f"Dir: {path.dirname(p)}")
+    print(f"File: {path.basename(p)}")
+    print(f"Ext: {path.ext(p)}")
 }
 ```

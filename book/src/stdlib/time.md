@@ -49,11 +49,11 @@ import std.time
 
 fn main() {
     let wall = time.now()
-    print("Unix timestamp (ms): {wall}")
+    print(f"Unix timestamp (ms): {wall}")
 
     let start = time.monotonic()
     time.sleep(100)
     let ms = time.elapsed(start)
-    print("Slept for {ms}ms")
+    print(f"Slept for {ms}ms")
 }
 ```

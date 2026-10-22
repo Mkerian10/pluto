@@ -146,7 +146,7 @@ class User impl Greetable { name: string }
 
 class Admin impl Greetable {
     name: string
-    fn greet(self) string { return "hello, admin {self.name}" }
+    fn greet(self) string { return f"hello, admin {self.name}" }
 }
 ```
 
@@ -213,10 +213,10 @@ Use `match` to destructure enums. Data variant bindings go in the first `{ }`, t
 fn describe(s: Shape) {
     match s {
         Shape.Circle { radius } {
-            print("circle r={radius}")
+            print(f"circle r={radius}")
         }
         Shape.Rect { w, h } {
-            print("rect {w}x{h}")
+            print(f"rect {w}x{h}")
         }
     }
 }

@@ -4,14 +4,15 @@ Pluto's built-in collection types: strings, byte buffers, arrays, maps, and sets
 
 ## Strings
 
-String literals use double quotes. Concatenation with `+`. Interpolation with `{}`.
+String literals use double quotes. Concatenation with `+`. Interpolation with `{}` inside an `f`-prefixed string; a plain string never interpolates.
 
 ```pluto
 let s = "hello " + "world"
 let name = "alice"
-print("hello {name}")           // hello alice
-print("{1 + 2}")                // 3
-print("use {{braces}}")         // use {braces}  (escape with doubling)
+print(f"hello {name}")          // hello alice
+print(f"{1 + 2}")               // 3
+print(f"use {{braces}}")        // use {braces}  (escape with doubling)
+print(f"hello {name}")           // hello {name}  (no f prefix: literal braces)
 ```
 
 **Escape sequences:** `\n`, `\r`, `\t`, `\\`, `\"`
@@ -64,29 +65,30 @@ Method chaining works naturally: `"  Hello  ".trim().to_lower().contains("hello"
 
 ## Bytes
 
-The `byte` type is an unsigned 8-bit integer (0-255). No byte literal -- use `as byte` to cast from int.
+The `byte` type is an unsigned 8-bit integer (0-255). No byte literal -- convert from int with `.to_byte()`. It returns `byte?` in general (`none` outside 0..255), but a literal or a value proven in range narrows to a plain `byte`; `.low_byte()` keeps the low 8 bits of any int by name.
 
 ```pluto
-let b = 0xFF as byte
-print(b as int)                 // 255
+let b: byte = (0xFF).to_byte()
+print(b.to_int())               // 255
+print((300).low_byte().to_int()) // 44
 ```
 
-Byte ordering is **unsigned**: `0xFF as byte > 0x7F as byte` is `true`.
+Byte ordering is **unsigned**: `(0xFF).to_byte() > (0x7F).to_byte()` is `true`.
 
 ### Byte Buffers
 
 Create with `bytes_new()`. Type is `bytes`. Supports `.push()`, `.len()`, indexing (read/write), and iteration.
 
 ```pluto
-let buf = bytes_new()
-buf.push(72 as byte)
-buf.push(105 as byte)
+let mut buf = bytes_new()
+buf.push((72).to_byte())
+buf.push((105).to_byte())
 print(buf.len())                // 2
-print(buf[0] as int)            // 72
-buf[0] = 90 as byte             // index write
+print(buf[0].to_int())          // 72
+buf[0] = (90).to_byte()         // index write
 
 for b in buf {                  // iteration yields byte values
-    print(b as int)
+    print(b.to_int())
 }
 ```
 
@@ -166,7 +168,7 @@ m["a"] = 99                     // overwrite
 
 ```pluto
 for k in m.keys() {
-    print("{k}: {m[k]}")
+    print(f"{k}: {m[k]}")
 }
 ```
 
@@ -242,7 +244,7 @@ import std.collections
 fn main() {
     let pairs = collections.enumerate(["alice", "bob"])
     for p in pairs {
-        print("{p.first}: {p.second}")  // 0: alice, 1: bob
+        print(f"{p.first}: {p.second}")  // 0: alice, 1: bob
     }
 }
 ```

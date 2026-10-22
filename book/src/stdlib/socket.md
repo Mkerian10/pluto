@@ -101,7 +101,7 @@ fn main() {
     print("Listening on :8080")
     let client = socket.accept(fd)
     let data = socket.read(client, 4096)
-    print("Received: {data}")
+    print(f"Received: {data}")
     socket.close(client)
     socket.close(fd)
 }
