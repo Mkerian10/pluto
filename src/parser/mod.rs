@@ -23,19 +23,28 @@ pub struct Parser<'a> {
     /// Consumed before reading from `tokens`.
     split_tokens: Vec<Spanned<Token>>,
     split_pos: usize,
+    /// Current expression nesting depth; see [`MAX_EXPR_DEPTH`].
+    expr_depth: usize,
 }
+
+/// Deepest expression nesting the parser accepts. Each level recurses
+/// through the parser, type checker and code generator, and a debug build
+/// of the compiler overflows its 64 MB compilation stack somewhere between
+/// 1000 and 1500 levels of parentheses; past this limit the user gets a
+/// diagnostic instead of a crash. No real program comes near it.
+pub const MAX_EXPR_DEPTH: usize = 1000;
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Spanned<Token>], source: &'a str) -> Self {
         // Seed with prelude enum names so all parse paths (including interpolation
         // sub-parsers) know about Option, Result, etc.
         let enum_names = crate::prelude::prelude_enum_names().clone();
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: None, split_tokens: Vec::new(), split_pos: 0 }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: None, split_tokens: Vec::new(), split_pos: 0, expr_depth: 0 }
     }
 
     /// Constructor without prelude seeding — used only to parse the prelude source itself.
     pub fn new_without_prelude(tokens: &'a [Spanned<Token>], source: &'a str) -> Self {
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new(), file_path: None, split_tokens: Vec::new(), split_pos: 0 }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names: HashSet::new(), file_path: None, split_tokens: Vec::new(), split_pos: 0, expr_depth: 0 }
     }
 
     /// Constructor with extra enum names added to the prelude set.
@@ -47,13 +56,13 @@ impl<'a> Parser<'a> {
     ) -> Self {
         let mut enum_names = crate::prelude::prelude_enum_names().clone();
         enum_names.extend(extra_enum_names);
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: None, split_tokens: Vec::new(), split_pos: 0 }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: None, split_tokens: Vec::new(), split_pos: 0, expr_depth: 0 }
     }
 
     /// Constructor with file path for generating unique test IDs
     pub fn new_with_path(tokens: &'a [Spanned<Token>], source: &'a str, file_path: String) -> Self {
         let enum_names = crate::prelude::prelude_enum_names().clone();
-        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: Some(file_path), split_tokens: Vec::new(), split_pos: 0 }
+        Self { tokens, source, pos: 0, restrict_struct_lit: false, enum_names, file_path: Some(file_path), split_tokens: Vec::new(), split_pos: 0, expr_depth: 0 }
     }
 
     /// Generate a unique test ID prefix from file path to avoid collisions when multiple files are compiled together
@@ -3610,6 +3619,23 @@ impl<'a> Parser<'a> {
 
     // Pratt parser for expressions
     fn parse_expr(&mut self, min_bp: u8) -> Result<Spanned<Expr>, CompileError> {
+        if self.expr_depth >= MAX_EXPR_DEPTH {
+            let span = match self.tokens.get(self.pos) {
+                Some(tok) => tok.span,
+                None => self.eof_span(),
+            };
+            return Err(CompileError::syntax(
+                format!("expression nesting exceeds {MAX_EXPR_DEPTH} levels"),
+                span,
+            ));
+        }
+        self.expr_depth += 1;
+        let result = self.parse_expr_depth_counted(min_bp);
+        self.expr_depth -= 1;
+        result
+    }
+
+    fn parse_expr_depth_counted(&mut self, min_bp: u8) -> Result<Spanned<Expr>, CompileError> {
         let mut lhs = self.parse_prefix()?;
 
         while let Some(tok) = self.peek().cloned() {

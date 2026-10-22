@@ -130,44 +130,49 @@ pub fn parse_for_editing(source: &str) -> Result<parser::ast::Program, CompileEr
     Ok(program)
 }
 
+/// Stack size for every compilation thread. The parser, type checker and
+/// code generator all recurse on expression depth, and a debug build's
+/// frames are large: ~150 nested parentheses overflowed the 8 MB main
+/// thread, and the 16 MB the string-based entry points used was not far
+/// behind. 64 MB is reserved virtual memory, not committed, so it costs
+/// nothing until it is actually used.
+const COMPILE_STACK_BYTES: usize = 64 * 1024 * 1024;
+
+/// Run `f` on a thread with [`COMPILE_STACK_BYTES`] of stack and return its
+/// result. Scoped, so `f` may borrow from the caller.
+fn on_compile_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(COMPILE_STACK_BYTES)
+            .spawn_scoped(scope, f)
+            .expect("failed to spawn compilation thread")
+            .join()
+            .expect("compilation thread panicked")
+    })
+}
+
 /// Compile a source string to object bytes (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// No file I/O or linking. Useful for compile-fail tests that only need to check errors.
 pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
-    // Run compilation on a thread with a larger stack (16MB) to handle deeply nested expressions
-    // like classes with 100+ fields where the sum expression creates a deeply nested BinOp tree.
-    // Default stack size (typically 2-8MB) can overflow with ~100 levels of recursion.
-    let source = source.to_string();
-    std::thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
+    on_compile_stack(|| {
             let mut program = parse_source(&source)?;
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
             codegen::codegen(&program, &result.env, &source, None)
-        })
-        .expect("failed to spawn compilation thread")
-        .join()
-        .expect("compilation thread panicked")
+    })
 }
 
 /// Compile a source string and return both the object bytes and any compiler warnings.
 pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<CompileWarning>), CompileError> {
-    // Run compilation on a thread with a larger stack (16MB) to handle deeply nested expressions
-    let source = source.to_string();
-    std::thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
+    on_compile_stack(|| {
             let mut program = parse_source(&source)?;
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
             let obj = codegen::codegen(&program, &result.env, &source, None)?;
             Ok((obj, result.warnings))
-        })
-        .expect("failed to spawn compilation thread")
-        .join()
-        .expect("compilation thread panicked")
+    })
 }
 
 /// Compile a source string directly (single-file, no module resolution).
@@ -189,20 +194,13 @@ pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
 /// Compile a source string in test mode (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// Tests are preserved and a test runner main is generated.
 pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError> {
-    // Run compilation on a thread with a larger stack (16MB) to handle deeply nested expressions
-    let source = source.to_string();
-    std::thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
+    on_compile_stack(|| {
             let mut program = parse_source(&source)?;
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, true)?;
             codegen::codegen(&program, &result.env, &source, None)
-        })
-        .expect("failed to spawn compilation thread")
-        .join()
-        .expect("compilation thread panicked")
+    })
 }
 
 /// Compile a source string in test mode directly (single-file, no module resolution).
@@ -250,6 +248,10 @@ pub fn compile_file_with_coverage(entry_file: &Path, output_path: &Path, stdlib_
 type FnErrorSets = std::collections::HashMap<String, std::collections::HashSet<String>>;
 
 fn compile_file_impl(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, skip_siblings: bool, gc: GcBackend, coverage: bool) -> Result<(Option<coverage::CoverageMap>, FnErrorSets), CompileError> {
+    on_compile_stack(|| compile_file_impl_inner(entry_file, output_path, stdlib_root, skip_siblings, gc, coverage))
+}
+
+fn compile_file_impl_inner(entry_file: &Path, output_path: &Path, stdlib_root: Option<&Path>, skip_siblings: bool, gc: GcBackend, coverage: bool) -> Result<(Option<coverage::CoverageMap>, FnErrorSets), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
 
@@ -311,6 +313,10 @@ use parser::ast::Program;
 /// Returns the canonical (pre-transformation) AST + type-checked derived data.
 /// Use this for emit-ast and analyze commands.
 pub fn parse_file_for_editing(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo), CompileError> {
+    on_compile_stack(|| parse_file_for_editing_inner(entry_file, stdlib_root))
+}
+
+fn parse_file_for_editing_inner(entry_file: &Path, stdlib_root: Option<&Path>) -> Result<(Program, String, derived::DerivedInfo), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
 
@@ -358,6 +364,10 @@ pub fn analyze_file_with_warnings(entry_file: &Path, stdlib_root: Option<&Path>)
 }
 
 pub fn analyze_file_with_warnings_impl(entry_file: &Path, stdlib_root: Option<&Path>, standalone: bool) -> Result<(Program, String, derived::DerivedInfo, Vec<CompileWarning>), CompileError> {
+    on_compile_stack(|| analyze_file_with_warnings_inner(entry_file, stdlib_root, standalone))
+}
+
+fn analyze_file_with_warnings_inner(entry_file: &Path, stdlib_root: Option<&Path>, standalone: bool) -> Result<(Program, String, derived::DerivedInfo, Vec<CompileWarning>), CompileError> {
     let entry_file = entry_file.canonicalize().map_err(|e|
         CompileError::codegen(format!("could not resolve path '{}': {e}", entry_file.display())))?;
 
@@ -553,6 +563,17 @@ pub fn compile_file_for_tests_with_coverage(
 }
 
 fn compile_file_for_tests_impl(
+    entry_file: &Path,
+    output_path: &Path,
+    stdlib_root: Option<&Path>,
+    use_cache: bool,
+    gc: GcBackend,
+    coverage: bool,
+) -> Result<Option<coverage::CoverageMap>, CompileError> {
+    on_compile_stack(|| compile_file_for_tests_inner(entry_file, output_path, stdlib_root, use_cache, gc, coverage))
+}
+
+fn compile_file_for_tests_inner(
     entry_file: &Path,
     output_path: &Path,
     stdlib_root: Option<&Path>,
@@ -1179,6 +1200,10 @@ fn link(obj_path: &Path, output_path: &Path) -> Result<(), CompileError> {
 /// Quick-parse a file to check if it contains a system declaration.
 /// Returns the parsed program if it does, None if it doesn't.
 pub fn detect_system_file(entry_file: &Path) -> Result<Option<parser::ast::Program>, CompileError> {
+    on_compile_stack(|| detect_system_file_inner(entry_file))
+}
+
+fn detect_system_file_inner(entry_file: &Path) -> Result<Option<parser::ast::Program>, CompileError> {
     let data = std::fs::read(entry_file)
         .map_err(|e| CompileError::codegen(format!("failed to read file: {e}")))?;
 

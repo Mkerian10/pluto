@@ -23,6 +23,43 @@ fn deep_nesting_parens_30_levels() {
     assert_eq!(stdout.trim(), "42");
 }
 
+// Beyond what any hand-written program needs, but generated code can nest
+// deeply and the compiler used to overflow its stack around 150 levels in a
+// debug build. Every compilation entry point now runs on a 64 MB thread.
+#[test]
+fn deep_nesting_parens_400_levels() {
+    let expr = format!("{}42{}", "(".repeat(400), ")".repeat(400));
+    let src = format!("fn main() {{\n    print({expr})\n}}\n");
+    assert_eq!(compile_and_run_stdout(&src).trim(), "42");
+}
+
+#[test]
+fn deep_nesting_arrays_300_levels() {
+    let expr = format!("{}1{}", "[".repeat(300), "]".repeat(300));
+    let src = format!("fn main() {{\n    let x = {expr}\n    print(x.len())\n}}\n");
+    assert_eq!(compile_and_run_stdout(&src).trim(), "1");
+}
+
+#[test]
+fn deep_nesting_parens_400_levels_through_cli() {
+    // `pluto run` parses once on its own (system-file detection) before
+    // compiling, so the CLI path is exercised separately from the library.
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("main.pt");
+    let expr = format!("{}42{}", "(".repeat(400), ")".repeat(400));
+    std::fs::write(&src, format!("fn main() {{\n    print({expr})\n}}\n")).unwrap();
+    let output = pluto().arg("run").arg(&src).output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+}
+
+#[test]
+fn expression_nesting_past_the_limit_is_a_diagnostic_not_a_crash() {
+    let expr = format!("{}42{}", "(".repeat(1200), ")".repeat(1200));
+    let src = format!("fn main() {{\n    print({expr})\n}}\n");
+    compile_should_fail_with(&src, "expression nesting exceeds 1000 levels");
+}
+
 #[test]
 fn deep_nesting_arrays_10_levels() {
     // 10 levels of nested arrays
