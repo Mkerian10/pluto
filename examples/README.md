@@ -101,7 +101,7 @@ cargo run -- run examples/timeouts/main.pt --stdlib stdlib
 Demonstrates `spawn` for concurrent execution: spawning functions on separate threads, collecting results with `.get()`, error handling with `catch`, and void tasks.
 
 ```bash
-cargo run -- run examples/concurrency/main.pt
+cargo run -- run examples/concurrency/main.pt --stdlib stdlib
 ```
 
 ## green

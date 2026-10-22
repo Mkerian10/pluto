@@ -46,12 +46,11 @@ pub enum DanglingRefKind {
 /// and produce a new `Module`.
 pub struct ModuleEditor {
     program: Program,
-    source: String,
 }
 
 impl ModuleEditor {
-    pub(crate) fn new(program: Program, source: String) -> Self {
-        Self { program, source }
+    pub(crate) fn new(program: Program) -> Self {
+        Self { program }
     }
 
     /// Parse source text as a single top-level declaration and append it to the Program.

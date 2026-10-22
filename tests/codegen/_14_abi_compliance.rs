@@ -1,7 +1,7 @@
 // Category 14: ABI Compliance Tests (20+ tests)
 // Validates interoperability with C runtime and calling conventions
 
-use super::common::{compile_and_run, compile_and_run_stdout};
+use super::common::compile_and_run_stdout;
 
 // ============================================================================
 // C Calling Convention (10 tests)

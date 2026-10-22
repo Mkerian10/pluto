@@ -1,7 +1,7 @@
 // Category 15: Platform-Specific Tests (10+ tests)
 // Validates platform-specific code generation for AArch64 and x86_64
 
-use super::common::{compile_and_run, compile_and_run_stdout, compile_and_run_output};
+use super::common::compile_and_run_stdout;
 
 // ============================================================================
 // AArch64 Tests (5 tests)

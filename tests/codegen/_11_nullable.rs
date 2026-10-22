@@ -1,7 +1,7 @@
 // Category 11: Nullable Types Tests (15+ tests)
 // Validates codegen for nullable types: boxing, none literal, unwrapping
 
-use super::common::{compile_and_run, compile_and_run_stdout, compile_should_fail};
+use super::common::compile_and_run_stdout;
 
 // ============================================================================
 // Boxing (5 tests)
@@ -139,7 +139,7 @@ fn test_none_literal_equals_zero_representation() {
 fn test_check_if_value_is_none_via_propagation() {
     // Using ? operator to check if value is none
     // If none, function returns early
-    let src = r#"
+    let _src = r#"
         fn process(x: int?) int? {
             let val = x?
             return val * 2

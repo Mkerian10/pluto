@@ -45,14 +45,6 @@ struct ModuleMetadata {
 }
 
 impl ModuleMetadata {
-    fn new(module: Module, mtime: SystemTime) -> Self {
-        Self {
-            module,
-            loaded_at: mtime,
-            stdlib: None,
-        }
-    }
-
     fn with_stdlib(module: Module, mtime: SystemTime, stdlib: Option<PathBuf>) -> Self {
         Self {
             module,

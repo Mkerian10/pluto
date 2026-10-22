@@ -1,7 +1,7 @@
 // Category 8: GC Integration Tests (30 tests)
 // Validates memory allocation and garbage collection codegen correctness
 
-use super::common::{compile_and_run, compile_and_run_stdout};
+use super::common::compile_and_run_stdout;
 
 // ============================================================================
 // Allocations (15 tests)
