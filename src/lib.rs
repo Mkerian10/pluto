@@ -130,6 +130,22 @@ pub fn parse_for_editing(source: &str) -> Result<parser::ast::Program, CompileEr
     Ok(program)
 }
 
+/// A non-test program must have something to run: a top-level `fn main`,
+/// an `app` (its `main` is synthesized), or a `stage` (same). Without one
+/// the object links against nothing and the user used to get the linker's
+/// "Undefined symbols: _main" dump instead of a diagnostic.
+fn ensure_entry_point(program: &Program) -> Result<(), CompileError> {
+    let has_main = program.functions.iter().any(|f| f.node.name.node == "main");
+    if has_main || program.app.is_some() || !program.stages.is_empty() {
+        return Ok(());
+    }
+    Err(CompileError::codegen(
+        "no entry point: define a top-level `fn main()` or an `app` with `fn main(self)` \
+         (a library module can be imported, but not compiled or run on its own)"
+            .to_string(),
+    ))
+}
+
 /// Stack size for every compilation thread. The parser, type checker and
 /// code generator all recurse on expression depth, and a debug build's
 /// frames are large: ~150 nested parentheses overflowed the 8 MB main
@@ -154,11 +170,22 @@ fn on_compile_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
 /// Compile a source string to object bytes (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// No file I/O or linking. Useful for compile-fail tests that only need to check errors.
 pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
+    compile_to_object_inner(source, false)
+}
+
+/// `require_entry` makes a program without `fn main`/`app`/`stage` a compile
+/// error. Object-only compilation stays permissive (an object file with no
+/// main is a legitimate artifact, and compile-fail tests rely on it);
+/// producing a binary is where an entry point must exist.
+fn compile_to_object_inner(source: &str, require_entry: bool) -> Result<Vec<u8>, CompileError> {
     on_compile_stack(|| {
             let mut program = parse_source(&source)?;
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
+            if require_entry {
+                ensure_entry_point(&program)?;
+            }
             codegen::codegen(&program, &result.env, &source, None)
     })
 }
@@ -178,7 +205,7 @@ pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<Com
 /// Compile a source string directly (single-file, no module resolution).
 /// Used by tests and backward-compatible API.
 pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
-    let object_bytes = compile_to_object(source)?;
+    let object_bytes = compile_to_object_inner(source, true)?;
 
     let obj_path = output_path.with_extension("o");
     std::fs::write(&obj_path, &object_bytes)
@@ -290,6 +317,7 @@ fn compile_file_impl_inner(entry_file: &Path, output_path: &Path, stdlib_root: O
     } else {
         None
     };
+    ensure_entry_point(&program)?;
     let object_bytes = codegen::codegen(&program, &result.env, &source, cov_map.as_ref())?;
 
     let obj_path = output_path.with_extension("o");
