@@ -1,0 +1,66 @@
+// Spawn-per-request server shape (the D2 best case): the main thread holds a
+// large resident cache while batches of short-lived tasks each build and
+// discard a request's worth of private garbage and return a small result.
+// A stop-the-world collector re-marks the resident cache on every
+// collection a worker triggers; thread-local heaps never touch it.
+class Header {
+    name: string
+    value: string
+}
+
+class Entry {
+    key: int
+    body: string
+}
+
+fn handle(req: int) string {
+    let mut headers: [Header] = []
+    let mut i = 0
+    while i < 40 {
+        headers.push(Header { name: f"x-h{i}", value: f"v{req * 31 + i}" })
+        i = i + 1
+    }
+    let mut fields: Map<string, int> = Map<string, int> {}
+    let mut j = 0
+    while j < 200 {
+        fields[f"f{j}"] = req + j
+        j = j + 1
+    }
+    let mut acc = 0
+    for h in headers {
+        acc = acc + h.value.len()
+    }
+    acc = acc + fields[f"f{req % 200}"]
+    return f"r{req}:{acc}"
+}
+
+fn main() {
+    let mut cache: Map<int, Entry> = Map<int, Entry> {}
+    let mut k = 0
+    while k < 60000 {
+        cache[k] = Entry { key: k, body: f"resident-{k}" }
+        k = k + 1
+    }
+    let mut total = 0
+    let mut batch = 0
+    while batch < 150 {
+        let base = batch * 8
+        let t0 = spawn handle(base)
+        let t1 = spawn handle(base + 1)
+        let t2 = spawn handle(base + 2)
+        let t3 = spawn handle(base + 3)
+        let t4 = spawn handle(base + 4)
+        let t5 = spawn handle(base + 5)
+        let t6 = spawn handle(base + 6)
+        let t7 = spawn handle(base + 7)
+        total = total + t0.get().len() + t1.get().len() + t2.get().len() + t3.get().len()
+        total = total + t4.get().len() + t5.get().len() + t6.get().len() + t7.get().len()
+        cache[batch % 60000] = Entry { key: batch, body: f"updated-{batch}" }
+        batch = batch + 1
+    }
+    let mut sum = 0
+    for key in cache.keys() {
+        sum = sum + cache[key].body.len()
+    }
+    print(f"check={total + sum}")
+}

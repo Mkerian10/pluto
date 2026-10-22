@@ -1,0 +1,48 @@
+// Structural == on classes and enums against a large live heap
+// (each comparison resolves operands to their GC objects).
+class Node {
+    a: int
+    next: Node?
+}
+
+class Point {
+    x: int
+    y: int
+    label: string
+}
+
+enum Kind {
+    Ident
+    Number
+    End
+}
+
+fn main() {
+    let mut keep: Node? = none
+    let mut i = 0
+    while i < 150000 {
+        keep = Node { a: i, next: keep }
+        i = i + 1
+    }
+    let p = Point { x: 1, y: 2, label: "p" }
+    let mut hits = 0
+    let mut n = 0
+    while n < 300000 {
+        let q = Point { x: 1, y: n % 3, label: "p" }
+        if p == q {
+            hits = hits + 1
+        }
+        let k = Kind.End
+        if k == Kind.End {
+            hits = hits + 1
+        }
+        n = n + 1
+    }
+    let mut cnt = 0
+    let mut cur = keep
+    while cur != none {
+        cnt = cnt + 1
+        cur = cur.next
+    }
+    print(f"check={hits + cnt}")
+}

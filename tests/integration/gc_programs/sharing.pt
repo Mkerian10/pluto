@@ -1,0 +1,72 @@
+// Exercises every way a value reaches another thread: entity fields and
+// containers mutated from several tasks, task results, channel sends.
+class Item {
+    id: int
+    tag: string
+}
+
+object Registry {
+    items: [Item]
+    last: Item?
+
+    fn add(mut self, it: Item) {
+        self.items.push(it)
+        self.last = it
+    }
+
+    fn push_only(mut self, it: Item) {
+        self.items.push(it)
+    }
+
+    fn set_last(mut self, it: Item) {
+        self.last = it
+    }
+
+    fn count(self) int {
+        return self.items.len()
+    }
+}
+
+fn producer(mut reg: Registry, base: int) Item {
+    let mut i = 0
+    while i < 3000 {
+        if i % 3 == 2 {
+            reg.set_last(Item { id: base + i, tag: f"s{base + i}" })
+        } else if i % 2 == 0 {
+            reg.add(Item { id: base + i, tag: f"t{base + i}" })
+        } else {
+            reg.push_only(Item { id: base + i, tag: f"p{base + i}" })
+        }
+        let junk = f"junk{i}"
+        i = i + 1
+    }
+    return Item { id: base, tag: f"done{base}" }
+}
+
+fn sender(tx: Sender<Item>, base: int) int {
+    let mut i = 0
+    while i < 2000 {
+        tx.send(Item { id: base + i, tag: f"m{i}" })!
+        i = i + 1
+    }
+    return 0
+}
+
+fn main() {
+    let reg = Registry { items: [], last: none }
+    let t1 = spawn producer(reg, 0)
+    let t2 = spawn producer(reg, 100000)
+    let r1 = t1.get()
+    let r2 = t2.get()
+    let (tx, rx) = chan<Item>(16)
+    let s = spawn sender(tx, 7)
+    let mut got = 0
+    let mut sum = 0
+    while got < 2000 {
+        let it = rx.recv() catch err { Item { id: 0, tag: "" } }
+        sum = sum + it.tag.len()
+        got = got + 1
+    }
+    let z = s.get() catch err { -1 }
+    print(f"count={reg.count()} r={r1.tag},{r2.tag} recv={got} sum={sum} z={z}")
+}

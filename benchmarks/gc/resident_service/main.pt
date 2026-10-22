@@ -1,0 +1,48 @@
+// A service with a large resident session table (~50 MB) serving a long
+// stream of requests: each request churns short-lived strings and updates
+// a session, sometimes replacing its payload (old payloads become garbage,
+// and the store is a barriered overwrite). The table never dies, so every
+// full collection re-marks all of it; this measures pause distribution on a
+// big live heap, the case incremental marking targets.
+class Payload {
+    data: string
+    n: int
+}
+
+class Session {
+    id: int
+    user: string
+    hits: int
+    last: Payload?
+}
+
+fn main() {
+    let mut table: [Session] = []
+    let mut i = 0
+    while i < 400000 {
+        table.push(Session { id: i, user: f"user-{i}", hits: 0, last: none })
+        i = i + 1
+    }
+    let mut acc = 0
+    let mut r = 0
+    while r < 1500000 {
+        let mut s = table[(r * 7919) % 400000]
+        s.hits = s.hits + 1
+        if r % 4 == 0 {
+            s.last = Payload { data: f"payload-{r}", n: r }
+        }
+        let req = f"GET /session/{s.id}?user={s.user}&r={r}"
+        acc = acc + req.len() % 13
+        r = r + 1
+    }
+    let mut hits = 0
+    let mut live = 0
+    for s in table {
+        hits = hits + s.hits
+        let p = s.last
+        if p != none {
+            live = live + p?.n % 7
+        }
+    }
+    print(f"check={acc + hits + live}")
+}

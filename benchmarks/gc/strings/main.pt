@@ -1,0 +1,24 @@
+// String-heavy: interpolation and concatenation churn, with a retained
+// window of recent strings.
+fn main() {
+    let mut keep: [string] = []
+    let mut i = 0
+    while i < 20000 {
+        keep.push(f"seed-{i}")
+        i = i + 1
+    }
+    let mut total = 0
+    let mut r = 0
+    while r < 400000 {
+        let s = f"item-{r}-" + "suffix-" + f"{r * 3}"
+        total = total + s.len()
+        keep[r % 20000] = s
+        r = r + 1
+    }
+    let mut n = 0
+    while n < keep.len() {
+        total = total + keep[n].len()
+        n = n + 1
+    }
+    print(f"check={total}")
+}

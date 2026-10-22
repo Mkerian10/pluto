@@ -1,0 +1,40 @@
+// Multi-threaded allocation: 8 tasks allocate concurrently, each keeping
+// a private retained list while churning garbage. Stresses allocator
+// contention and stop-the-world coordination across threads.
+class Node {
+    v: int
+    next: Node?
+}
+
+fn work(seed: int) int {
+    let mut keep: Node? = none
+    let mut acc = 0
+    let mut i = 0
+    while i < 400000 {
+        let g = Node { v: i, next: none }
+        acc = acc + g.v % 7
+        if i % 8 == 0 {
+            keep = Node { v: i + seed, next: keep }
+        }
+        i = i + 1
+    }
+    let mut cur = keep
+    while cur != none {
+        acc = acc + cur.v % 3
+        cur = cur.next
+    }
+    return acc
+}
+
+fn main() {
+    let t0 = spawn work(0)
+    let t1 = spawn work(1)
+    let t2 = spawn work(2)
+    let t3 = spawn work(3)
+    let t4 = spawn work(4)
+    let t5 = spawn work(5)
+    let t6 = spawn work(6)
+    let t7 = spawn work(7)
+    let total = t0.get() + t1.get() + t2.get() + t3.get() + t4.get() + t5.get() + t6.get() + t7.get()
+    print(f"check={total}")
+}
