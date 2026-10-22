@@ -91,9 +91,11 @@ fn decode_with_alphabet(s: string, alpha: string) string {
 
     while i < input_len {
         let c1_char = __pluto_string_byte_at(s, i)
-        let mut c2_char = 0
-        let mut c3_char = 0
-        let mut c4_char = 0
+        // Absent trailing characters count as padding, so unpadded input
+        // ("YQ" for "a", the usual URL-safe form) decodes like "YQ==".
+        let mut c2_char = 61
+        let mut c3_char = 61
+        let mut c4_char = 61
 
         if i + 1 < input_len {
             c2_char = __pluto_string_byte_at(s, i + 1)
@@ -208,9 +210,11 @@ pub fn decode_bytes(s: string) bytes {
 
     while i < input_len {
         let c1_char = __pluto_string_byte_at(s, i)
-        let mut c2_char = 0
-        let mut c3_char = 0
-        let mut c4_char = 0
+        // Absent trailing characters count as padding, so unpadded input
+        // ("YQ" for "a", the usual URL-safe form) decodes like "YQ==".
+        let mut c2_char = 61
+        let mut c3_char = 61
+        let mut c4_char = 61
 
         if i + 1 < input_len {
             c2_char = __pluto_string_byte_at(s, i + 1)
