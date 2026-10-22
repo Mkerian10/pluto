@@ -1,6 +1,8 @@
 # Pluto MCP Server
 
-The Pluto MCP (Model Context Protocol) server enables AI agents like Claude Code to work with Pluto projects natively. Instead of reading and writing raw text, the agent uses structured tools to explore, modify, compile, and test Pluto code.
+The Pluto MCP (Model Context Protocol) server enables AI agents like Claude Code to work with Pluto projects natively. Instead of reading raw text, the agent uses structured tools to explore, type-check, compile, and test Pluto code.
+
+The server is **read-only**: no tool writes a source file. Edit `.pt`/`.pluto` files with your editor or programmatically through the `pluto-sdk` crate (`Module` / `ModuleEditor`), then call `reload_module` so the server picks the change up.
 
 ## Setup
 
@@ -44,9 +46,10 @@ A typical workflow looks like this:
 1. load_project    → Load all .pluto files in the project
 2. list_modules    → See what modules are loaded
 3. find_declaration / get_declaration → Explore the code
-4. add_declaration / replace_declaration → Make changes
-5. check           → Validate with the type checker
-6. run / test      → Execute and verify
+4. (edit the file in your editor or via pluto-sdk)
+5. reload_module   → Pick up the edit
+6. check           → Validate with the type checker
+7. run / test      → Execute and verify
 ```
 
 ---
@@ -398,132 +401,6 @@ Cycle detection is built in — recursive or mutually-recursive calls are flagge
 
 ---
 
-### Write Tools
-
-Write tools modify source files directly on disk. All paths are validated against the project root (set by `load_project`) to prevent directory traversal. The in-memory module cache is updated to reflect changes.
-
-#### `add_declaration`
-
-Add one or more top-level declarations to a file. Creates the file if it doesn't exist.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | yes | Path to the `.pluto` source file |
-| `source` | string | yes | Pluto source code for the declaration(s) |
-
-**Returns:** Array of `AddDeclResult`
-```json
-[
-  { "uuid": "newly-generated-uuid", "name": "my_function", "kind": "function" }
-]
-```
-
-**Example source:**
-```
-fn greet(name: string) string {
-    return "hello {name}"
-}
-```
-
-#### `replace_declaration`
-
-Replace an existing declaration by name. The replacement must be the same kind (e.g., a function can only be replaced with a function). The UUID is preserved.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | yes | Path of the `.pluto` source file |
-| `name` | string | yes | Name of the declaration to replace |
-| `source` | string | yes | Pluto source code for the replacement |
-
-**Returns:** `ReplaceDeclResult`
-```json
-{ "uuid": "preserved-uuid", "name": "greet", "kind": "function" }
-```
-
-#### `delete_declaration`
-
-Delete a declaration by name. Reports any dangling references that result from the deletion.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | yes | Path of the `.pluto` source file |
-| `name` | string | yes | Name of the declaration to delete |
-
-**Returns:** `DeleteDeclResult`
-```json
-{
-  "deleted_source": "fn old_func() { ... }",
-  "dangling_refs": [
-    { "kind": "call", "name": "old_func", "span": { "start": 200, "end": 212 } }
-  ]
-}
-```
-
-Always check `dangling_refs` — if non-empty, other declarations in the file reference the deleted one and need to be updated.
-
-#### `rename_declaration`
-
-Rename a declaration. Updates all intra-file references automatically.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | yes | Path of the `.pluto` source file |
-| `old_name` | string | yes | Current name |
-| `new_name` | string | yes | New name |
-
-**Returns:** `RenameDeclResult`
-```json
-{ "old_name": "calculate", "new_name": "compute", "uuid": "preserved-uuid" }
-```
-
-Note: Cross-module references (in other files) are **not** automatically updated. Use `callers_of` to find external callers and update them manually.
-
-#### `add_method`
-
-Add a method to an existing class.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | yes | Path of the `.pluto` source file |
-| `class_name` | string | yes | Name of the class |
-| `source` | string | yes | Method source (must include `self` or `mut self` parameter) |
-
-**Returns:** `AddMethodResult`
-```json
-{ "uuid": "new-method-uuid", "name": "area" }
-```
-
-**Example source:**
-```
-fn area(self) float {
-    return self.width * self.height
-}
-```
-
-#### `add_field`
-
-Add a field to an existing class.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | yes | Path of the `.pluto` source file |
-| `class_name` | string | yes | Name of the class |
-| `field_name` | string | yes | Name of the new field |
-| `field_type` | string | yes | Type string (e.g., `"int"`, `"string"`, `"[float]"`) |
-
-**Returns:** `AddFieldResult`
-```json
-{ "uuid": "new-field-uuid" }
-```
-
----
-
 ### Compile & Execute
 
 #### `check`
@@ -622,7 +499,7 @@ Test output appears in `stdout`. A non-zero `exit_code` indicates test failures.
 
 ---
 
-### Format & Sync
+### Format
 
 #### `pretty_print`
 
@@ -645,29 +522,7 @@ fn add(a: int, b: int) int {
 }
 ```
 
-These hints enable stable UUID matching when syncing human edits back via `sync_pt`.
-
-#### `sync_pt`
-
-Sync human edits from a `.pt` text file back to a `.pluto` binary file, preserving UUIDs where declarations match by name.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `pt_path` | string | yes | Path to the `.pt` text file |
-| `pluto_path` | string | no | Path to the `.pluto` binary (defaults to same name with `.pluto` extension) |
-
-**Returns:** `SyncResultInfo`
-```json
-{
-  "added": ["new_function"],
-  "removed": ["old_function"],
-  "modified": ["updated_function"],
-  "unchanged": 3
-}
-```
-
----
+These hints are how a UUID survives a trip through text: `pluto sync <file.pt>` matches declarations by them when folding human `.pt` edits back into the `.pluto` binary.
 
 ### Module Management
 
@@ -700,6 +555,23 @@ Show the status of all loaded modules, including whether they've been modified o
 ```
 
 A module is `is_stale: true` when its file on disk has been modified more recently than when it was loaded.
+
+#### `server_info`
+
+Build and staleness information about the running server: binary path, package version, the binary's mtime when the process started, its mtime on disk now, and whether the two differ (`stale`). Under the default hot-reload supervisor a stale server is replaced automatically once it is idle.
+
+**Parameters:** none
+
+**Returns:**
+```json
+{
+  "binary": "/path/to/pluto-mcp",
+  "version": "0.1.0",
+  "binary_mtime_at_startup_unix": "1707933600",
+  "binary_mtime_on_disk_unix": "1707933600",
+  "stale": false
+}
+```
 
 ---
 
@@ -779,11 +651,3 @@ Lightweight declaration reference.
 ```
 
 Kind values: `"function"`, `"class"`, `"enum"`, `"trait"`, `"error"`, `"app"`
-
-### DanglingRefInfo
-
-Reference left dangling after a deletion.
-
-```json
-{ "kind": "call", "name": "deleted_func", "span": { "start": 200, "end": 212 } }
-```
