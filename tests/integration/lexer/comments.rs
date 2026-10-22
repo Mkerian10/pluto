@@ -109,7 +109,7 @@ fn comment_nested_block_not_supported() {
 fn comment_unterminated_block_not_supported() {
     // /* comment without closing
     let src = "let x = /* comment";
-    let result = lex(src);
+    let _result = lex(src);
     // Should fail if block comments were supported
     // Currently will lex as separate tokens
 }

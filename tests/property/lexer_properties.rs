@@ -377,7 +377,7 @@ fn prop_arith_expressions_lex() {
 
         // Should produce at least one token
         let tokens = result.unwrap();
-        prop_assert!(tokens.len() > 0, "Expression should produce at least one token");
+        prop_assert!(!tokens.is_empty(), "Expression should produce at least one token");
 
         // All tokens should be valid (no error tokens)
         // The lexer doesn't have an explicit Error token type, so if lex() succeeded,

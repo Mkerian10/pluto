@@ -11,7 +11,7 @@ fn compile_and_run(source: &str) -> Result<String, String> {
     std::fs::write(&source_file, source).unwrap();
 
     let compile_result = Command::new("cargo")
-        .args(&["run", "--", "compile"])
+        .args(["run", "--", "compile"])
         .arg(&source_file)
         .arg("-o")
         .arg(&output_file)
@@ -42,7 +42,7 @@ fn compile_and_run_exit_code(source: &str) -> Result<i32, String> {
     std::fs::write(&source_file, source).unwrap();
 
     let compile_result = Command::new("cargo")
-        .args(&["run", "--", "compile"])
+        .args(["run", "--", "compile"])
         .arg(&source_file)
         .arg("-o")
         .arg(&output_file)

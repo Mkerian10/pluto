@@ -82,7 +82,7 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
             let type_arg_str = parts[1];
 
             // Find the generic template class
-            if let Some(generic_class) = program.classes.iter().find(|c| &c.node.name.node == base_name && !c.node.type_params.is_empty()) {
+            if let Some(generic_class) = program.classes.iter().find(|c| c.node.name.node == base_name && !c.node.type_params.is_empty()) {
                 // Create instantiated class declaration
                 let generated = instantiate_generic_class(&generic_class.node, type_name, type_arg_str)
                     .and_then(|instantiated_class| {
@@ -112,7 +112,7 @@ pub fn generate_marshalers_phase_a(program: &mut Program) -> Result<(), CompileE
             }
 
             // Find the generic template enum
-            if let Some(generic_enum) = program.enums.iter().find(|e| &e.node.name.node == base_name && !e.node.type_params.is_empty()) {
+            if let Some(generic_enum) = program.enums.iter().find(|e| e.node.name.node == base_name && !e.node.type_params.is_empty()) {
                 // Create instantiated enum declaration
                 let generated = instantiate_generic_enum(&generic_enum.node, type_name, type_arg_str)
                     .and_then(|instantiated_enum| {

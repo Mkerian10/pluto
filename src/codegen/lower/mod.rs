@@ -2424,7 +2424,7 @@ impl<'a> LowerContext<'a> {
         let scope_key = self.env.scope_resolutions.keys()
             .find(|&&(start, end)| {
                 // The scope stmt span starts before the first seed and ends at body end
-                seeds.first().map_or(false, |s| start <= s.span.start) &&
+                seeds.first().is_some_and(|s| start <= s.span.start) &&
                 end == body.span.end
             })
             .copied()
@@ -2622,7 +2622,7 @@ impl<'a> LowerContext<'a> {
         let is_shared_entity = if let PlutoType::Class(name) = ty {
             self.env.di_order.contains(name)
                 || self.env.object_types.contains(name)
-                || self.env.app.as_ref().map_or(false, |(app_name, _)| app_name == name)
+                || self.env.app.as_ref().is_some_and(|(app_name, _)| app_name == name)
         } else {
             false
         };
@@ -2899,7 +2899,7 @@ impl<'a> LowerContext<'a> {
         // Use the unqualified class name as the service identifier so the
         // env key (PLUTO_REMOTE_<SERVICE>) is independent of the importing
         // module's prefix (e.g. `billing.BillingService` -> `BillingService`).
-        let service_name = cname.rsplit('.').next().unwrap_or(&cname);
+        let service_name = cname.rsplit('.').next().unwrap_or(cname);
         let svc_s = self.make_string_literal(service_name)?;
         // Send `method#interface_hash`: the server dispatches only if its
         // served interface hashes to the same value, so a version-skewed
@@ -3642,7 +3642,7 @@ impl<'a> LowerContext<'a> {
                                 // shared too (their methods are serialized).
                                 self.env.di_order.contains(name)
                                     || self.env.object_types.contains(name)
-                                    || self.env.app.as_ref().map_or(false, |(app_name, _)| app_name == name)
+                                    || self.env.app.as_ref().is_some_and(|(app_name, _)| app_name == name)
                             } else {
                                 false
                             };
@@ -5277,9 +5277,7 @@ impl<'a> LowerContext<'a> {
         // This is an external function call to "rpc.http_post"
         let rpc_func_name = "rpc.http_post";
         let rpc_func_id = self.func_ids.get(rpc_func_name).ok_or_else(|| {
-            CompileError::codegen(format!(
-                "std.rpc module not found - ensure 'import std.rpc' is included"
-            ))
+            CompileError::codegen("std.rpc module not found - ensure 'import std.rpc' is included".to_string())
         })?;
         let rpc_func_ref = self.module.declare_func_in_func(*rpc_func_id, self.builder.func);
 
@@ -5313,8 +5311,8 @@ impl<'a> LowerContext<'a> {
             }
             PlutoType::Void => {
                 // For void return, we don't need to extract anything
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                zero
+                
+                self.builder.ins().iconst(types::I64, 0)
             }
             _ => {
                 return Err(CompileError::codegen(format!(
@@ -6063,7 +6061,7 @@ pub fn lower_generator_next(
     }
 
     // Pre-declare all local variables (so they exist across all yield points)
-    let local_slots: Vec<(String, PlutoType, Variable)> = local_decls.iter().enumerate().map(|(_i, (name, ty))| {
+    let local_slots: Vec<(String, PlutoType, Variable)> = local_decls.iter().map(|(name, ty)| {
         let var = Variable::from_u32(next_var_id);
         next_var_id += 1;
         builder.declare_var(var, pluto_to_cranelift(ty));

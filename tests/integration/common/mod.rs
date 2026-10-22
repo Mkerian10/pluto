@@ -258,7 +258,7 @@ pub fn compile_batch_stdout(tests: &[(&str, &str)]) -> HashMap<String, String> {
 
         imports.push_str(&format!("import {module_name}\n"));
         if i > 0 {
-            calls.push_str(&format!("    print(\"<<__BATCH_DELIM__>>\")\n"));
+            calls.push_str("    print(\"<<__BATCH_DELIM__>>\")\n");
         }
         calls.push_str(&format!("    {module_name}.main()\n"));
     }

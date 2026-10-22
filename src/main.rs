@@ -614,7 +614,7 @@ fn main() {
         }
         Commands::Analyze { file } => {
             // Analyze the file and update with fresh derived data
-            match pluto::analyze_and_update(&file, stdlib.as_deref()) {
+            match pluto::analyze_and_update(&file, stdlib) {
                 Ok(derived) => {
                     let output_path = file.with_extension("pluto");
                     eprintln!("analyzed {} \u{2192} {}", file.display(), output_path.display());

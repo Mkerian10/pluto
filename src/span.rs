@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn test_span_clone() {
         let span = Span::new(10, 20);
-        let cloned = span.clone();
+        let cloned = span;
         assert_eq!(span, cloned);
     }
 

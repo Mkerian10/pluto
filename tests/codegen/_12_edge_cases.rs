@@ -112,7 +112,7 @@ fn main() {
 "#;
     let output = compile_and_run_stdout(source).trim().to_string();
     // Just verify it doesn't crash
-    assert!(output.len() > 0);
+    assert!(!output.is_empty());
 }
 
 #[test]

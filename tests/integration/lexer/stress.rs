@@ -50,7 +50,7 @@ fn stress_very_long_line() {
     let line = "let x = ".to_string() + &"1 + ".repeat(2000) + "1";
     let tokens = lex_ok(&line);
     // Should lex successfully
-    assert!(tokens.len() > 0);
+    assert!(!tokens.is_empty());
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn stress_extremely_long_line() {
     // 100,000 character line
     let line = "let x = ".to_string() + &"1 + ".repeat(20000) + "1";
     let tokens = lex_ok(&line);
-    assert!(tokens.len() > 0);
+    assert!(!tokens.is_empty());
 }
 
 // ===== Very Large Files =====
@@ -82,7 +82,7 @@ fn stress_large_file_1mb() {
     let count = 1024 * 1024 / statement.len();
     let src = statement.repeat(count);
     let tokens = lex_ok(&src);
-    assert!(tokens.len() > 0);
+    assert!(!tokens.is_empty());
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn stress_very_large_file_10mb() {
     let count = 10 * 1024 * 1024 / statement.len();
     let src = statement.repeat(count);
     let tokens = lex_ok(&src);
-    assert!(tokens.len() > 0);
+    assert!(!tokens.is_empty());
 }
 
 // ===== Many Tokens =====
@@ -216,7 +216,7 @@ fn stress_float_max() {
     let tokens = lex_ok(src);
     // Current lexer doesn't support scientific notation
     // Will lex as multiple tokens
-    assert!(tokens.len() >= 1);
+    assert!(!tokens.is_empty());
 }
 
 #[test]
@@ -224,7 +224,7 @@ fn stress_float_min_positive() {
     let src = "2.2250738585072014e-308"; // f64::MIN_POSITIVE
     let tokens = lex_ok(src);
     // Will lex as multiple tokens (no scientific notation)
-    assert!(tokens.len() >= 1);
+    assert!(!tokens.is_empty());
 }
 
 // ===== Repeated Patterns =====

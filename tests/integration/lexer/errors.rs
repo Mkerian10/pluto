@@ -127,7 +127,7 @@ fn error_message_includes_character() {
 #[test]
 fn error_message_includes_position() {
     let src = "let x = @";
-    let err = lex(src).unwrap_err();
+    let _err = lex(src).unwrap_err();
     // Error span should point to @
     // Can't easily test span without accessing error internals
 }
@@ -211,7 +211,7 @@ fn error_recovery_doesnt_skip_too_much() {
     let src = "@";
     let err = lex(src).unwrap_err();
     // Just verify it errors, no recovery mechanism to test
-    assert!(err.to_string().len() > 0);
+    assert!(!err.to_string().is_empty());
 }
 
 #[test]

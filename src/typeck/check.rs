@@ -1155,7 +1155,7 @@ fn check_scope_stmt(
     let classes_to_create: Vec<String> = needed.iter()
         .filter(|n| !seed_class_names.contains(*n))
         .filter(|n| {
-            env.classes.get(*n).map_or(false, |i| scope_local(i.lifecycle))
+            env.classes.get(*n).is_some_and(|i| scope_local(i.lifecycle))
         })
         .cloned()
         .collect();
@@ -1255,7 +1255,7 @@ fn check_scope_stmt(
                 let dep_info = env.classes.get(dep_name);
                 let wiring = if let Some((_, idx)) = seed_types.iter().find(|(n, _)| n == dep_name) {
                     FieldWiring::Seed(*idx)
-                } else if dep_info.map_or(false, |d| d.lifecycle == Lifecycle::Transient) {
+                } else if dep_info.is_some_and(|d| d.lifecycle == Lifecycle::Transient) {
                     // Fresh instance per injection point
                     transient_deps.push(dep_name.clone());
                     FieldWiring::Transient(dep_name.clone())
@@ -1264,7 +1264,7 @@ fn check_scope_stmt(
                     // scope-local singletons, which must NOT wire to the
                     // (uninitialized) process globals
                     FieldWiring::ScopedInstance(dep_name.clone())
-                } else if dep_info.map_or(false, |d| d.lifecycle == Lifecycle::Singleton) {
+                } else if dep_info.is_some_and(|d| d.lifecycle == Lifecycle::Singleton) {
                     FieldWiring::Singleton(dep_name.clone())
                 } else {
                     return Err(CompileError::type_err(

@@ -465,7 +465,7 @@ where
 /// // Find first propagate operator
 /// let propagate = find_expr(&expr, |e| matches!(e, Expr::Propagate { .. }));
 /// ```
-pub fn find_expr<'a, F>(expr: &'a Spanned<Expr>, predicate: F) -> Option<&'a Spanned<Expr>>
+pub fn find_expr<F>(expr: &Spanned<Expr>, predicate: F) -> Option<&Spanned<Expr>>
 where
     F: Fn(&Expr) -> bool,
 {
@@ -502,7 +502,7 @@ where
 }
 
 /// Find the first statement matching a predicate.
-pub fn find_stmt<'a, F>(stmt: &'a Spanned<Stmt>, predicate: F) -> Option<&'a Spanned<Stmt>>
+pub fn find_stmt<F>(stmt: &Spanned<Stmt>, predicate: F) -> Option<&Spanned<Stmt>>
 where
     F: Fn(&Stmt) -> bool,
 {

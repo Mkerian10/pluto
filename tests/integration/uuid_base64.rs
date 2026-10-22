@@ -261,8 +261,8 @@ fn main() {
     let lines: Vec<&str> = output.trim().lines().collect();
     assert_eq!(lines.len(), 2);
     // Standard has +/ and URL safe has -_
-    assert!(lines[0].contains("+") || lines[0].contains("/") || lines[0].len() > 0);
-    assert!(lines[1].len() > 0);
+    assert!(lines[0].contains("+") || lines[0].contains("/") || !lines[0].is_empty());
+    assert!(!lines[1].is_empty());
 }
 
 #[test]
