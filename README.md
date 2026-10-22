@@ -191,7 +191,7 @@ Sharing is decided by kind, not by annotation. **Values** (classes, enums, array
 |---|---|
 | Variables | `let x = 42` / `let mut y = 0` |
 | Functions | `fn add(a: int, b: int) int { return a + b }` |
-| Strings | `"hello {name}"` with interpolation |
+| Strings | `f"hello {name}"` interpolation (plain `"..."` never interpolates) |
 | Arrays | `[1, 2, 3]` with `.len()`, `.push()`, indexing |
 | Maps | `Map<string, int> { "a": 1 }` |
 | Sets | `Set<int> { 1, 2, 3 }` |
@@ -208,11 +208,11 @@ Sharing is decided by kind, not by annotation. **Values** (classes, enums, array
 | Tests | `test "name" { expect(x).to_equal(y) }` / `expect_raises(E) { ... }` |
 | Modules | `import math` / `pub fn` |
 | Packages | `pluto.toml` with path and git deps |
-| FFI | `extern rust "mycrate" { fn compute(x: int) int }` |
+| Externs | `extern fn __pluto_sym(x: int) int` binds a C runtime symbol |
 
 ## Standard Library
 
-25 modules. Highlights:
+24 modules. Highlights:
 
 | Module | Highlights |
 |---|---|
