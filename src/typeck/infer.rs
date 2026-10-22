@@ -1946,7 +1946,7 @@ fn try_as_nested_field_access(
             }
             _ => {
                 return Err(CompileError::type_err(
-                    format!("field access on non-class type"),
+                    "field access on non-class type".to_string(),
                     qualified_span,
                 ));
             }
@@ -1975,7 +1975,7 @@ fn try_as_nested_field_access(
                 })
         }
         _ => Err(CompileError::type_err(
-            format!("field access on non-class type"),
+            "field access on non-class type".to_string(),
             final_field_span,
         ))
     }

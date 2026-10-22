@@ -1,6 +1,6 @@
 mod common;
 use common::{
-    compile_and_run_output, compile_and_run_stdout, compile_should_fail, compile_should_fail_with,
+    compile_and_run_output, compile_and_run_stdout, compile_should_fail_with,
     compile_test_and_run_with_stdlib,
 };
 

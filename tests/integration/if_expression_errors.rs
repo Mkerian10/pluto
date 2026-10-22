@@ -1,5 +1,5 @@
 mod common;
-use common::{compile_should_fail_with, compile_should_fail};
+use common::compile_should_fail_with;
 
 // ============================================================
 // Type Mismatch Errors (8 tests)

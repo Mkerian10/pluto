@@ -112,7 +112,7 @@ app Payments[billing: remote billing.BillingService] {
 /// error system.
 #[test]
 fn handled_remote_call_runs_and_falls_back() {
-    let mut out = run_project(&[
+    let out = run_project(&[
         ("billing.pluto", BILLING),
         ("main.pluto", "\
 import billing
@@ -185,7 +185,7 @@ fn remote_call_raises_networkerror_when_unreachable() {
         build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
 
     // Port 1 has nothing listening: connect fails -> NetworkError -> catch -1.
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_BILLINGSERVICE", "127.0.0.1:1")
         .output()
         .unwrap();
@@ -229,7 +229,7 @@ fn serve_generated_server_round_trips() {
     let port = port_line.trim();
     assert!(!port.is_empty(), "serve did not report a port");
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -303,7 +303,7 @@ fn complex_type_round_trips_over_rpc() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_ECHO", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -374,7 +374,7 @@ fn large_payload_round_trips() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_STORE", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -461,7 +461,7 @@ fn typed_error_propagates_over_rpc() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_DIRECTORY", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -551,7 +551,7 @@ fn multi_catch_handles_typed_and_network_errors() {
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_DIRECTORY", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -608,7 +608,7 @@ fn serve_recovers_from_a_stuck_client() {
         std::thread::sleep(Duration::from_millis(200));
     };
     if !served { let _ = client.kill(); }
-    let mut out = client.wait_with_output().unwrap();
+    let out = client.wait_with_output().unwrap();
     let _ = server.kill();
     drop(stuck);
 
@@ -654,7 +654,7 @@ fn remote_call_rejected_on_interface_skew() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -710,7 +710,7 @@ fn remote_call_rejected_on_contract_skew() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -733,7 +733,7 @@ fn remote_call_round_trips_with_mirrored_contract() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -823,7 +823,7 @@ fn remote_call_rejected_on_field_reorder_skew() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_REGISTRY", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -846,7 +846,7 @@ fn remote_call_round_trips_with_same_layout() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_REGISTRY", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -920,7 +920,7 @@ fn remote_call_rejected_on_nullable_flip_skew() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_SVC", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1002,7 +1002,7 @@ fn boundary_failure_ambiguous_when_request_consumed_without_reply() {
         // conn dropped here: EOF at the client, no response ever written.
     });
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1042,7 +1042,7 @@ fn boundary_failure_definite_on_interface_skew_rejection() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1086,7 +1086,7 @@ fn serve_handles_clients_concurrently() {
 
     // The real client should be served in well under the stuck handler's timeout.
     let start = Instant::now();
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_BILLINGSERVICE", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1146,7 +1146,7 @@ fn remote_string_arg_with_newline_roundtrips() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_ECHO", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1209,7 +1209,7 @@ fn remote_struct_string_field_with_newline_roundtrips() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_STORE", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1260,7 +1260,7 @@ fn remote_string_return_with_newline_roundtrips() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_BANNER", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1294,7 +1294,7 @@ fn remote_string_arg_with_backslash_and_newline_roundtrips() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_ECHO", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1383,7 +1383,7 @@ fn scalar_and_nullable_round_trip_over_rpc() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_CALC", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1560,7 +1560,7 @@ fn containers_round_trip_over_rpc() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_STORE", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1899,7 +1899,7 @@ fn entity_handle_call_routes_home() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&app_bin)
+    let out = Command::new(&app_bin)
         .env("PLUTO_DOMAIN_REGISTRY", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -1962,7 +1962,7 @@ fn domain_data_fields_in_both_plans() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&app_bin)
+    let out = Command::new(&app_bin)
         .env("PLUTO_DOMAIN_CONFIG", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -2123,7 +2123,7 @@ fn main() {
 }
 "#;
     let (_d, bin) = build_binary(&[("main.pluto", src)]);
-    let mut out = Command::new(&bin).output().unwrap();
+    let out = Command::new(&bin).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "fenced 1 < 2\nB\n");
 }
 
@@ -2146,7 +2146,7 @@ fn entity_placement_marshals_with_library_wire_import() {
             "import m\n\nfn main() {\n    let mut v = m.Vault { secret: 41 }\n    let miss = m.Token { id: -1 }\n    let t = at v { mint() } catch miss\n    print(t.id)\n}\n",
         ),
     ]);
-    let mut out = Command::new(&bin).output().unwrap();
+    let out = Command::new(&bin).output().unwrap();
     assert!(out.status.success(), "binary exited with non-zero status");
     assert_eq!(String::from_utf8_lossy(&out.stdout), "42\n");
 }
@@ -2388,7 +2388,7 @@ class Registry {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&app_bin)
+    let out = Command::new(&app_bin)
         .env("PLUTO_DOMAIN_REGISTRY", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -2434,7 +2434,7 @@ fn main() {
 }
 "#;
     let (_d, bin) = build_binary(&[("main.pluto", src)]);
-    let mut out = Command::new(&bin).output().unwrap();
+    let out = Command::new(&bin).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "15\n");
 }
 
@@ -2468,7 +2468,7 @@ fn main() {
 }
 "#;
     let (_d, bin) = build_binary(&[("main.pluto", src)]);
-    let mut out = Command::new(&bin).output().unwrap();
+    let out = Command::new(&bin).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "42\n");
 }
 
@@ -2502,7 +2502,7 @@ fn main() {
 }
 "#;
     let (_d, bin) = build_binary(&[("main.pluto", src)]);
-    let mut out = Command::new(&bin).output().unwrap();
+    let out = Command::new(&bin).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n");
 }
 
@@ -2537,7 +2537,7 @@ fn main() {
 }
 "#;
     let (_d, bin) = build_binary(&[("main.pluto", src)]);
-    let mut out = Command::new(&bin).output().unwrap();
+    let out = Command::new(&bin).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "42\n");
 }
 
@@ -2642,7 +2642,7 @@ class Registry {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&app_bin)
+    let out = Command::new(&app_bin)
         .env("PLUTO_DOMAIN_REGISTRY", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -2751,7 +2751,7 @@ fn entity_handle_calls_serialize_with_local_calls() {
     reader.read_line(&mut port_line).unwrap();
     let port = port_line.trim();
 
-    let mut out = Command::new(&app_bin)
+    let out = Command::new(&app_bin)
         .env("PLUTO_DOMAIN_REGISTRY", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -2814,7 +2814,7 @@ fn rpc_response_deadline_fires_and_is_ambiguous() {
 
     // Watchdog: the deadline is 500ms — if the client is still running after
     // 15s the deadline did not fire.
-    let mut out = loop {
+    let out = loop {
         match child.try_wait().unwrap() {
             Some(_) => break child.wait_with_output().unwrap(),
             None if start.elapsed() > Duration::from_secs(15) => {
@@ -2950,7 +2950,7 @@ fn bytes_payload_round_trips_over_rpc() {
     let port = port_line.trim();
     assert!(!port.is_empty(), "serve did not report a port");
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_BLOBECHO", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -3229,7 +3229,7 @@ app Client[s: remote svc.Svc] {
     let port = port_line.trim();
     assert!(!port.is_empty(), "serve did not report a port");
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_SVC", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();
@@ -3285,7 +3285,7 @@ app Client[s: remote svc.Svc] {
     let port = port_line.trim();
     assert!(!port.is_empty(), "serve did not report a port");
 
-    let mut out = Command::new(&client_bin)
+    let out = Command::new(&client_bin)
         .env("PLUTO_REMOTE_SVC", format!("127.0.0.1:{port}"))
         .output()
         .unwrap();

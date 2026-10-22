@@ -461,7 +461,7 @@ impl Module {
 
 use pluto::parser::ast::*;
 
-fn find_expr_at_span<'a>(program: &'a Program, target: Span) -> Option<&'a Expr> {
+fn find_expr_at_span(program: &Program, target: Span) -> Option<&Expr> {
     for f in &program.functions {
         if let Some(e) = find_expr_in_block(&f.node.body.node, target) {
             return Some(e);
@@ -484,7 +484,7 @@ fn find_expr_at_span<'a>(program: &'a Program, target: Span) -> Option<&'a Expr>
     None
 }
 
-fn find_stmt_at_span<'a>(program: &'a Program, target: Span) -> Option<&'a Stmt> {
+fn find_stmt_at_span(program: &Program, target: Span) -> Option<&Stmt> {
     for f in &program.functions {
         if let Some(s) = find_stmt_in_block(&f.node.body.node, target) {
             return Some(s);
@@ -507,7 +507,7 @@ fn find_stmt_at_span<'a>(program: &'a Program, target: Span) -> Option<&'a Stmt>
     None
 }
 
-fn find_expr_in_block<'a>(block: &'a Block, target: Span) -> Option<&'a Expr> {
+fn find_expr_in_block(block: &Block, target: Span) -> Option<&Expr> {
     for stmt in &block.stmts {
         if let Some(e) = find_expr_in_stmt(&stmt.node, target) {
             return Some(e);
@@ -516,7 +516,7 @@ fn find_expr_in_block<'a>(block: &'a Block, target: Span) -> Option<&'a Expr> {
     None
 }
 
-fn find_stmt_in_block<'a>(block: &'a Block, target: Span) -> Option<&'a Stmt> {
+fn find_stmt_in_block(block: &Block, target: Span) -> Option<&Stmt> {
     for stmt in &block.stmts {
         if stmt.span == target {
             return Some(&stmt.node);
@@ -529,7 +529,7 @@ fn find_stmt_in_block<'a>(block: &'a Block, target: Span) -> Option<&'a Stmt> {
     None
 }
 
-fn find_stmt_nested<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Stmt> {
+fn find_stmt_nested(stmt: &Stmt, target: Span) -> Option<&Stmt> {
     match stmt {
         Stmt::If { then_block, else_block, .. } => {
             if let Some(s) = find_stmt_in_block(&then_block.node, target) {
@@ -575,7 +575,7 @@ fn find_stmt_nested<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Stmt> {
     None
 }
 
-fn find_expr_in_stmt<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Expr> {
+fn find_expr_in_stmt(stmt: &Stmt, target: Span) -> Option<&Expr> {
     match stmt {
         Stmt::Let { value, .. } => find_expr_recursive(&value.node, value.span, target),
         Stmt::Return(Some(e)) => find_expr_recursive(&e.node, e.span, target),
@@ -685,7 +685,7 @@ fn find_expr_in_stmt<'a>(stmt: &'a Stmt, target: Span) -> Option<&'a Expr> {
     }
 }
 
-fn find_expr_recursive<'a>(expr: &'a Expr, span: Span, target: Span) -> Option<&'a Expr> {
+fn find_expr_recursive(expr: &Expr, span: Span, target: Span) -> Option<&Expr> {
     if span == target {
         return Some(expr);
     }

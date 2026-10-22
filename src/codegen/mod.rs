@@ -2299,12 +2299,10 @@ mod tests {
         let triple = result.unwrap();
 
         // Should be one of the supported triples
-        let valid_triples = vec![
-            "aarch64-apple-darwin",
+        let valid_triples = ["aarch64-apple-darwin",
             "x86_64-apple-darwin",
             "x86_64-unknown-linux-gnu",
-            "aarch64-unknown-linux-gnu",
-        ];
+            "aarch64-unknown-linux-gnu"];
         assert!(valid_triples.contains(&triple), "Got unexpected triple: {}", triple);
     }
 

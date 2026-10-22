@@ -113,9 +113,9 @@ fn edge_eof_without_newline() {
         ("true", Token::True),
     ];
 
-    for (src, expected_pattern) in cases {
+    for (src, _expected_pattern) in cases {
         let tokens = lex_ok(src);
-        assert!(tokens.len() >= 1);
+        assert!(!tokens.is_empty());
         // Just verify it doesn't crash
     }
 }

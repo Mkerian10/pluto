@@ -1387,7 +1387,7 @@ impl CompilerService for InProcessServer {
     }
 
     fn stdlib_docs(&self, module: Option<&str>) -> Result<String, ServiceError> {
-        crate::docs::get_stdlib_docs(module).map_err(|e| ServiceError::Internal(e))
+        crate::docs::get_stdlib_docs(module).map_err(ServiceError::Internal)
     }
 }
 

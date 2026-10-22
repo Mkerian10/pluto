@@ -1494,7 +1494,7 @@ fn main() {
 
     // The generic function `identity` should appear once as a function entry,
     // NOT once per monomorphized copy (identity__int, identity__string)
-    let identity_entries: Vec<_> = map.points.iter()
+    let _identity_entries: Vec<_> = map.points.iter()
         .filter(|p| p.kind == CoverageKind::FunctionEntry && p.function_name == "identity")
         .collect();
     // identity may or may not appear (monomorphize replaces the template),

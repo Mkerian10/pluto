@@ -106,7 +106,7 @@ fn span_newline() {
 #[test]
 fn span_multiple_newlines() {
     let src = "x\n\n\ny";
-    let tokens = lex_ok(src);
+    let _tokens = lex_ok(src);
     // x: 0..1, \n\n\n: 1..4, y: 4..5
     assert_span(src, 0, 0, 1); // x
     assert_span(src, 2, 4, 5); // y
@@ -258,7 +258,7 @@ fn span_very_long_token() {
 fn span_crlf_newlines() {
     let src = "x\r\ny";
     // x: 0..1, \r\n: 1..3, y: 3..4
-    let tokens = lex_ok(src);
+    let _tokens = lex_ok(src);
     assert_span(src, 0, 0, 1); // x
     // Newline token might include \r
     assert_span(src, 2, 3, 4); // y

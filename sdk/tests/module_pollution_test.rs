@@ -1,5 +1,4 @@
 use pluto_sdk::Module;
-use std::path::Path;
 
 #[test]
 fn test_local_declarations_filter_imports() {
@@ -93,7 +92,7 @@ fn main() {
         .filter(|f| f.name().contains('.'))
         .collect();
 
-    assert!(imported_funcs.len() > 0, "Expected some imported functions with '.' in names");
+    assert!(!imported_funcs.is_empty(), "Expected some imported functions with '.' in names");
 
     // Cleanup
     std::fs::remove_dir_all(&test_dir).ok();

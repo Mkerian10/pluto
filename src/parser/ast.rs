@@ -1111,7 +1111,7 @@ mod tests {
     #[test]
     fn test_lifecycle_clone() {
         let lc = Lifecycle::Singleton;
-        let cloned = lc.clone();
+        let cloned = lc;
         assert_eq!(lc, cloned);
     }
 

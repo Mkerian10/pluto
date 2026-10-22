@@ -35,7 +35,7 @@ impl VisitMut for SpawnDesugarer {
                     call_span,
                 ),
             };
-            *call = Box::new(Spanned::new(closure, call_span));
+            **call = Spanned::new(closure, call_span);
         }
     }
 }

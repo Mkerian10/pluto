@@ -50,7 +50,7 @@ impl PlutoType {
         match self {
             PlutoType::Array(inner) => PlutoType::Array(Box::new(f(inner))),
             PlutoType::Fn(params, ret, fallible, provides) => PlutoType::Fn(
-                params.iter().map(|p| f(p)).collect(),
+                params.iter().map(f).collect(),
                 Box::new(f(ret)),
                 *fallible,
                 provides.clone(),
@@ -64,7 +64,7 @@ impl PlutoType {
             PlutoType::GenericInstance(kind, name, args) => PlutoType::GenericInstance(
                 kind.clone(),
                 name.clone(),
-                args.iter().map(|a| f(a)).collect(),
+                args.iter().map(f).collect(),
             ),
             // Leaf types — no inner types to transform
             _ => self.clone(),
@@ -76,11 +76,11 @@ impl PlutoType {
     pub fn any_inner_type(&self, pred: &impl Fn(&PlutoType) -> bool) -> bool {
         match self {
             PlutoType::Array(inner) => pred(inner),
-            PlutoType::Fn(params, ret, _, _) => params.iter().any(|p| pred(p)) || pred(ret),
+            PlutoType::Fn(params, ret, _, _) => params.iter().any(pred) || pred(ret),
             PlutoType::Map(k, v) => pred(k) || pred(v),
             PlutoType::Set(t) | PlutoType::Task(t) | PlutoType::Sender(t)
             | PlutoType::Receiver(t) | PlutoType::Nullable(t) => pred(t),
-            PlutoType::GenericInstance(_, _, args) => args.iter().any(|a| pred(a)),
+            PlutoType::GenericInstance(_, _, args) => args.iter().any(pred),
             _ => false,
         }
     }

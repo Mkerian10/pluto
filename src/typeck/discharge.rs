@@ -1393,7 +1393,7 @@ fn symbolic_state(scope: &InvariantScope, fields: &HashSet<String>) -> String {
             let rendered = scope
                 .sym
                 .get(f)
-                .map(|a| render_affine(a))
+                .map(render_affine)
                 .unwrap_or_else(|| "<unknown>".to_string());
             if scope.is_coll_field(f) {
                 format!("self.{f}.len() = {rendered}")

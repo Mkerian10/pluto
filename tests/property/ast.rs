@@ -357,7 +357,7 @@ fn typecheck_frontend(source: &str) -> Result<(), String> {
     pluto::ambient::desugar_ambient(&mut program).map_err(|e| e.to_string())?;
     pluto::generic_traits::instantiate_generic_traits(&mut program).map_err(|e| e.to_string())?;
     pluto::generic_methods::hoist_generic_methods(&mut program).map_err(|e| e.to_string())?;
-    pluto::contracts::validate_contracts(&mut program).map_err(|e| e.to_string())?;
+    pluto::contracts::validate_contracts(&program).map_err(|e| e.to_string())?;
     pluto::typeck::type_check(&program)
         .map(|_| ())
         .map_err(|e| e.to_string())

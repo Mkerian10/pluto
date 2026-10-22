@@ -84,7 +84,7 @@ impl CoverageMap {
     /// Write the coverage map as JSON to a file.
     pub fn write_json(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 
@@ -92,7 +92,7 @@ impl CoverageMap {
     pub fn read_json(path: &Path) -> std::io::Result<Self> {
         let json = std::fs::read_to_string(path)?;
         serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(std::io::Error::other)
     }
 
     pub fn num_points(&self) -> u32 {

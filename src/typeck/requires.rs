@@ -366,7 +366,7 @@ impl Visitor for ReqScan<'_> {
                             .stmts
                             .iter()
                             .flat_map(|s| immediate_exprs(&s.node))
-                            .any(|e| contains_call(e))
+                            .any(contains_call)
                             || body.node.stmts.iter().any(stmt_subtree_has_call),
                         crate::parser::ast::CatchHandler::Shorthand(fb) => contains_call(fb),
                     };

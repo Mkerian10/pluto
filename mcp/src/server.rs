@@ -141,7 +141,7 @@ impl PlutoMcp {
         let first_bytes = std::fs::read(&canonical)
             .map_err(|e| mcp_err(format!("Cannot read file: {e}")))?;
 
-        let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
+        let stdlib_path = input.stdlib.as_ref().map(PathBuf::from);
 
         let module = if first_bytes.len() >= 4 && &first_bytes[..4] == b"PLTO" {
             Module::open(&canonical).map_err(|e| mcp_internal(format!("Failed to load binary: {e}")))?
@@ -662,7 +662,7 @@ impl PlutoMcp {
         let files = discover_pluto_files(root_path)
             .map_err(|e| mcp_internal(format!("Failed to scan directory: {e}")))?;
 
-        let stdlib_path = input.stdlib.as_ref().map(|s| PathBuf::from(s));
+        let stdlib_path = input.stdlib.as_ref().map(PathBuf::from);
         let mut load_errors = Vec::new();
 
         let mut modules = self.modules.write().await;
@@ -1301,7 +1301,7 @@ fn derive_module_name(rel_path: &Path) -> String {
     if components.len() >= 2 {
         // Check if all components except the last are directories
         // Join all components except the file name with `.`
-        let dir_parts: Vec<_> = components[..components.len() - 1].iter().copied().collect();
+        let dir_parts: Vec<_> = components[..components.len() - 1].to_vec();
         let file_stem = Path::new(components.last().unwrap())
             .file_stem()
             .and_then(|s| s.to_str())
@@ -1448,7 +1448,7 @@ impl PlutoMcp {
                         if !is_cycle {
                             Box::pin(self.build_call_graph_recursive(
                                 callee_id,
-                                &callee_name,
+                                callee_name,
                                 callee_module_path,
                                 depth + 1,
                                 max_depth,

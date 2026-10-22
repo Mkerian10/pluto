@@ -112,7 +112,7 @@ fn graceful_kill(child: &mut Child) -> std::io::Result<()> {
     // Poll for 1 second
     let start = std::time::Instant::now();
     while start.elapsed() < Duration::from_secs(1) {
-        if let Some(_) = child.try_wait()? {
+        if child.try_wait()?.is_some() {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(50));

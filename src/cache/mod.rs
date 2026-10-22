@@ -94,7 +94,7 @@ pub fn save_cache(
     // Use the source file's absolute path as the cache key
     let cache_key = source_path
         .canonicalize()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+        .map_err(std::io::Error::other)?
         .to_string_lossy()
         .replace(['/', '\\'], "_");
 
