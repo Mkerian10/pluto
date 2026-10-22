@@ -269,6 +269,10 @@ name = "wire"
 path = "tests/integration/wire.rs"
 
 [[test]]
+name = "uuid_base64"
+path = "tests/integration/uuid_base64.rs"
+
+[[test]]
 name = "marshaling"
 path = "tests/integration/marshaling.rs"
 
