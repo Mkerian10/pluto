@@ -127,10 +127,10 @@ When you need to wait on multiple channels simultaneously, `select` provides mul
 ```
 select {
     val = rx1.recv() {
-        print("got int: {val}")
+        print(f"got int: {val}")
     }
     msg = rx2.recv() {
-        print("got string: {msg}")
+        print(f"got string: {msg}")
     }
     default {
         print("nothing ready")

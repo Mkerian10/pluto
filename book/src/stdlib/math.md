@@ -147,9 +147,9 @@ import std.math
 
 fn main() {
     let n = -42
-    print("{math.abs(n)}")             // 42
-    print("{math.clamp(n, 0, 100)}")   // 0
-    print("{math.gcd(48, 18)}")        // 6
-    print("{math.factorial(6)}")       // 720
+    print(f"{math.abs(n)}")             // 42
+    print(f"{math.clamp(n, 0, 100)}")   // 0
+    print(f"{math.gcd(48, 18)}")        // 6
+    print(f"{math.factorial(6)}")       // 720
 }
 ```

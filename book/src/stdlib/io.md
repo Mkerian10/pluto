@@ -33,11 +33,11 @@ import std.io
 fn main() int? {
     io.print("What is your name? ")
     let name = io.read_line()
-    print("Hello, {name}!")
+    print(f"Hello, {name}!")
 
     io.print("Enter a number: ")
     let n = io.read_line().to_int()?
-    print("Doubled: {n * 2}")
+    print(f"Doubled: {n * 2}")
 
     return none
 }

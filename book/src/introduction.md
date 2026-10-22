@@ -31,7 +31,7 @@ This is the core thesis of Pluto: **If the compiler sees your whole program, it 
 ```
 class OrderService[db: Database, cache: Cache] {
     fn get_order(self, id: string) Order {
-        return self.db.query("SELECT * FROM orders WHERE id = {id}")
+        return self.db.query(f"SELECT * FROM orders WHERE id = {id}")
     }
 }
 ```

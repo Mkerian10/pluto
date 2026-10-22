@@ -37,14 +37,14 @@ class Database {
 
 class UserService[db: Database] {
     fn get_user(self, id: string) string {
-        return self.db.query("SELECT * FROM users WHERE id = {id}")
+        return self.db.query(f"SELECT * FROM users WHERE id = {id}")
     }
 }
 
 class OrderService[db: Database, users: UserService] {
     fn process(self, order_id: string, amount: int) {
         let user = self.users.get_user("42")
-        print("Processing order {order_id} for {user}: {amount}")
+        print(f"Processing order {order_id} for {user}: {amount}")
     }
 }
 
@@ -111,7 +111,7 @@ scoped class RequestCtx {
 
 class Handler[ctx: RequestCtx] {
     fn handle(self) string {
-        return "handling {self.ctx.request_id}"
+        return f"handling {self.ctx.request_id}"
     }
 }
 ```

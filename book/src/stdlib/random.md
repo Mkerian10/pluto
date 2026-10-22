@@ -81,7 +81,7 @@ fn main() {
     // Roll 5 dice
     let i = 0
     while i < 5 {
-        print("Roll: {random.between(1, 6)}")
+        print(f"Roll: {random.between(1, 6)}")
         i = i + 1
     }
 
@@ -89,6 +89,6 @@ fn main() {
     random.seed(99)
     let x = random.between(1, 100)
     let y = random.between(1, 100)
-    print("Seeded: {x}, {y}")
+    print(f"Seeded: {x}, {y}")
 }
 ```

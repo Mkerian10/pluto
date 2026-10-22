@@ -28,12 +28,12 @@ Binds a TCP server socket. Use port `0` for an OS-assigned port.
 
 ```
 let server = net.listen("127.0.0.1", 0)
-print("Listening on port {server.port()}")
+print(f"Listening on port {server.port()}")
 
 while true {
     let conn = server.accept()
     let data = conn.read(4096)
-    conn.write("echo: {data}")
+    conn.write(f"echo: {data}")
     conn.close()
 }
 ```
@@ -71,7 +71,7 @@ import std.net
 
 fn main() {
     let server = net.listen("127.0.0.1", 8080)
-    print("Echo server on port {server.port()}")
+    print(f"Echo server on port {server.port()}")
 
     while true {
         let conn = server.accept()

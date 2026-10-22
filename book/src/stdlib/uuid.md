@@ -29,7 +29,7 @@ import std.uuid
 fn main() {
     let id1 = uuid.generate()
     let id2 = uuid.generate()
-    print("ID 1: {id1}")
-    print("ID 2: {id2}")
+    print(f"ID 1: {id1}")
+    print(f"ID 2: {id2}")
 }
 ```

@@ -196,7 +196,7 @@ Calls `f` on each element. Returns void.
 
 ```
 collections.for_each(["alice", "bob"], (name: string) => {
-    print("hello {name}")
+    print(f"hello {name}")
 })
 ```
 
@@ -210,7 +210,7 @@ fn main() {
     let even_data = collections.filter(data, (x: int) => x % 2 == 0)
     let squared = collections.map(even_data, (x: int) => x * x)
     let total = collections.fold(squared, 0, (acc: int, x: int) => acc + x)
-    print("sum of even squares: {total}")
+    print(f"sum of even squares: {total}")
     // sum of even squares: 220
 }
 ```

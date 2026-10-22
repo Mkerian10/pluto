@@ -16,7 +16,7 @@ A class declares its dependencies inside square brackets:
 class OrderService[db: Database, auth: AuthService] {
     fn process(self, order_id: int) string {
         let user = self.auth.current_user()!
-        return self.db.query("SELECT * FROM orders WHERE id = {order_id}")!
+        return self.db.query(f"SELECT * FROM orders WHERE id = {order_id}")!
     }
 }
 ```
@@ -48,7 +48,7 @@ Ambient deps solve this. A class declares that it `uses` a type, and accesses it
 ```
 class OrderService uses Logger [db: Database, auth: AuthService] {
     fn process(self, order_id: int) string {
-        logger.info("Processing order {order_id}")
+        logger.info(f"Processing order {order_id}")
         let user = self.auth.current_user()!
         let result = self.db.query("SELECT 1")!
         logger.info("Order processed")
@@ -155,7 +155,7 @@ class DatabaseConfig {
     invariant self.host.len() > 0
 
     fn connection_string(self) string {
-        return "{self.host}:{self.port}"
+        return f"{self.host}:{self.port}"
     }
 }
 ```
@@ -184,7 +184,7 @@ import std.env
 fn main() {
     let host = env.get("DATABASE_HOST") catch "localhost"
     let port = env.get("DATABASE_PORT") catch "5432"
-    print("Connecting to {host}:{port}")
+    print(f"Connecting to {host}:{port}")
 }
 ```
 

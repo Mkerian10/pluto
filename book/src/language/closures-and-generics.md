@@ -222,7 +222,7 @@ Classes with bracket deps can have type parameters:
 ```
 class Repository<T>[db: Database] {
     fn find(self, id: int) T {
-        return self.db.query("SELECT * WHERE id = {id}")!
+        return self.db.query(f"SELECT * WHERE id = {id}")!
     }
 }
 ```

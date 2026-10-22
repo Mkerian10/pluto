@@ -173,7 +173,7 @@ fn main() {
     let fields = strings.split(line, ",")
     let name = fields[0]
     let dept = strings.to_upper(fields[2])
-    print("{name} works in {dept}")
+    print(f"{name} works in {dept}")
     // Alice works in ENGINEERING
 }
 ```
