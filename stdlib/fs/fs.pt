@@ -91,6 +91,7 @@ pub error Degraded {
 extern fn __pluto_fs_last_errno() int
 extern fn __pluto_fs_errstr(code: int) string
 extern fn __pluto_fs_err_noent() int
+extern fn __pluto_fs_err_inval() int
 extern fn __pluto_fs_open_read(path: string) int
 extern fn __pluto_fs_open_write(path: string) int
 extern fn __pluto_fs_open_append(path: string) int
@@ -707,10 +708,17 @@ pub fn rename(from: string, to: string) {
 
 // Close errors on either descriptor are surfaced (issue #367 fix);
 // both descriptors are always released.
+// Copying a file onto itself is refused (FileError) rather than performed:
+// the destination is truncated before the source is read, so the result
+// would be an empty file.
 pub fn copy(from: string, to: string) {
     let r = __pluto_fs_copy(from, to)
     if r < 0 {
-        raise_path_error(from, 0 - r)!
+        let code = 0 - r
+        if code == __pluto_fs_err_inval() {
+            raise FileError { path: from, code: code, message: "source and destination are the same file" }
+        }
+        raise_path_error(from, code)!
     }
 }
 

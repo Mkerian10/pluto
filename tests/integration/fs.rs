@@ -300,6 +300,42 @@ fn main() {
     assert_eq!(out, "copied data\ntrue\n");
 }
 
+// Copying a file onto itself used to open the destination with O_TRUNC
+// before reading the source, leaving an empty file. It is refused instead
+// and the source is untouched — also when the two paths are spelled
+// differently but name the same inode.
+#[test]
+fn fs_copy_onto_itself_is_refused_and_preserves_the_file() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.fs
+
+fn try_copy(from: string, to: string) string {
+    fs.copy(from, to)!
+    return "copied"
+}
+
+fn main() {
+    let tmp = fs.temp_dir()
+    let f = tmp + "/self.txt"
+    fs.write_all(f, "keep me")!
+    let r = try_copy(f, f) catch e: fs.FileError { e.message } catch e: fs.NotFound { "not found" }
+    print(r)
+    print(fs.read_all(f)!)
+    let r2 = try_copy(f, tmp + "/./self.txt") catch e: fs.FileError { e.message } catch e: fs.NotFound { "not found" }
+    print(r2)
+    print(fs.read_all(f)!)
+    fs.remove(f)!
+    fs.rmdir(tmp)!
+}
+"#,
+    )]);
+    assert_eq!(
+        out,
+        "source and destination are the same file\nkeep me\nsource and destination are the same file\nkeep me\n"
+    );
+}
+
 // ============================================================
 // is_dir / is_file return correct bools
 // ============================================================

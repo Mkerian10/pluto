@@ -2833,6 +2833,8 @@ long __pluto_fs_err_noent(void) {
     return (long)ENOENT;
 }
 
+long __pluto_fs_err_inval(void) { return (long)EINVAL; }
+
 // Raw open: `path` is an already-converted C string; error encoded in the
 // return (-errno on failure, fd on success). Offloadable to a pool worker.
 static long fs_raw_open(long path_l, long flags, long mode) {
@@ -4030,6 +4032,17 @@ long __pluto_fs_copy(void *from_str, void *to_str) {
         err = -(long)errno;
         __pluto_gc_leave_safe_region();
         return err;
+    }
+    // Refuse to copy a file onto itself: opening the destination with
+    // O_TRUNC below would empty the source before a byte was read, so the
+    // "copy" silently destroyed the file. Same device+inode means same file
+    // (covers hard links and differently spelled paths, not just from==to).
+    struct stat src_st, dst_st;
+    if (fstat(src_fd, &src_st) == 0 && stat(to, &dst_st) == 0
+        && src_st.st_dev == dst_st.st_dev && src_st.st_ino == dst_st.st_ino) {
+        close(src_fd);
+        __pluto_gc_leave_safe_region();
+        return -(long)EINVAL;
     }
     int dst_fd = open(to, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (dst_fd < 0) {

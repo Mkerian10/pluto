@@ -76,51 +76,43 @@ pub fn normalize(p: string) string {
         return "."
     }
 
-    // Split by separator and process components
+    // Walk the components with a stack. "." and empty components vanish;
+    // ".." pops a real component, clamps at the root of an absolute path,
+    // and is KEPT at the front of a relative path ("../../a" must stay
+    // "../../a" — dropping it would silently point somewhere else).
     let parts = p.split("/")
-    let mut result = ""
     let is_abs = p.starts_with("/")
+    let mut stack: [string] = []
 
     for i in 0..parts.len() {
         let part = parts[i]
-
-        // Skip empty parts (from double slashes) and current directory references
-        if part.len() == 0 {
+        if part.len() == 0 || part == "." {
             continue
         }
-        if part == "." {
-            continue
-        }
-
-        // Handle parent directory references (simplified - doesn't handle going above root)
         if part == ".." {
-            // Find last slash and remove everything after it
-            let last_slash = result.last_index_of("/")
-            if last_slash < 0 {
-                result = ""
-            } else {
-                result = result.substring(0, last_slash)
+            if stack.len() > 0 && stack[stack.len() - 1] != ".." {
+                stack.pop()
+            } else if !is_abs {
+                stack.push("..")
             }
             continue
         }
+        stack.push(part)
+    }
 
-        // Add the component
-        if result.len() == 0 {
-            if is_abs {
-                result = "/" + part
-            } else {
-                result = part
-            }
+    let mut result = ""
+    for i in 0..stack.len() {
+        if i == 0 {
+            result = stack[i]
         } else {
-            result = result + "/" + part
+            result = result + "/" + stack[i]
         }
     }
 
-    // Return root or normalized path
+    if is_abs {
+        return "/" + result
+    }
     if result.len() == 0 {
-        if is_abs {
-            return "/"
-        }
         return "."
     }
     return result
