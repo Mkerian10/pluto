@@ -1,6 +1,6 @@
 # MCP Best Practices
 
-Guidelines for AI agents and developers working with the Pluto MCP server. Following these practices leads to faster, more reliable, and safer editing workflows.
+Guidelines for AI agents and developers working with the Pluto MCP server. The server is read-only: it inspects, type-checks, compiles, runs and tests Pluto code, but never writes a source file. Edits happen in your editor or through the `pluto-sdk` crate, and the server is told about them with `reload_module`.
 
 ---
 
@@ -12,13 +12,13 @@ Guidelines for AI agents and developers working with the Pluto MCP server. Follo
 
 1. **Loads all `.pluto` files** in the directory tree, so cross-module searches work immediately
 2. **Builds the dependency graph**, detecting circular imports before you hit them during compilation
-3. **Establishes the project root** for path safety validation — write tools are blocked without it
+3. **Establishes the project root**, which later `load_module` / `reload_module` paths are validated against
 
 ```
-// Good: loads everything, enables writes, enables cross-module queries
+// Good: loads everything, enables cross-module queries
 load_project({ path: "/path/to/project", stdlib: "/path/to/pluto/stdlib" })
 
-// Bad: only loads one file, write tools will fail (no project root)
+// Bad: only loads one file; cross-module queries see nothing else
 load_module({ path: "/path/to/project/main.pluto" })
 ```
 
@@ -53,37 +53,25 @@ load_module({ path: "/path/to/project/main.pluto" })
 **Check after every edit**, not just at the end.
 
 ```
-add_declaration(...)   → check(...)   → fix errors
-replace_declaration(...) → check(...) → fix errors
-delete_declaration(...)  → check(...) → fix dangling refs
+edit the file → reload_module(...) → check(...) → fix errors
 ```
 
 Type errors compound. A bad type change in one declaration can cascade into dozens of errors elsewhere. Catching it immediately means fixing one thing instead of untangling ten.
 
 **Use `check` for validation, not `compile`.** `check` runs the type checker without generating a binary — it's faster and gives the same diagnostics. Only use `compile` when you actually need the binary.
 
-**`check` always reads from disk.** Unlike inspection tools (which use the cached AST), `check` re-reads the file from disk. Since write tools write to disk and update the cache simultaneously, this is seamless — but be aware that `check` will pick up any external edits too.
+**`check` always reads from disk.** Unlike inspection tools (which use the cached AST), `check` re-reads the file from disk, so it sees your edit even before `reload_module`. The inspection tools do not — reload before querying declarations you just changed.
 
 ---
 
-## 4. Choosing the Right Write Tool
+## 4. Editing Happens Outside the Server
 
-The MCP server has six write tools, each for a specific operation. Using the right one preserves UUIDs and avoids unnecessary churn.
+The server has no write tools. Make changes in one of two ways:
 
-| Task | Tool | UUID Behavior |
-|------|------|---------------|
-| Add a new function/class/enum/etc. | `add_declaration` | New UUID assigned |
-| Modify a function body or signature | `replace_declaration` | UUID preserved |
-| Remove a declaration | `delete_declaration` | Reports dangling refs |
-| Change a declaration's name | `rename_declaration` | UUID preserved, intra-file refs updated |
-| Add a method to a class | `add_method` | New UUID for method, class UUID unchanged |
-| Add a field to a class | `add_field` | New UUID for field, class UUID unchanged |
+- **Edit the `.pt` source in your editor.** This is the normal path. Afterwards call `reload_module` on that file (or `load_project` again) so inspection tools see the new declarations.
+- **Edit programmatically with `pluto-sdk`.** `Module::open` (or `Module::from_source_file`) → `module.edit()` gives a `ModuleEditor` with `add_from_source`, `replace_from_source`, `delete`, `rename`, `add_method_from_source` and `add_field`; `commit()` yields the new `Module`, and `save` writes it. Declaration UUIDs survive edits made this way; `delete` reports any references it leaves dangling.
 
-**Prefer `replace_declaration` over delete + add.** Replacing preserves the UUID, which keeps cross-references, call graphs, and derived analysis data stable. Delete + add generates a new UUID and breaks any external references.
-
-**Prefer `add_method` / `add_field` over `replace_declaration` for the whole class.** Adding a method or field is surgical — it touches only the new addition. Replacing the entire class re-parses everything and risks formatting changes.
-
-**Always check `dangling_refs` after `delete_declaration`.** The response tells you exactly which declarations in the same file reference the deleted one. Fix these before moving on.
+**Prefer editing one declaration over rewriting a file.** Whether in an editor or the SDK, touching only the declaration you mean to change keeps the rest of the file's UUIDs, cross-references and derived analysis stable.
 
 ---
 
@@ -106,7 +94,7 @@ reload_module({ path: "/path/to/changed_file.pluto" })
 load_project({ path: "/path/to/project" })
 ```
 
-**Write tools auto-refresh the cache.** When you use `add_declaration`, `replace_declaration`, etc., the MCP server writes to disk and updates the cache atomically. You don't need to call `reload_module` after your own writes.
+**Your own edits are external edits.** The server cannot see a file change until you `reload_module` it (or `load_project` again). Make that call right after saving, before any inspection tool.
 
 **Check staleness before complex operations.** Before a multi-step refactor, run `module_status` to make sure you're working with current data. Editing a stale module risks conflicting with external changes.
 
@@ -126,7 +114,7 @@ stdlib_docs({ module: "collections" })
 
 **Available language topics:** `types`, `operators`, `statements`, `declarations`, `strings`, `errors`, `closures`, `generics`, `modules`, `contracts`, `concurrency`, `gotchas`
 
-**Available stdlib modules:** `strings`, `math`, `fs`, `json`, `http`, `net`, `socket`, `collections`, `io`, `random`, `time`
+**Stdlib modules with embedded docs:** `strings`, `math`, `fs`, `json`, `http`, `net`, `socket`, `collections`, `io`, `random`, `time`, `compress` (the other modules are documented in the book and in their source)
 
 **Check the `gotchas` topic.** It covers common pitfalls like newline sensitivity, empty struct literals, and generic syntax ambiguities.
 
@@ -139,30 +127,29 @@ When making changes that affect multiple files, follow this order:
 ### Adding a new declaration used by other files
 
 ```
-1. add_declaration in the defining module  → check
-2. Verify it compiles: check({ path: "defining_module.pluto" })
-3. Update importing modules: replace_declaration in each caller → check each
-4. Final validation: run or test on the entry point
+1. Add the declaration to the defining module → reload_module → check
+2. Update each importing module → reload_module → check each
+3. Final validation: run or test on the entry point
 ```
 
 ### Renaming a declaration
 
-`rename_declaration` updates references within the same file but **not** across modules. Handle cross-module updates manually:
+A rename touches every module that refers to the name. Let the server find them first:
 
 ```
-1. usages_of({ uuid: "..." })  → find all cross-module callers
-2. rename_declaration in the defining file
-3. replace_declaration in each calling file to use the new name
-4. check each modified file
+1. usages_of({ uuid: "..." })  → find all callers, across modules
+2. Rename in the defining file
+3. Update each calling file
+4. reload_module + check each modified file
 ```
 
 ### Deleting a declaration
 
 ```
 1. usages_of({ uuid: "..." })  → find all usages
-2. Update or remove all cross-module callers first
-3. delete_declaration  → check dangling_refs for intra-file issues
-4. check the file
+2. Update or remove all callers first
+3. Delete the declaration
+4. reload_module + check the file
 ```
 
 **Always update callers before deleting the callee.** If you delete first, the callers will have dangling references and `check` will report errors you already knew about.
@@ -173,13 +160,7 @@ When making changes that affect multiple files, follow this order:
 
 ### Path Safety
 
-**All write operations are sandboxed** within the project root established by `load_project`. The server validates every write path to prevent:
-
-- Writing outside the project directory
-- Directory traversal attacks (`../../../etc/passwd`)
-- Symlink escapes
-
-If a write tool returns a path safety error, it means the target path resolves outside the project root. This is a hard block — you cannot bypass it.
+Paths passed to `load_module` and `reload_module` are canonicalised and checked against the project root established by `load_project`; a path that resolves outside it (directory traversal, symlink escape) is rejected.
 
 ### UUID Stability
 
@@ -188,7 +169,7 @@ If a write tool returns a path safety error, it means the target path resolves o
 UUIDs are lost when:
 - A declaration is deleted and re-added (new UUID assigned)
 - A `.pluto` file is recreated from scratch (all UUIDs regenerated)
-- The file is synced from `.pt` without UUID hints
+- A `.pt` file is re-parsed without UUID hints (`pluto sync` matches by hint, then by name)
 
 Use `pretty_print` with `include_uuid_hints: true` to preserve UUIDs in text format:
 
@@ -200,14 +181,6 @@ pretty_print({ path: "...", include_uuid_hints: true })
 //     return a + b
 // }
 ```
-
-### Source Preservation
-
-**Write tools modify source text on disk.** They don't just update the AST — they write the actual `.pluto` source file. This means:
-
-- Formatting may change (the pretty-printer normalizes whitespace)
-- Comments outside declarations may be affected
-- The file is always valid Pluto after a write (parsed before writing)
 
 ---
 
@@ -226,18 +199,9 @@ pretty_print({ path: "...", include_uuid_hints: true })
 
 ### Batch Logically
 
-If you need to make multiple related changes to the same file, consider:
-- Using `replace_declaration` for each changed declaration (rather than replacing the whole file)
-- Running `check` once after all changes, not after each one, if the changes are interdependent
-- Using `add_declaration` with multiple declarations in a single source string:
-
-```
-add_declaration({
-  path: "...",
-  source: "fn foo() int { return 1 }\n\nfn bar() int { return 2 }"
-})
-// Both declarations added in one call
-```
+If you need to make multiple related changes to the same file:
+- Make them all, then `reload_module` once and `check` once, if the changes are interdependent
+- Keep each change scoped to the declaration it concerns rather than rewriting the file
 
 ### Call Graph Depth
 
@@ -249,19 +213,13 @@ add_declaration({
 
 ## 10. Common Anti-Patterns
 
-### Writing raw source files directly
+### Querying before reloading
 
-Don't bypass the MCP server by writing `.pluto` files directly (e.g., via filesystem tools). The MCP server:
-- Parses the source to validate it's correct Pluto
-- Assigns UUIDs to new declarations
-- Updates the module cache
-- Validates path safety
-
-Writing directly skips all of these. If you must write directly, call `reload_module` afterward.
+The inspection tools answer from the cached AST. After editing a file — by hand or through `pluto-sdk` — call `reload_module` before `list_declarations`, `get_declaration`, `usages_of`, or `call_graph`, or they will describe the old version.
 
 ### Ignoring check results
 
-Don't assume a write succeeded just because the tool returned success. The write tool confirms the source was valid Pluto and was written to disk, but it doesn't type-check. A syntactically valid declaration can still have type errors. Always `check` after writes.
+A file that parses is not a file that type-checks. Always `check` after an edit; a syntactically valid declaration can still break callers elsewhere.
 
 ### Over-relying on names instead of UUIDs
 
@@ -278,7 +236,7 @@ get_declaration({ path: "...", uuid: "def..." })
 
 ### Loading the whole project to check one file
 
-`check` reads from disk and doesn't require the file to be loaded. If you just need to validate a single file, you can `check` it directly without loading the entire project (as long as you don't need write tools).
+`check` reads from disk and doesn't require the file to be loaded. If you just need to validate a single file, you can `check` it directly without loading the entire project.
 
 ### Forgetting stdlib path
 
