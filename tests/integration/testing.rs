@@ -139,6 +139,19 @@ test "will fail" {
     assert!(stderr.contains("expected 1 to equal 2"));
 }
 
+// Floats print in their shortest round-trip form, so a near miss is visible
+// instead of both sides reading "0.300000".
+#[test]
+fn test_failing_float_equality_shows_full_precision() {
+    let (_, stderr, code) = compile_test_and_run(r#"
+test "will fail" {
+    expect(0.1 + 0.2).to_equal(0.3)
+}
+"#);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("expected 0.30000000000000004 to equal 0.3"), "{stderr}");
+}
+
 #[test]
 fn test_failing_to_be_true() {
     let (_, stderr, code) = compile_test_and_run(r#"

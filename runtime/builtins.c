@@ -4289,7 +4289,12 @@ void __pluto_expect_equal_int(long actual, long expected, long line) {
 
 void __pluto_expect_equal_float(double actual, double expected, long line) {
     if (actual != expected) {
-        fprintf(stderr, "FAIL (line %ld): expected %f to equal %f\n", line, actual, expected);
+        // Shortest round-trip form (what print uses), so two floats that
+        // differ only past the sixth decimal do not both display as 0.300000.
+        char a[40], e[40];
+        __pluto_format_double(actual, a, sizeof a);
+        __pluto_format_double(expected, e, sizeof e);
+        fprintf(stderr, "FAIL (line %ld): expected %s to equal %s\n", line, a, e);
         test_fail_exit();
     }
 }
