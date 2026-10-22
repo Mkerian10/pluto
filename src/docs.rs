@@ -115,7 +115,7 @@ fn types_doc() -> String {
 - `42`, `-7` — int
 - `3.14`, `-0.5` — float
 - `true`, `false` — bool
-- `"hello"` — string (supports interpolation with `{expr}`)
+- `"hello"` — string; `f"hello {name}"` interpolates (plain `"..."` never does)
 - `[1, 2, 3]` — array
 - `Map<string, int> { "a": 1, "b": 2 }` — map literal
 - `Set<int> { 1, 2, 3 }` — set literal
@@ -277,7 +277,7 @@ fn add(a: int, b: int) int {
 }
 
 pub fn greet(name: string) string {
-    return "hello {name}"
+    return f"hello {name}"
 }
 ```
 - `pub` makes the function visible to other modules
@@ -393,14 +393,15 @@ fn strings_doc() -> String {
     r#"## Strings
 
 ### String interpolation
-Pluto uses `{expr}` inside double-quoted strings for interpolation:
+Only an `f`-prefixed string interpolates; `{expr}` inside it is evaluated and spliced in. A plain `"..."` string never interpolates — `"{x}"` is the literal text `{x}`.
 ```
 let name = "world"
-let greeting = "hello {name}"
-let math = "1 + 2 = {1 + 2}"
+let greeting = f"hello {name}"
+let math = f"1 + 2 = {1 + 2}"
+let literal = "{name}"            // the five characters {name}
+let braces = f"use {{braces}}"    // use {braces}  (double a brace to escape it)
 ```
-
-**Important:** Curly braces `{` and `}` inside strings always trigger interpolation. There is no escape sequence for literal braces. If you need literal braces, store them in a variable or use a function.
+Interpolated values may be int, float, bool, string or byte; class instances cannot be interpolated directly.
 
 ### String methods (built-in)
 - `.len()` — returns int length
@@ -409,13 +410,17 @@ let math = "1 + 2 = {1 + 2}"
 - `.ends_with(s)` — returns bool
 - `.to_int()` — returns `int?` (nullable, none if parse fails or overflows; surrounding whitespace allowed). For a typed error instead, use `strings.parse_int`
 - `.to_float()` — returns `float?` (nullable, none if parse fails). For a typed error instead, use `strings.parse_float`
-- `.substring(start, end)` — returns substring
-- `.index_of(s)` — returns int (-1 if not found)
+- `.substring(offset, len)` — returns `len` bytes starting at `offset` (clamped to the string)
+- `.char_at(i)` / `.byte_at(i)` — one-character string / byte value at index `i`
+- `.index_of(s)` / `.last_index_of(s)` — returns int (-1 if not found)
+- `.count(s)` — non-overlapping occurrences
 - `.replace(old, new)` — returns new string
-- `.split(delimiter)` — returns `[string]`
-- `.trim()` — returns trimmed string
-- `.to_upper()` — returns uppercase string
-- `.to_lower()` — returns lowercase string
+- `.split(delimiter)` — returns `[string]`; `""` splits into characters
+- `.trim()` / `.trim_start()` / `.trim_end()` — whitespace-stripped copy
+- `.is_empty()` / `.is_whitespace()` — returns bool
+- `.repeat(n)` — `n` concatenated copies
+- `.to_upper()` / `.to_lower()` — case-changed copy
+- `.to_bytes()` — returns `bytes`
 
 ### String concatenation
 Use `+` to concatenate strings:
@@ -699,16 +704,11 @@ let result = task.get() catch { // catch error
 fn gotchas_doc() -> String {
     r#"## Known Gotchas
 
-### Operator precedence with `!`
-`!expr.method()` parses as `(!expr).method()`, NOT `!(expr.method())`.
-Always use parentheses: `!(expr.method())`.
+### Plain strings do not interpolate
+`"hello {name}"` is the literal text `hello {name}`. Interpolation needs the `f` prefix: `f"hello {name}"`. Inside an f-string, write `{{` and `}}` for literal braces.
 
-### No literal braces in strings
-`{` and `}` in strings always trigger interpolation. There is no escape sequence.
-Workaround: use a variable: `let brace = "{" // won't work either` — this is a known limitation.
-
-### Empty struct literals don't parse
-`Foo {}` with zero fields doesn't work. Always add at least one field to classes.
+### Variables are immutable by default
+`let x = 1` cannot be reassigned; use `let mut x = 1` when the binding will change.
 
 ### No array concatenation with `+`
 Arrays cannot be concatenated with `+`. Build arrays by iterating or use stdlib functions.
@@ -724,8 +724,8 @@ The right-shift operator `>>` is parsed as two `>` tokens (to avoid conflict wit
 - Use `error` and `raise` / `!` / `catch` for failure conditions
 - They are separate systems — don't use nullable for error handling or vice versa
 
-### `as` cast limitations
-Only `int↔float` and `int↔bool` casts are supported. No string conversions via `as`.
+### No `as` casts
+`x as T` is a syntax error. Conversions are named methods: `n.to_float()`, `f.to_int()` (returns `int?`, `none` for NaN/infinity/out of range), `n.to_byte()` (returns `byte?`, narrowed to `byte` when the value is provably in 0..255), `n.low_byte()`, `b.to_int()`, `flag.to_int()`, and `n != 0` for int → bool. Strings convert with `s.to_int()` / `s.to_float()` (nullable) or `strings.parse_int` / `strings.parse_float` (typed errors).
 
 ### Method resolution
 String/array built-in methods (`.len()`, `.contains()`, etc.) are compiler intrinsics, not regular methods. They cannot be overridden or called on other types."#
