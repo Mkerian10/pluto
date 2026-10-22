@@ -1,0 +1,62 @@
+// SATB stress: objects reachable at the snapshot only through a slot of a
+// not-yet-scanned container are cut out of it and moved into objects
+// allocated during the cycle (black, never scanned). Every cut must be
+// logged by the barrier or the object is lost.
+class Node {
+    v: int
+    next: Node?
+}
+
+class Holder {
+    slot: Node?
+    inner: Node?
+}
+
+fn main() {
+    let mut rows: [[Node]] = []
+    let mut r = 0
+    while r < 200 {
+        let mut row: [Node] = []
+        let mut i = 0
+        while i < 100 {
+            row.push(Node { v: r * 100 + i, next: Node { v: i, next: none } })
+            i = i + 1
+        }
+        rows.push(row)
+        r = r + 1
+    }
+    let mut keep: [Holder] = []
+    let mut j = 0
+    while j < 300000 {
+        let mut row = rows[(j * 7) % 200]
+        let k = j % 100
+        let mut old = row[k]
+        row[k] = Node { v: j, next: none }
+        let inner = old.next
+        old.next = none
+        if j % 4 == 0 {
+            keep.push(Holder { slot: old, inner: inner })
+        }
+        if keep.len() > 3000 {
+            keep = []
+        }
+        j = j + 1
+    }
+    let mut sum = 0
+    for h in keep {
+        let s = h.slot
+        if s != none {
+            sum = sum + s?.v
+        }
+        let n = h.inner
+        if n != none {
+            sum = sum + n?.v
+        }
+    }
+    for row in rows {
+        for n in row {
+            sum = sum + n.v
+        }
+    }
+    print(f"sum={sum} keep={keep.len()}")
+}

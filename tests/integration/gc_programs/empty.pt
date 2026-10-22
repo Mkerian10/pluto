@@ -1,0 +1,35 @@
+// Empty containers held by long-lived objects. An empty array literal has
+// capacity 0; its backing store must still be promoted together with its
+// handle when the holder is tenured (a zero-size payload once pointed one
+// past its buffer, which was then missed by promotion and freed under the
+// shared handle). Later pushes grow them from that state.
+class Holder {
+    id: int
+    items: [int]
+    tags: Map<int, string>
+}
+
+fn main() {
+    let mut keep: [Holder] = []
+    let mut i = 0
+    while i < 8000 {
+        keep.push(Holder { id: i, items: [], tags: Map<int, string> {} })
+        let junk = f"churn-{i}-{i * 7}"
+        if junk.len() == 0 {
+            print("unreachable")
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < 8000 {
+        let mut h = keep[i]
+        h.items.push(i)
+        h.tags[i] = f"t{i}"
+        i = i + 5
+    }
+    let mut total = 0
+    for h in keep {
+        total = total + h.items.len() + h.tags.len()
+    }
+    print(f"total={total}")
+}

@@ -1,0 +1,52 @@
+// Entity-heavy sharing (the D2 worst case): every value a task creates is
+// stored into a shared entity, so it must be promoted, and garbage only
+// arises in the shared heap. Thread-local heaps cannot help here; the cost
+// is promotion plus global collections.
+class Record {
+    id: int
+    payload: string
+}
+
+object Store {
+    recent: Map<int, Record>
+    writes: int
+
+    fn put(mut self, r: Record) {
+        self.recent[r.id % 4096] = r
+        self.writes = self.writes + 1
+    }
+
+    fn size(self) int {
+        return self.recent.len()
+    }
+
+    fn total(self) int {
+        return self.writes
+    }
+}
+
+fn writer(mut store: Store, seed: int) int {
+    let mut i = 0
+    let mut acc = 0
+    while i < 60000 {
+        let r = Record { id: seed * 1000003 + i, payload: f"p{seed}-{i}" }
+        store.put(r)
+        acc = acc + r.payload.len()
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() {
+    let store = Store { recent: Map<int, Record> {}, writes: 0 }
+    let t0 = spawn writer(store, 0)
+    let t1 = spawn writer(store, 1)
+    let t2 = spawn writer(store, 2)
+    let t3 = spawn writer(store, 3)
+    let t4 = spawn writer(store, 4)
+    let t5 = spawn writer(store, 5)
+    let t6 = spawn writer(store, 6)
+    let t7 = spawn writer(store, 7)
+    let acc = t0.get() + t1.get() + t2.get() + t3.get() + t4.get() + t5.get() + t6.get() + t7.get()
+    print(f"check={acc + store.size() + store.total()}")
+}

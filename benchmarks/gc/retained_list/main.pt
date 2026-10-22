@@ -1,0 +1,36 @@
+// Large retained pointer graph (300k-node linked list) plus steady churn:
+// every collection must re-mark the whole long-lived list.
+class Node {
+    a: int
+    b: int
+    next: Node?
+}
+
+fn main() {
+    let mut keep: Node? = none
+    let mut i = 0
+    while i < 300000 {
+        keep = Node { a: i, b: i + 1, next: keep }
+        i = i + 1
+    }
+    let mut acc = 0
+    let mut r = 0
+    while r < 600 {
+        let mut g: Node? = none
+        let mut j = 0
+        while j < 2000 {
+            g = Node { a: j, b: j, next: g }
+            j = j + 1
+        }
+        if g != none {
+            acc = acc + g.a
+        }
+        r = r + 1
+    }
+    let mut cur = keep
+    while cur != none {
+        acc = acc + cur.a
+        cur = cur.next
+    }
+    print(f"check={acc}")
+}

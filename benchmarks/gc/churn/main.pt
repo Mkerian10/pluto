@@ -1,0 +1,16 @@
+// Pure allocation throughput: millions of tiny objects, near-zero live set.
+class Obj {
+    a: int
+    b: int
+}
+
+fn main() {
+    let mut acc = 0
+    let mut i = 0
+    while i < 4000000 {
+        let o = Obj { a: i, b: i + 1 }
+        acc = acc + o.b - o.a
+        i = i + 1
+    }
+    print(f"check={acc}")
+}
