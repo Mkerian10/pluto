@@ -170,12 +170,22 @@ fn on_compile_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
 /// Compile a source string to object bytes (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// No file I/O or linking. Useful for compile-fail tests that only need to check errors.
 pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
+    compile_to_object_inner(source, false)
+}
+
+/// `require_entry` makes a program without `fn main`/`app`/`stage` a compile
+/// error. Object-only compilation stays permissive (an object file with no
+/// main is a legitimate artifact, and compile-fail tests rely on it);
+/// producing a binary is where an entry point must exist.
+fn compile_to_object_inner(source: &str, require_entry: bool) -> Result<Vec<u8>, CompileError> {
     on_compile_stack(|| {
             let mut program = parse_source(&source)?;
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
-            ensure_entry_point(&program)?;
+            if require_entry {
+                ensure_entry_point(&program)?;
+            }
             codegen::codegen(&program, &result.env, &source, None)
     })
 }
@@ -187,7 +197,6 @@ pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<Com
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
-            ensure_entry_point(&program)?;
             let obj = codegen::codegen(&program, &result.env, &source, None)?;
             Ok((obj, result.warnings))
     })
@@ -196,7 +205,7 @@ pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<Com
 /// Compile a source string directly (single-file, no module resolution).
 /// Used by tests and backward-compatible API.
 pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
-    let object_bytes = compile_to_object(source)?;
+    let object_bytes = compile_to_object_inner(source, true)?;
 
     let obj_path = output_path.with_extension("o");
     std::fs::write(&obj_path, &object_bytes)

@@ -136,9 +136,12 @@ fn app_main_must_be_void() {
 // die with "Undefined symbols: _main"; it is a compile error now.
 #[test]
 fn file_without_main_or_app_is_a_diagnostic() {
-    compile_should_fail_with(
-        "fn helper() int {\n    return 1\n}\n",
-        "no entry point",
-    );
-    compile_should_fail_with("", "no entry point");
+    // Object-only compilation stays permissive (see edge_cases::empty_file);
+    // the check fires where a binary would be produced.
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    for src in ["fn helper() int {\n    return 1\n}\n", ""] {
+        let err = pluto::compile(src, &bin).expect_err("a main-less program must not link");
+        assert!(err.to_string().contains("no entry point"), "{err}");
+    }
 }
