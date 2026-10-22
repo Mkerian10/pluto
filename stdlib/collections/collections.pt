@@ -113,6 +113,9 @@ pub fn take<T>(arr: [T], n: int) [T] {
 pub fn drop<T>(arr: [T], n: int) [T] {
     let mut result: [T] = []
     let mut start = n
+    if start < 0 {
+        start = 0
+    }
     if start > arr.len() {
         start = arr.len()
     }

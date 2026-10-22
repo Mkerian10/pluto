@@ -197,6 +197,12 @@ test "take zero" {
     expect(result.len()).to_equal(0)
 }
 
+test "take negative is empty" {
+    let nums = [1, 2, 3]
+    let result = collections.take(nums, -1)
+    expect(result.len()).to_equal(0)
+}
+
 // -- drop --
 
 test "drop first n" {
@@ -217,6 +223,13 @@ test "drop zero" {
     let nums = [1, 2, 3]
     let result = collections.drop(nums, 0)
     expect(result.len()).to_equal(3)
+}
+
+test "drop negative keeps everything" {
+    let nums = [1, 2, 3]
+    let result = collections.drop(nums, -1)
+    expect(result.len()).to_equal(3)
+    expect(result[0]).to_equal(1)
 }
 
 // -- zip --
