@@ -246,7 +246,7 @@ fn warning_in_source(source_len: usize, span: &Span) -> bool {
 }
 
 /// Render a CompileWarning with ariadne for nice terminal output (yellow).
-pub fn render_warning(source: &str, _filename: &str, warning: &CompileWarning) {
+pub fn render_warning(source: &str, filename: &str, warning: &CompileWarning) {
     use ariadne::{Label, Report, ReportKind, Source};
 
     if !warning_in_source(source.len(), &warning.span) {
@@ -256,34 +256,36 @@ pub fn render_warning(source: &str, _filename: &str, warning: &CompileWarning) {
         return;
     }
 
+    // The filename is the source id, so the frame header reads
+    // `[path/to/file.pt:2:9]` rather than `[<unknown>:2:9]`.
     // Carry the message on the header as well as the label, so it stays
     // readable even if the code frame can't be rendered.
-    Report::build(ReportKind::Warning, (), warning.span.start)
+    Report::build(ReportKind::Warning, filename, warning.span.start)
         .with_message(&warning.msg)
         .with_label(
-            Label::new(warning.span.start..warning.span.end)
+            Label::new((filename, warning.span.start..warning.span.end))
                 .with_message(&warning.msg),
         )
         .finish()
-        .eprint(Source::from(source))
+        .eprint((filename, Source::from(source)))
         .unwrap();
 }
 
 /// Render a CompileError with ariadne for nice terminal output.
-pub fn render_error(source: &str, _filename: &str, err: &CompileError) {
+pub fn render_error(source: &str, filename: &str, err: &CompileError) {
     use ariadne::{Label, Report, ReportKind, Source};
 
     match err {
         CompileError::Syntax { msg, span } | CompileError::Type { msg, span } => {
             let kind_str = if matches!(err, CompileError::Syntax { .. }) { "syntax" } else { "type" };
-            Report::build(ReportKind::Error, (), span.start)
+            Report::build(ReportKind::Error, filename, span.start)
                 .with_message(format!("{kind_str} error"))
                 .with_label(
-                    Label::new(span.start..span.end)
+                    Label::new((filename, span.start..span.end))
                         .with_message(msg),
                 )
                 .finish()
-                .eprint(Source::from(source))
+                .eprint((filename, Source::from(source)))
                 .unwrap();
         }
         CompileError::Codegen { msg }
