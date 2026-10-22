@@ -775,7 +775,14 @@ Import: `import std.strings`
 | `starts_with` | `(s: string, prefix: string) bool` | Check prefix |
 | `ends_with` | `(s: string, suffix: string) bool` | Check suffix |
 | `index_of` | `(haystack: string, needle: string) int` | Find first occurrence (-1 if not found) |
+| `last_index_of` | `(haystack: string, needle: string) int` | Find last occurrence (-1 if not found) |
+| `count` | `(haystack: string, needle: string) int` | Non-overlapping occurrences |
 | `trim` | `(s: string) string` | Remove leading/trailing whitespace |
+| `trim_start` | `(s: string) string` | Remove leading whitespace |
+| `trim_end` | `(s: string) string` | Remove trailing whitespace |
+| `is_empty` | `(s: string) bool` | Length == 0 |
+| `is_whitespace` | `(s: string) bool` | Empty or all whitespace |
+| `repeat` | `(s: string, count: int) string` | Concatenate count copies (non-positive count gives "") |
 | `to_upper` | `(s: string) string` | Convert to uppercase |
 | `to_lower` | `(s: string) string` | Convert to lowercase |
 | `replace` | `(s: string, old: string, new_str: string) string` | Replace all occurrences |
@@ -912,6 +919,7 @@ enum Seek {
 | `write_all_bytes` | `(path: string, data: bytes)` | Write binary, overwriting; close errors surfaced (fallible) |
 | `append_all_bytes` | `(path: string, data: bytes)` | Append binary; close errors surfaced (fallible) |
 | `replace_all` | `(path: string, content: string)` | Atomic durable replace: temp + sync + rename + dir fsync. FileError ⇒ old file intact; SyncError ⇒ rename landed, durability unwarranted |
+| `replace_all_bytes` | `(path: string, data: bytes)` | Same atomic durable replace for binary content, same error contract |
 | `sync_dir` | `(path: string)` | fsync a directory (crash-safe rename/create/remove); raises SyncError |
 | `stat` | `(path: string) Metadata` | File metadata (raises NotFound \| FileError) |
 | `exists` | `(path: string) bool` | Check if path exists |
@@ -939,38 +947,60 @@ fn stdlib_json() -> String {
 Import: `import std.json`
 
 ## Error
-`JsonError { message: string }` — raised by parse and typed accessors.
+`JsonError { message: string }` — raised by `parse` (malformed input) and by `get_int` (value is not an integer).
 
 ## Json Class
-Represents a JSON value. Constructed via factory functions or `parse()`.
+Represents a JSON value. Build one with the factory functions, or get one from `parse()`.
+Kinds: null, bool, int, float, string, array, object. Numbers parse as `int` when they are
+integer literals that fit 64 bits and as `float` otherwise.
 
 ### Factory Functions
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `null` | `() Json` | Create JSON null |
-| `bool` | `(value: bool) Json` | Create JSON boolean |
-| `int` | `(value: int) Json` | Create JSON number (from int) |
-| `float` | `(value: float) Json` | Create JSON number (from float) |
-| `string` | `(value: string) Json` | Create JSON string |
-| `array` | `(elements: [Json]) Json` | Create JSON array |
-| `object` | `(keys: [string], values: [Json]) Json` | Create JSON object |
-| `parse` | `(text: string) Json` | Parse JSON string (fallible) |
+| `null` | `() Json` | JSON null |
+| `bool` | `(v: bool) Json` | JSON boolean |
+| `int` | `(v: int) Json` | JSON number from an int |
+| `float` | `(v: float) Json` | JSON number from a float |
+| `string` | `(v: string) Json` | JSON string |
+| `array` | `() Json` | Empty JSON array; fill with `.push` |
+| `object` | `() Json` | Empty JSON object; fill with `.set` |
+| `parse` | `(text: string) Json` | Parse JSON text (fallible: `JsonError`) |
+
+### Kind Predicates
+`.is_null()`, `.is_bool()`, `.is_int()`, `.is_float()`, `.is_string()`, `.is_array()`, `.is_object()` — each `() bool`.
 
 ### Json Methods
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `.to_string(self)` | `string` | Serialize to JSON string |
-| `.get(self, key: string)` | `Json` | Get object field (fallible) |
-| `.get_index(self, index: int)` | `Json` | Get array element (fallible) |
-| `.as_int(self)` | `int` | Extract as int (fallible) |
-| `.as_float(self)` | `float` | Extract as float (fallible) |
-| `.as_bool(self)` | `bool` | Extract as bool (fallible) |
-| `.as_string(self)` | `string` | Extract as string (fallible) |
-| `.as_array(self)` | `[Json]` | Extract as array (fallible) |
-| `.len(self)` | `int` | Array/object length (fallible) |
-| `.keys(self)` | `[string]` | Object keys (fallible) |
-| `.is_null(self)` | `bool` | Check if null |
-| `.kind(self)` | `string` | Type name: "null", "bool", "number", "string", "array", "object" |"#
+| `.get_bool()` | `bool` | Value of a bool node |
+| `.get_int()` | `int` | Value of an int node, or a float node that holds an integer (fallible: `JsonError`) |
+| `.get_float()` | `float` | Value of a number node (ints widen) |
+| `.get_string()` | `string` | Value of a string node |
+| `.get(key: string)` | `Json` | Object field by key; JSON null when absent or not an object |
+| `.at(index: int)` | `Json` | Array element by index (out of range is a runtime defect) |
+| `.len()` | `int` | Element count of an array, key count of an object, 0 otherwise |
+| `.set(key: string, value: Json)` | | Insert or overwrite an object field (`mut self`) |
+| `.push(value: Json)` | | Append to an array (`mut self`) |
+| `.to_string()` | `string` | Serialize to compact JSON text |
+
+### Example
+```pluto
+import std.json
+
+fn main() {
+    let doc = json.parse("{\"name\": \"pluto\", \"tags\": [1, 2]}")!
+    print(doc.get("name").get_string())      // pluto
+    print(doc.get("tags").at(1).get_int()!)  // 2
+    print(doc.get("missing").is_null())      // true
+
+    let mut out = json.object()
+    out.set("ok", json.bool(true))
+    let mut arr = json.array()
+    arr.push(json.int(7))
+    out.set("xs", arr)
+    print(out.to_string())                   // {"ok":true,"xs":[7]}
+}
+```"#
         .to_string()
 }
 
@@ -1070,16 +1100,20 @@ BSD-level socket operations. Lower level than `std.net`.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `create` | `() int` | Create a TCP socket, returns fd |
-| `bind` | `(fd: int, port: int)` | Bind socket to port (fallible) |
+| `create` | `(domain: int, sock_type: int, protocol: int) int` | Create a socket (`2, 1, 0` = IPv4 TCP), returns fd or -1 |
+| `bind` | `(fd: int, host: string, port: int) int` | Bind to host:port; host may be an IPv4 literal or a hostname; 0 on success, -1 on failure |
 | `listen` | `(fd: int, backlog: int)` | Start listening (fallible) |
 | `accept` | `(fd: int) int` | Accept connection, returns client fd (fallible) |
-| `connect` | `(fd: int, host: string, port: int)` | Connect to host:port (fallible) |
-| `read` | `(fd: int, size: int) string` | Read from socket (fallible) |
-| `write` | `(fd: int, data: string) int` | Write to socket, returns bytes written (fallible) |
+| `connect` | `(fd: int, host: string, port: int) int` | Connect to host:port; host may be an IPv4 literal or a hostname; 0 on success, -1 on failure |
+| `read` | `(fd: int, max_bytes: int) string` | Read up to max_bytes as a string |
+| `read_bytes` | `(fd: int, max_bytes: int) bytes` | Read up to max_bytes as binary |
+| `write` | `(fd: int, data: string) int` | Write a string, returns bytes written or -1 |
+| `write_bytes` | `(fd: int, data: bytes) int` | Write binary, returns bytes written or -1 |
 | `close` | `(fd: int)` | Close socket |
 | `set_reuseaddr` | `(fd: int)` | Set SO_REUSEADDR option |
-| `get_port` | `(fd: int) int` | Get bound port number (useful with port 0) |"#
+| `get_port` | `(fd: int) int` | Get bound port number (useful with port 0) |
+| `set_read_timeout` | `(fd: int, ms: int) int` | Per-fd read deadline in ms (0 clears); 0 on success |
+| `read_timed_out` | `() int` | 1 if the last read on this thread stopped at its deadline rather than on data or an error |"#
         .to_string()
 }
 
@@ -1121,6 +1155,10 @@ Used by `zip` and `enumerate`.
 | `sum` | `(arr: [int]) int` | Sum int array |
 | `sum_float` | `(arr: [float]) float` | Sum float array |
 | `sort_by` | `<T>(arr: [T], less: fn(T, T) bool) [T]` | Stable sort by a strict less-than comparator |
+| `try_map` | `<T, U>(arr: [T], f: fn(T) U!) [U]` | `map` with a fallible function; the first raise propagates |
+| `try_filter` | `<T>(arr: [T], f: fn(T) bool!) [T]` | `filter` with a fallible predicate |
+| `try_fold` | `<T, U>(arr: [T], init: U, f: fn(U, T) U!) U` | `fold` with a fallible step |
+| `try_for_each` | `<T>(arr: [T], f: fn(T)!)` | `for_each` with a fallible action |
 | `sort` | `(arr: [int]) [int]` | Stable ascending sort of ints |
 | `sort_floats` | `(arr: [float]) [float]` | Stable ascending sort of floats |
 | `sort_strings` | `(arr: [string]) [string]` | Stable lexicographic sort (`strings.compare` order) |
