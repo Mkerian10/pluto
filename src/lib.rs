@@ -130,6 +130,22 @@ pub fn parse_for_editing(source: &str) -> Result<parser::ast::Program, CompileEr
     Ok(program)
 }
 
+/// A non-test program must have something to run: a top-level `fn main`,
+/// an `app` (its `main` is synthesized), or a `stage` (same). Without one
+/// the object links against nothing and the user used to get the linker's
+/// "Undefined symbols: _main" dump instead of a diagnostic.
+fn ensure_entry_point(program: &Program) -> Result<(), CompileError> {
+    let has_main = program.functions.iter().any(|f| f.node.name.node == "main");
+    if has_main || program.app.is_some() || !program.stages.is_empty() {
+        return Ok(());
+    }
+    Err(CompileError::codegen(
+        "no entry point: define a top-level `fn main()` or an `app` with `fn main(self)` \
+         (a library module can be imported, but not compiled or run on its own)"
+            .to_string(),
+    ))
+}
+
 /// Stack size for every compilation thread. The parser, type checker and
 /// code generator all recurse on expression depth, and a debug build's
 /// frames are large: ~150 nested parentheses overflowed the 8 MB main
@@ -159,6 +175,7 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
+            ensure_entry_point(&program)?;
             codegen::codegen(&program, &result.env, &source, None)
     })
 }
@@ -170,6 +187,7 @@ pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<Com
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
+            ensure_entry_point(&program)?;
             let obj = codegen::codegen(&program, &result.env, &source, None)?;
             Ok((obj, result.warnings))
     })
@@ -290,6 +308,7 @@ fn compile_file_impl_inner(entry_file: &Path, output_path: &Path, stdlib_root: O
     } else {
         None
     };
+    ensure_entry_point(&program)?;
     let object_bytes = codegen::codegen(&program, &result.env, &source, cov_map.as_ref())?;
 
     let obj_path = output_path.with_extension("o");

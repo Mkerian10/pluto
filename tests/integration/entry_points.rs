@@ -131,3 +131,14 @@ fn app_main_must_be_void() {
         "app main method must not have a return type",
     );
 }
+
+// A file with neither `fn main` nor an `app` used to reach the linker and
+// die with "Undefined symbols: _main"; it is a compile error now.
+#[test]
+fn file_without_main_or_app_is_a_diagnostic() {
+    compile_should_fail_with(
+        "fn helper() int {\n    return 1\n}\n",
+        "no entry point",
+    );
+    compile_should_fail_with("", "no entry point");
+}
