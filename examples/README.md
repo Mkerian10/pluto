@@ -163,7 +163,7 @@ cargo run --manifest-path ../../Cargo.toml -- run main.pt --stdlib ../../stdlib
 
 ## bytes
 
-Demonstrates the `byte` and `bytes` types: hex literals (`0xFF`), explicit casting (`as byte`/`as int`), truncation semantics, packed byte buffers (`bytes_new`, `push`, indexing), string conversion (`to_bytes`/`to_string`), iteration, unsigned ordering, bulk operations (`slice`, `extend`, `fill`, `copy_from`, `find`, `compare`, `bytes_filled`), and fixed-width integer codecs (`read_u8`/`write_u8` through `read_i64_le`/`write_i64_be`, both endiannesses).
+Demonstrates the `byte` and `bytes` types: hex literals (`0xFF`), named conversions (`to_byte`/`low_byte`/`to_int`), truncation semantics, packed byte buffers (`bytes_new`, `push`, indexing), string conversion (`to_bytes`/`to_string`), iteration, unsigned ordering, bulk operations (`slice`, `extend`, `fill`, `copy_from`, `find`, `compare`, `bytes_filled`), and fixed-width integer codecs (`read_u8`/`write_u8` through `read_i64_le`/`read_i64_be`/`write_i64_le`, both endiannesses).
 
 ```bash
 cargo run -- run examples/bytes/main.pt
@@ -247,7 +247,7 @@ cargo run -- generate-pt /tmp/main.pt
 
 ## collections-lib
 
-Demonstrates the `std.collections` functional collections library: `map`, `filter`, `fold`, `reduce`, `any`, `all`, `count`, `flat_map`, `for_each`, `reverse`, `take`, `drop`, `zip` (with `Pair`), `enumerate`, `flatten`, `sum`, and `sum_float`. Shows function composition by chaining filter, map, and fold — plus the fallible-callback variants (`try_map`, `try_filter`, `try_fold`, `try_for_each`), whose callbacks may `raise` (`fn(T) U!`); the first error propagates to the caller, which handles it with `catch`.
+Demonstrates the `std.collections` functional collections library: `map`, `filter`, `fold`, `any`, `all`, `count`, `for_each`, `reverse`, `take`, `drop`, `zip` (with `Pair`), `enumerate`, `flatten`, `sum`, and `sum_float`. Shows function composition by chaining filter, map, and fold — plus `try_map`, the fallible-callback variant whose callback may `raise` (`fn(T) U!`); the first error propagates to the caller, which handles it with `catch` (`try_filter`, `try_fold` and `try_for_each` follow the same shape).
 
 ```bash
 cargo run -- run examples/collections-lib/main.pt --stdlib stdlib
@@ -287,7 +287,7 @@ cargo run -- run examples/random/main.pt --stdlib stdlib
 
 ## nullable
 
-Demonstrates first-class nullable types: `T?` syntax for nullable types, `none` literal for absent values, `?` postfix operator for null propagation (early-return none), implicit `T` to `T?` coercion, nullable classes, and `to_int()`/`to_float()` string parsing returning nullable types.
+Demonstrates first-class nullable types: `T?` syntax for nullable types, `none` literal for absent values, `?` postfix operator for null propagation (early-return none), implicit `T` to `T?` coercion, nullable classes, and `to_int()` string parsing returning a nullable (`to_float()` works the same way).
 
 ```bash
 cargo run -- run examples/nullable/main.pt
