@@ -320,6 +320,12 @@ impl ModuleEditor {
 
         // Walk entire AST to update reference sites
         rename_references(&mut self.program, id, kind, &old_name, new_name);
+        if kind == DeclKindSimple::Function {
+            // Calls carry a target id, but a function used as a value
+            // (`let f = double`, `apply(double, 3)`) is a bare identifier.
+            let mut renamer = FnValueRenamer { old: &old_name, new: new_name, scopes: Vec::new() };
+            pluto::visit::walk_program_mut(&mut renamer, &mut self.program);
+        }
 
         Ok(())
     }
@@ -1140,7 +1146,14 @@ fn rename_in_expr(expr: &mut Expr, id: Uuid, kind: DeclKindSimple, old_name: &st
             rename_in_expr(&mut inner.node, id, kind, old_name, new_name);
             for handler in handlers {
                 match handler {
-                    CatchHandler::Wildcard { body, .. } | CatchHandler::Typed { body, .. } => rename_in_block(&mut body.node, id, kind, old_name, new_name),
+                    CatchHandler::Wildcard { body, .. } => rename_in_block(&mut body.node, id, kind, old_name, new_name),
+                    CatchHandler::Typed { error_type, body, .. } => {
+                        // Error names are top-level and unique, so the name identifies it.
+                        if kind == DeclKindSimple::Error && error_type.node == old_name {
+                            error_type.node = new_name.to_string();
+                        }
+                        rename_in_block(&mut body.node, id, kind, old_name, new_name)
+                    }
                     CatchHandler::Shorthand(body) => rename_in_expr(&mut body.node, id, kind, old_name, new_name),
                 }
             }
@@ -1151,5 +1164,122 @@ fn rename_in_expr(expr: &mut Expr, id: Uuid, kind: DeclKindSimple, old_name: &st
         }
         // Leaf expressions
         _ => {}
+    }
+}
+
+/// Renames bare-identifier references to a top-level function (function
+/// values), skipping identifiers that a local binding of the same name
+/// shadows: parameters, `let`, `for`, closure parameters, match-arm and catch
+/// bindings, channel and scope bindings.
+struct FnValueRenamer<'a> {
+    old: &'a str,
+    new: &'a str,
+    scopes: Vec<HashSet<String>>,
+}
+
+impl FnValueRenamer<'_> {
+    fn shadowed(&self) -> bool {
+        self.scopes.iter().any(|s| s.contains(self.old))
+    }
+
+    fn bind(&mut self, name: &str) {
+        if let Some(top) = self.scopes.last_mut() {
+            top.insert(name.to_string());
+        }
+    }
+
+    fn with_scope(&mut self, names: impl IntoIterator<Item = String>, f: impl FnOnce(&mut Self)) {
+        self.scopes.push(names.into_iter().collect());
+        f(self);
+        self.scopes.pop();
+    }
+}
+
+impl pluto::visit::VisitMut for FnValueRenamer<'_> {
+    fn visit_function_mut(&mut self, func: &mut Spanned<pluto::parser::ast::Function>) {
+        let params: Vec<String> = func.node.params.iter().map(|p| p.name.node.clone()).collect();
+        self.with_scope(params, |v| pluto::visit::walk_function_mut(v, func));
+    }
+
+    fn visit_trait_mut(&mut self, trait_decl: &mut Spanned<pluto::parser::ast::TraitDecl>) {
+        for method in &mut trait_decl.node.methods {
+            let params: Vec<String> = method.params.iter().map(|p| p.name.node.clone()).collect();
+            if let Some(body) = &mut method.body {
+                self.with_scope(params, |v| pluto::visit::VisitMut::visit_block_mut(v, body));
+            }
+        }
+    }
+
+    fn visit_block_mut(&mut self, block: &mut Spanned<Block>) {
+        self.with_scope([], |v| pluto::visit::walk_block_mut(v, block));
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
+        match &mut stmt.node {
+            Stmt::Let { name, value, .. } => {
+                // The initializer sees the outer binding: `let double = double`.
+                self.visit_expr_mut(value);
+                let name = name.node.clone();
+                self.bind(&name);
+            }
+            Stmt::LetChan { sender, receiver, .. } => {
+                let names = [sender.node.clone(), receiver.node.clone()];
+                pluto::visit::walk_stmt_mut(self, stmt);
+                for n in names {
+                    self.bind(&n);
+                }
+            }
+            Stmt::For { var, iterable, body } => {
+                self.visit_expr_mut(iterable);
+                let var = var.node.clone();
+                self.with_scope([var], |v| v.visit_block_mut(body));
+            }
+            Stmt::Match { expr, arms } => {
+                self.visit_expr_mut(expr);
+                for arm in arms {
+                    let names: Vec<String> = match &arm.pattern {
+                        pluto::parser::ast::MatchPattern::Variant { bindings, .. } => bindings
+                            .iter()
+                            .map(|(field, rename)| rename.as_ref().unwrap_or(field).node.clone())
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    self.with_scope(names, |v| v.visit_block_mut(&mut arm.body));
+                }
+            }
+            Stmt::Scope { seeds, bindings, body } => {
+                for seed in seeds.iter_mut() {
+                    self.visit_expr_mut(seed);
+                }
+                let names: Vec<String> = bindings.iter().map(|b| b.name.node.clone()).collect();
+                self.with_scope(names, |v| v.visit_block_mut(body));
+            }
+            _ => pluto::visit::walk_stmt_mut(self, stmt),
+        }
+    }
+
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+        match &mut expr.node {
+            Expr::Ident(name) if name == self.old && !self.shadowed() => {
+                *name = self.new.to_string();
+            }
+            Expr::Closure { params, body, .. } => {
+                let names: Vec<String> = params.iter().map(|p| p.name.node.clone()).collect();
+                self.with_scope(names, |v| v.visit_block_mut(body));
+            }
+            Expr::Catch { expr: inner, handlers } => {
+                self.visit_expr_mut(inner);
+                for handler in handlers {
+                    match handler {
+                        CatchHandler::Wildcard { var, body } | CatchHandler::Typed { var, body, .. } => {
+                            let var = var.node.clone();
+                            self.with_scope([var], |v| v.visit_block_mut(body));
+                        }
+                        CatchHandler::Shorthand(body) => self.visit_expr_mut(body),
+                    }
+                }
+            }
+            _ => pluto::visit::walk_expr_mut(self, expr),
+        }
     }
 }
