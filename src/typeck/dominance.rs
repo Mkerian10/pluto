@@ -690,8 +690,13 @@ impl<'a> Analyzer<'a> {
                 let PlutoType::Class(c) = self.type_of_expr(&object.node)? else {
                     return None;
                 };
-                let info = self.env.classes.get(&c)?;
-                info.fields
+                // Inside a generic class body `self` is the template (`Wal`,
+                // not an instantiation), whose fields live in generic_classes.
+                let fields = match self.env.classes.get(&c) {
+                    Some(info) => &info.fields,
+                    None => &self.env.generic_classes.get(&c)?.fields,
+                };
+                fields
                     .iter()
                     .find(|(n, _, _)| *n == field.node)
                     .map(|(_, t, _)| t.clone())
@@ -713,6 +718,14 @@ impl<'a> Analyzer<'a> {
                 .get(&name.node)
                 .map(|s| s.return_type.clone()),
             Expr::Propagate { expr } | Expr::Catch { expr, .. } => self.type_of_expr(&expr.node),
+            // `xs[i]` / `m[k]`: the element type, so a field access on it
+            // (`self.entries[i].data`) resolves to the right class instead of
+            // falling back to matching any guarded field with that name.
+            Expr::Index { object, .. } => match self.type_of_expr(&object.node)? {
+                PlutoType::Array(elem) => Some(*elem),
+                PlutoType::Map(_, value) => Some(*value),
+                _ => None,
+            },
             Expr::BinOp { op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod, lhs, .. } => {
                 match self.type_of_expr(&lhs.node) {
                     Some(PlutoType::Int) => Some(PlutoType::Int),
