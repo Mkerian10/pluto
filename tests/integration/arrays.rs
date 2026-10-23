@@ -291,6 +291,47 @@ fn array_contains_int_found() {
 }
 
 #[test]
+fn array_search_agrees_with_eq() {
+    // contains/index_of compare elements the way `==` does: structurally for
+    // classes, value enums, nested collections and nullables; by identity
+    // for objects; numerically for floats.
+    let out = compile_and_run_stdout(r#"
+class P {
+    x: int
+}
+
+enum E {
+    A
+    B { n: int }
+}
+
+object O {
+    v: int
+}
+
+fn main() {
+    let ps = [P { x: 1 }, P { x: 2 }]
+    print(ps.contains(P { x: 2 }))
+    print(ps.index_of(P { x: 2 }))
+    print([[1], [2]].index_of([2]))
+    print([E.B { n: 1 }].contains(E.B { n: 1 }))
+    print([E.B { n: 1 }].contains(E.B { n: 2 }))
+    print([E.B { n: 0 }, E.A].index_of(E.A))
+    let m = Map<string, int> { "a": 1 }
+    print([m].contains(Map<string, int> { "a": 1 }))
+    let o = O { v: 1 }
+    print([o].contains(o))
+    print([o].contains(O { v: 1 }))
+    print([1.5, 0.0].index_of(-0.0))
+    let xs: [int?] = [1, none]
+    let n: int? = none
+    print(xs.index_of(n))
+}
+"#);
+    assert_eq!(out, "true\n1\n1\ntrue\nfalse\n1\ntrue\ntrue\nfalse\n1\n1\n");
+}
+
+#[test]
 fn array_contains_string() {
     let out = compile_and_run_stdout(
         "fn main() {\n    let mut a = [\"hello\", \"world\"]\n    print(a.contains(\"hello\"))\n    print(a.contains(\"nope\"))\n}",

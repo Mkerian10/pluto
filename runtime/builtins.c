@@ -393,18 +393,29 @@ void __pluto_array_reverse(void *handle) {
     }
 }
 
-long __pluto_array_contains(void *handle, long value, long type_tag) {
-    long *h = (long *)handle;
-    long len = h[0];
-    long *data = (long *)h[2];
-    for (long i = 0; i < len; i++) {
-        if (type_tag == 3) { // string
-            if (__pluto_string_eq((void *)data[i], (void *)value)) return 1;
-        } else {
-            if (data[i] == value) return 1;
-        }
+// Element equality for array contains/index_of, matching `==` on the element
+// type. type_tag comes from array_eq_tag in codegen: 1 float, 3 string,
+// 5 structural (classes, value enums, collections, nullables), else the raw
+// word (ints, bools, bytes, objects — identity — and handles).
+static int array_elem_eq(long a, long b, long type_tag) {
+    switch (type_tag) {
+    case 1: {
+        double x, y;
+        memcpy(&x, &a, sizeof x);
+        memcpy(&y, &b, sizeof y);
+        return x == y;
     }
-    return 0;
+    case 3:
+        return __pluto_string_eq((void *)a, (void *)b) != 0;
+    case 5:
+        return __pluto_deep_eq(a, b) != 0;
+    default:
+        return a == b;
+    }
+}
+
+long __pluto_array_contains(void *handle, long value, long type_tag) {
+    return __pluto_array_index_of(handle, value, type_tag) >= 0;
 }
 
 long __pluto_array_index_of(void *handle, long value, long type_tag) {
@@ -412,11 +423,7 @@ long __pluto_array_index_of(void *handle, long value, long type_tag) {
     long len = h[0];
     long *data = (long *)h[2];
     for (long i = 0; i < len; i++) {
-        if (type_tag == 3) { // string
-            if (__pluto_string_eq((void *)data[i], (void *)value)) return i;
-        } else {
-            if (data[i] == value) return i;
-        }
+        if (array_elem_eq(data[i], value, type_tag)) return i;
     }
     return -1;
 }
