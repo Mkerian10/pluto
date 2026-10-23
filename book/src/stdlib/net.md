@@ -75,7 +75,7 @@ fn main() {
 
     while true {
         let conn = server.accept()
-        let msg = conn.read(4096)
+        let msg = conn.read(4096)!
         conn.write(msg)
         conn.close()
     }

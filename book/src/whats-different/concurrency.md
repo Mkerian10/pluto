@@ -87,7 +87,7 @@ fn main() {
     let (tx, rx) = chan<string>(5)
     let p = spawn produce(tx)
     let c = spawn consume(rx)
-    p.get()
+    p.get()!
     c.get()
 }
 ```

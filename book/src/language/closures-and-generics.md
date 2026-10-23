@@ -41,7 +41,7 @@ Closures capture a snapshot at creation time:
 
 ```
 fn main() {
-    let a = 10
+    let mut a = 10
     let f = (x: int) => x + a
     print(f(5))    // 15
     a = 999

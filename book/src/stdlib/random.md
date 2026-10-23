@@ -79,7 +79,7 @@ import std.random
 
 fn main() {
     // Roll 5 dice
-    let i = 0
+    let mut i = 0
     while i < 5 {
         print(f"Roll: {random.between(1, 6)}")
         i = i + 1
