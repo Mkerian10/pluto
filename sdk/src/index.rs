@@ -131,6 +131,11 @@ impl ModuleIndex {
                 let mloc = DeclLocation { kind: DeclKind::Function, index: mi, parent_index: Some(0) };
                 by_uuid.insert(method.node.id, mloc);
                 by_name.entry(method.node.name.node.clone()).or_default().push(method.node.id);
+
+                for (pi, p) in method.node.params.iter().enumerate() {
+                    let ploc = DeclLocation { kind: DeclKind::Param, index: pi, parent_index: Some(0) };
+                    by_uuid.insert(p.id, ploc);
+                }
             }
         }
 
