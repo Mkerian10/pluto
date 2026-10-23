@@ -367,6 +367,13 @@ pub(crate) fn unify(pattern: &PlutoType, concrete: &PlutoType, bindings: &mut Ha
                 false
             }
         }
+        PlutoType::Stream(pt) => {
+            if let PlutoType::Stream(ct) = concrete {
+                unify(pt, ct, bindings, env)
+            } else {
+                false
+            }
+        }
         PlutoType::Nullable(p_inner) => {
             if let PlutoType::Nullable(c_inner) = concrete {
                 unify(p_inner, c_inner, bindings, env)
@@ -509,6 +516,11 @@ pub(crate) fn ensure_generic_func_instantiated(
         .map(|p| resolve_generic_instances(&substitute_pluto_type(p, &bindings), env))
         .collect();
     let concrete_ret = resolve_generic_instances(&substitute_pluto_type(&gen_sig.return_type, &bindings), env);
+    // A generic generator's instances are generators too: codegen lowers
+    // them as a creator plus a resumable next function.
+    if matches!(concrete_ret, PlutoType::Stream(_)) {
+        env.generators.insert(mangled.clone());
+    }
     env.functions.insert(mangled.clone(), FuncSig {
         params: concrete_params,
         return_type: concrete_ret,

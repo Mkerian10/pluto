@@ -480,3 +480,349 @@ fn main() {
 "#);
     assert_eq!(out.trim(), "even\nodd\neven\nodd");
 }
+
+// ── Loops, matches and channels that suspend ─────────────────────────
+//
+// A yield returns from the generator's next function and the resume block
+// re-enters from the state dispatch, so every piece of state a loop or arm
+// needs after the yield must live in a saved slot, not an SSA value.
+
+#[test]
+fn generator_for_range_with_yield() {
+    let out = compile_and_run_stdout(r#"
+fn squares(n: int) stream int {
+    for i in 0..n {
+        yield i * i
+    }
+    for j in 1..=2 {
+        yield j
+    }
+}
+
+fn main() {
+    for v in squares(4) {
+        print(v)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "0\n1\n4\n9\n1\n2");
+}
+
+#[test]
+fn generator_for_array_param_with_yield() {
+    let out = compile_and_run_stdout(r#"
+fn halves(xs: [float]) stream float {
+    for x in xs {
+        yield x / 2.0
+    }
+}
+
+fn tags(xs: [string]) stream string {
+    for x in xs {
+        let t = f"<{x}>"
+        yield t
+    }
+}
+
+fn main() {
+    for h in halves([1.0, 3.0]) {
+        print(h)
+    }
+    for t in tags(["a", "b"]) {
+        print(t)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "0.5\n1.5\n<a>\n<b>");
+}
+
+#[test]
+fn generator_for_string_and_bytes_with_yield() {
+    let out = compile_and_run_stdout(r#"
+fn chars(s: string) stream string {
+    for c in s {
+        yield c
+    }
+}
+
+fn codes(b: bytes) stream int {
+    for x in b {
+        yield x.to_int()
+    }
+}
+
+fn main() {
+    for c in chars("ab") {
+        print(c)
+    }
+    for n in codes("AB".to_bytes()) {
+        print(n)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "a\nb\n65\n66");
+}
+
+#[test]
+fn generator_for_over_stream_with_yield() {
+    let out = compile_and_run_stdout(r#"
+fn upto(n: int) stream int {
+    let mut i = 0
+    while i < n {
+        yield i
+        i = i + 1
+    }
+}
+
+fn pairs() stream int {
+    for a in upto(3) {
+        for b in upto(a) {
+            yield a * 10 + b
+        }
+    }
+}
+
+fn main() {
+    for v in pairs() {
+        print(v)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "10\n20\n21");
+}
+
+#[test]
+fn generator_for_continue_and_break_with_yield() {
+    let out = compile_and_run_stdout(r#"
+fn odds_below(xs: [int], limit: int) stream int {
+    for x in xs {
+        if x >= limit {
+            break
+        }
+        if x % 2 == 0 {
+            continue
+        }
+        yield x
+    }
+    yield 99
+}
+
+fn main() {
+    for v in odds_below([1, 2, 3, 4, 5, 6, 7], 6) {
+        print(v)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "1\n3\n5\n99");
+}
+
+#[test]
+fn generator_for_receiver_with_yield() {
+    let out = compile_and_run_stdout(r#"
+fn put(tx: Sender<int>, v: int) {
+    tx.send(v) catch err { print("send failed") }
+}
+
+fn drain() stream int {
+    let (tx, rx) = chan<int>(4)
+    put(tx, 5)
+    yield 1
+    put(tx, 6)
+    tx.close()
+    for v in rx {
+        yield v * 10
+    }
+}
+
+fn main() {
+    for v in drain() {
+        print(v)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "1\n50\n60");
+}
+
+#[test]
+fn generator_reused_loop_name_with_different_types() {
+    let out = compile_and_run_stdout(r#"
+fn mixed() stream string {
+    for x in [1, 2] {
+        yield f"{x}"
+    }
+    for x in [0.5] {
+        yield f"{x}"
+    }
+    for x in ["s"] {
+        yield x
+    }
+}
+
+fn main() {
+    for v in mixed() {
+        print(v)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "1\n2\n0.5\ns");
+}
+
+#[test]
+fn generator_match_arms_with_yield() {
+    let out = compile_and_run_stdout(r#"
+enum Shape {
+    Circle { r: float }
+    Rect { w: int, h: int }
+    Dot
+}
+
+fn describe(shapes: [Shape]) stream string {
+    for s in shapes {
+        match s {
+            Shape.Circle { r } {
+                yield f"circle {r}"
+                yield f"again {r}"
+            }
+            Shape.Rect { w, h } {
+                yield f"rect {w}"
+                yield f"area {w * h}"
+            }
+            Shape.Dot {
+                yield "dot"
+            }
+        }
+    }
+}
+
+fn main() {
+    let shapes = [Shape.Rect { w: 2, h: 3 }, Shape.Circle { r: 1.5 }, Shape.Dot]
+    for d in describe(shapes) {
+        print(d)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "rect 2\narea 6\ncircle 1.5\nagain 1.5\ndot");
+}
+
+#[test]
+fn generator_match_wildcard_and_return() {
+    let out = compile_and_run_stdout(r#"
+enum E {
+    A
+    B
+    C
+}
+
+fn g(e: E) stream int {
+    match e {
+        E.A {
+            yield 1
+            return
+        }
+        _ {
+            yield 0
+        }
+    }
+    yield 9
+}
+
+fn main() {
+    for v in g(E.A) {
+        print(v)
+    }
+    for v in g(E.C) {
+        print(v)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "1\n0\n9");
+}
+
+#[test]
+fn generator_suspending_loop_survives_gc() {
+    // Hundreds of thousands of yields from inside nested loops, each
+    // allocating, so collections run while the loop state sits in the
+    // generator object between calls.
+    let out = compile_and_run_stdout(r#"
+fn words(n: int) stream string {
+    let base = ["alpha", "beta", "gamma"]
+    for i in 0..n {
+        for w in base {
+            yield f"{w}{i}"
+        }
+    }
+}
+
+fn main() {
+    let mut total = 0
+    for s in words(100000) {
+        total = total + s.len()
+    }
+    print(total)
+}
+"#);
+    assert_eq!(out.trim(), "2866670");
+}
+
+// ── Generic generators ───────────────────────────────────────────────
+
+#[test]
+fn generic_generator() {
+    let out = compile_and_run_stdout(r#"
+fn repeat<T>(x: T, n: int) stream T {
+    let mut i = 0
+    while i < n {
+        yield x
+        i = i + 1
+    }
+}
+
+fn each<T>(xs: [T]) stream T {
+    for x in xs {
+        yield x
+    }
+}
+
+fn mapped<T, U>(xs: [T], f: fn(T) U) stream U {
+    for x in xs {
+        yield f(x)
+    }
+}
+
+fn main() {
+    for s in repeat("hi", 2) {
+        print(s)
+    }
+    for v in each([1.5, 2.5]) {
+        print(v)
+    }
+    for s in mapped([1, 2], (x: int) => f"<{x}>") {
+        print(s)
+    }
+}
+"#);
+    assert_eq!(out.trim(), "hi\nhi\n1.5\n2.5\n<1>\n<2>");
+}
+
+#[test]
+fn stream_param_in_generic_function() {
+    let out = compile_and_run_stdout(r#"
+fn nums() stream int {
+    yield 1
+    yield 2
+}
+
+fn total<T>(s: stream T, f: fn(T) int) int {
+    let mut t = 0
+    for x in s {
+        t = t + f(x)
+    }
+    return t
+}
+
+fn main() {
+    print(total(nums(), (x: int) => x * 10))
+}
+"#);
+    assert_eq!(out.trim(), "30");
+}

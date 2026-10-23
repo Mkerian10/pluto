@@ -1103,8 +1103,9 @@ pub(crate) fn register_functions(program: &Program, env: &mut TypeEnv) -> Result
                 None => PlutoType::Void,
             };
 
-            // Verify non-void generic functions have a return or raise on every control flow path
-            if !matches!(return_type, PlutoType::Void) && !all_paths_return(&f.body.node) {
+            // Verify non-void generic functions have a return or raise on every control flow path.
+            // A generator (`stream T`) produces values by yielding, so it needs no return.
+            if !matches!(return_type, PlutoType::Void | PlutoType::Stream(_)) && !all_paths_return(&f.body.node) {
                 return Err(CompileError::type_err(
                     format!("missing return statement in function with return type {}", return_type),
                     f.body.span,

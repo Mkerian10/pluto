@@ -60,6 +60,7 @@ impl PlutoType {
             PlutoType::Task(t) => PlutoType::Task(Box::new(f(t))),
             PlutoType::Sender(t) => PlutoType::Sender(Box::new(f(t))),
             PlutoType::Receiver(t) => PlutoType::Receiver(Box::new(f(t))),
+            PlutoType::Stream(t) => PlutoType::Stream(Box::new(f(t))),
             PlutoType::Nullable(inner) => PlutoType::Nullable(Box::new(f(inner))),
             PlutoType::GenericInstance(kind, name, args) => PlutoType::GenericInstance(
                 kind.clone(),
@@ -79,7 +80,7 @@ impl PlutoType {
             PlutoType::Fn(params, ret, _, _) => params.iter().any(pred) || pred(ret),
             PlutoType::Map(k, v) => pred(k) || pred(v),
             PlutoType::Set(t) | PlutoType::Task(t) | PlutoType::Sender(t)
-            | PlutoType::Receiver(t) | PlutoType::Nullable(t) => pred(t),
+            | PlutoType::Receiver(t) | PlutoType::Stream(t) | PlutoType::Nullable(t) => pred(t),
             PlutoType::GenericInstance(_, _, args) => args.iter().any(pred),
             _ => false,
         }
