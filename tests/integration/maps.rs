@@ -263,3 +263,57 @@ fn main() int {
 "#);
     assert_eq!(out, "100\n0\n100\n198\n");
 }
+
+// Enum values are heap objects (every `Color.Red` is a fresh allocation), so
+// enum keys must hash and compare structurally, the way `==` does.
+#[test]
+fn map_enum_keys_compare_by_value() {
+    let out = compile_and_run_stdout(r#"
+enum Color {
+    Red
+    Green
+    Rgb { r: int, g: int, name: string }
+}
+
+fn main() {
+    let mut m = Map<Color, int> {}
+    m[Color.Red] = 1
+    m[Color.Green] = 2
+    m[Color.Red] = 3
+    m[Color.Rgb { r: 1, g: 2, name: "x" }] = 4
+    m[Color.Rgb { r: 1, g: 2, name: "x" }] = 5
+    m[Color.Rgb { r: 1, g: 3, name: "x" }] = 6
+    print(m.len())
+    print(m[Color.Red])
+    print(m[Color.Rgb { r: 1, g: 2, name: "x" }])
+    print(m.contains(Color.Rgb { r: 9, g: 2, name: "x" }))
+    m.remove(Color.Red)
+    print(m.contains(Color.Red))
+    print(m.len())
+}
+"#);
+    assert_eq!(out, "4\n3\n5\nfalse\nfalse\n3\n");
+}
+
+#[test]
+fn map_many_same_variant_enum_keys() {
+    // The hash covers the payload, not just the variant, so many keys of one
+    // variant do not collapse into a single probe chain.
+    let out = compile_and_run_stdout(r#"
+enum Key {
+    Id { n: int }
+}
+
+fn main() {
+    let mut m = Map<Key, int> {}
+    let mut i = 0
+    while i < 20000 {
+        m[Key.Id { n: i }] = i * 2
+        i = i + 1
+    }
+    print(m.len())
+    print(m[Key.Id { n: 12345 }])
+}
+"#);
+    assert_eq!(out, "20000\n24690\n");
+}

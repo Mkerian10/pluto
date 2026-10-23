@@ -2521,7 +2521,12 @@ static unsigned long ht_hash(long key, long key_type) {
         }
         break;
     }
-    default: // int(0), bool(2), enum(4)
+    case 4: // enum — a heap value (every `E.A` is a fresh allocation), so
+            // hash what `==` compares rather than the pointer; ht_eq uses
+            // __pluto_deep_eq to match.
+        h = (unsigned long)__pluto_deep_hash(key) * 0x9e3779b97f4a7c15ULL;
+        break;
+    default: // int(0), bool(2)
         h = (unsigned long)key * 0x9e3779b97f4a7c15ULL;
         break;
     }
@@ -2530,6 +2535,7 @@ static unsigned long ht_hash(long key, long key_type) {
 
 static int ht_eq(long a, long b, long key_type) {
     if (key_type == 3) return __pluto_string_eq((void *)a, (void *)b);
+    if (key_type == 4) return __pluto_deep_eq(a, b) != 0; // structural, like ==
     return a == b;
 }
 

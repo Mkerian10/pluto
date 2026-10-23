@@ -2005,6 +2005,83 @@ long __pluto_deep_eq(long a, long b) {
     return r;
 }
 
+// Structural hash consistent with __pluto_deep_eq: values deep_eq calls equal
+// always hash the same. It follows deq_impl's rules — non-heap slots by bits,
+// identity types (entities, tasks, channels) by pointer, everything else by
+// content — and stops descending at a fixed depth, which keeps cyclic data
+// finite without breaking that guarantee (truncation is deterministic).
+// Maps and sets contribute only their count, since deep_eq ignores slot order.
+#define DH_MAX_DEPTH 6
+
+static unsigned long dh_mix(unsigned long h, unsigned long x) {
+    h ^= x + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return h;
+}
+
+static unsigned long dh_bytes(const unsigned char *p, long n) {
+    unsigned long h = 0xcbf29ce484222325ULL;
+    for (long i = 0; i < n; i++) {
+        h ^= p[i];
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+static unsigned long dh_impl(long a, int depth) {
+    if (a == 0) return 0;
+    GCHeader *h = dc_find_gc_object((void *)a);
+    if (!h) return (unsigned long)a;
+    unsigned long out = h->type_tag;
+    if (depth >= DH_MAX_DEPTH) return out;
+    switch (h->type_tag) {
+    case GC_TAG_STRING:
+    case GC_TAG_STRING_SLICE: {
+        const char *data;
+        long len;
+        __pluto_string_data((void *)a, &data, &len);
+        return dh_bytes((const unsigned char *)data, len);
+    }
+    case GC_TAG_ENTITY:
+    case GC_TAG_TASK:
+    case GC_TAG_CHANNEL:
+        return (unsigned long)a;
+    case GC_TAG_OBJECT: {
+        long *slots = (long *)a;
+        out = dh_mix(out, h->field_count);
+        for (uint16_t i = 0; i < h->field_count; i++) {
+            out = dh_mix(out, dh_impl(slots[i], depth + 1));
+        }
+        return out;
+    }
+    case GC_TAG_ARRAY: {
+        long *arr = (long *)a;
+        long *data = (long *)arr[2];
+        out = dh_mix(out, (unsigned long)arr[0]);
+        for (long i = 0; i < arr[0]; i++) {
+            out = dh_mix(out, dh_impl(data[i], depth + 1));
+        }
+        return out;
+    }
+    case GC_TAG_BYTES: {
+        long *b = (long *)a;
+        return dh_mix(out, dh_bytes((const unsigned char *)b[2], b[0]));
+    }
+    case GC_TAG_TRAIT: {
+        long *t = (long *)a;
+        return dh_mix(dh_mix(out, (unsigned long)t[1]), dh_impl(t[0], depth + 1));
+    }
+    case GC_TAG_MAP:
+    case GC_TAG_SET:
+        return dh_mix(out, (unsigned long)((long *)a)[0]);
+    default:
+        return out;
+    }
+}
+
+long __pluto_deep_hash(long a) {
+    return (long)dh_impl(a, 0);
+}
+
 // ── Channels ────────────────────────────────────────────────────────────────
 
 // Channel handle layout (56 bytes, 7 slots):
