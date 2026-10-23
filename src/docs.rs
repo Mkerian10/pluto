@@ -423,14 +423,14 @@ let braces = f"use {{braces}}"    // use {braces}  (double a brace to escape it)
 Interpolated values may be int, float, bool, string or byte; class instances cannot be interpolated directly.
 
 ### String methods (built-in)
-- `.len()` — returns int length
+- `.len()` — returns length in bytes (strings are UTF-8)
 - `.contains(s)` — returns bool
 - `.starts_with(s)` — returns bool
 - `.ends_with(s)` — returns bool
 - `.to_int()` — returns `int?` (nullable, none if parse fails or overflows; surrounding whitespace allowed). For a typed error instead, use `strings.parse_int`
 - `.to_float()` — returns `float?` (nullable, none if parse fails). For a typed error instead, use `strings.parse_float`
 - `.substring(offset, len)` — returns `len` bytes starting at `offset` (clamped to the string)
-- `.char_at(i)` / `.byte_at(i)` — one-character string / byte value at index `i`
+- `.char_at(i)` / `.byte_at(i)` — one-byte string / byte value at byte index `i` (indexing and `for c in s` are byte-wise too, so they split non-ASCII characters)
 - `.index_of(s)` / `.last_index_of(s)` — returns int (-1 if not found)
 - `.count(s)` — non-overlapping occurrences
 - `.replace(old, new)` — returns new string
@@ -438,7 +438,7 @@ Interpolated values may be int, float, bool, string or byte; class instances can
 - `.trim()` / `.trim_start()` / `.trim_end()` — whitespace-stripped copy
 - `.is_empty()` / `.is_whitespace()` — returns bool
 - `.repeat(n)` — `n` concatenated copies
-- `.to_upper()` / `.to_lower()` — case-changed copy
+- `.to_upper()` / `.to_lower()` — case-changed copy (ASCII letters only)
 - `.to_bytes()` — returns `bytes`
 
 ### String concatenation
@@ -819,11 +819,11 @@ Import: `import std.strings`
 | `is_empty` | `(s: string) bool` | Length == 0 |
 | `is_whitespace` | `(s: string) bool` | Empty or all whitespace |
 | `repeat` | `(s: string, count: int) string` | Concatenate count copies (non-positive count gives "") |
-| `to_upper` | `(s: string) string` | Convert to uppercase |
+| `to_upper` | `(s: string) string` | Convert ASCII letters to uppercase |
 | `to_lower` | `(s: string) string` | Convert to lowercase |
 | `replace` | `(s: string, old: string, new_str: string) string` | Replace all occurrences |
 | `split` | `(s: string, delimiter: string) [string]` | Split string into array |
-| `char_at` | `(s: string, index: int) string` | Get character at index |
+| `char_at` | `(s: string, index: int) string` | One-byte string at byte index |
 | `len` | `(s: string) int` | String length in bytes |
 | `byte_at` | `(s: string, index: int) int` | Get byte value at index |
 | `format_float` | `(value: float, decimals: int) string` | Format float with N decimal places |

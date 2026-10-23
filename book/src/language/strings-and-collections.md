@@ -17,14 +17,14 @@ print(f"hello {name}")           // hello {name}  (no f prefix: literal braces)
 
 **Escape sequences:** `\n`, `\r`, `\t`, `\\`, `\"`
 
-**Indexing** returns a single-character string (read-only; `s[0] = "x"` is a compile error):
+**Indexing** returns a one-byte string (read-only; `s[0] = "x"` is a compile error). Strings are UTF-8 and indexed by byte, so a non-ASCII character such as `é` spans several indices:
 
 ```pluto
 let s = "hello"
 print(s[0])                     // h
 ```
 
-**Iteration** yields single-character strings:
+**Iteration** yields one-byte strings, so it splits multi-byte (non-ASCII) characters:
 
 ```pluto
 for c in "abc" {
@@ -49,12 +49,12 @@ for c in "abc" {
 | `.is_empty()` | `() bool` | Length == 0 |
 | `.is_whitespace()` | `() bool` | Empty or all whitespace |
 | `.repeat(n)` | `(int) string` | Concatenate `n` copies (`0` or less gives `""`) |
-| `.to_upper()` | `() string` | Uppercase copy |
-| `.to_lower()` | `() string` | Lowercase copy |
+| `.to_upper()` | `() string` | Uppercase copy (ASCII letters only; other characters unchanged) |
+| `.to_lower()` | `() string` | Lowercase copy (ASCII letters only; other characters unchanged) |
 | `.replace(old, new)` | `(string, string) string` | Replace all occurrences |
 | `.split(delim)` | `(string) [string]` | Split into array; `""` splits by char |
 | `.substring(offset, len)` | `(int, int) string` | Substring by offset and length |
-| `.char_at(idx)` | `(int) string` | Single character at index |
+| `.char_at(idx)` | `(int) string` | One-byte string at byte index |
 | `.byte_at(idx)` | `(int) int` | Byte value at index (0-255) |
 | `.to_int()` | `() int?` | Parse as integer, `none` on failure |
 | `.to_float()` | `() float?` | Parse as float, `none` on failure |

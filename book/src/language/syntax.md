@@ -135,7 +135,7 @@ for i in 0..=10 {              // inclusive range: 0..10
     print(i)
 }
 
-for c in "abc" {               // string: yields single-char strings
+for c in "abc" {               // string: yields one-byte strings
     print(c)
 }
 ```
