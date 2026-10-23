@@ -425,6 +425,31 @@ fn cli_errors_point_at_the_source() {
 }
 
 #[test]
+fn module_errors_point_at_the_module_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("mathx")).unwrap();
+    let main = dir.path().join("main.pt");
+    std::fs::write(&main, "import mathx\n\nfn main() {\n    print(mathx.f())\n}\n").unwrap();
+    let module = dir.path().join("mathx").join("mathx.pt");
+
+    // A type error in the module is framed in the module's own file.
+    std::fs::write(&module, "pub fn f() int {\n    return \"bad\"\n}\n").unwrap();
+    let output = pluto().arg("run").arg(&main).env("NO_COLOR", "1").output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("mathx.pt:2:12"), "type error should be framed in the module:\n{stderr}");
+    assert!(stderr.contains("return \"bad\""), "{stderr}");
+
+    // A syntax error in the module must not be framed against main.pt.
+    std::fs::write(&module, "pub fn f() int {\n    return (1 +\n}\n").unwrap();
+    let output = pluto().arg("run").arg(&main).env("NO_COLOR", "1").output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(!stderr.contains("main.pt:"), "syntax error must not be framed in main.pt:\n{stderr}");
+    assert!(stderr.contains("in a module imported by"), "{stderr}");
+}
+
+#[test]
 fn module_warning_points_at_the_module_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("mathx")).unwrap();
