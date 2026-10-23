@@ -157,3 +157,28 @@ fn main() int {
 }
 "#, "set element type mismatch");
 }
+
+#[test]
+fn set_enum_elements_compare_by_value() {
+    let out = compile_and_run_stdout(r#"
+enum E {
+    A
+    B { n: int }
+}
+
+fn main() {
+    let mut s = Set<E> {}
+    s.insert(E.B { n: 1 })
+    s.insert(E.B { n: 1 })
+    s.insert(E.A)
+    s.insert(E.A)
+    print(s.len())
+    print(s.contains(E.B { n: 1 }))
+    print(s.contains(E.B { n: 2 }))
+    print(s.contains(E.A))
+    s.remove(E.A)
+    print(s.contains(E.A))
+}
+"#);
+    assert_eq!(out, "2\ntrue\nfalse\ntrue\nfalse\n");
+}
