@@ -313,7 +313,7 @@ impl PrettyPrinter {
         }
         self.write("trait ");
         self.write(&tr.name.node);
-        self.emit_type_params(&tr.type_params);
+        self.emit_type_params(&tr.type_params, &tr.type_param_bounds);
         self.write(" {");
         self.newline();
         self.indent();
@@ -337,6 +337,7 @@ impl PrettyPrinter {
         self.write_indent();
         self.write("fn ");
         self.write(&method.name.node);
+        self.emit_type_params(&method.type_params, &method.type_param_bounds);
         self.write("(");
         self.emit_params(&method.params);
         self.write(")");
@@ -359,7 +360,7 @@ impl PrettyPrinter {
         }
         self.write("enum ");
         self.write(&en.name.node);
-        self.emit_type_params(&en.type_params);
+        self.emit_type_params(&en.type_params, &en.type_param_bounds);
         self.write(" {");
         self.newline();
         self.indent();
@@ -405,7 +406,7 @@ impl PrettyPrinter {
         }
         self.write("class ");
         self.write(&cls.name.node);
-        self.emit_type_params(&cls.type_params);
+        self.emit_type_params(&cls.type_params, &cls.type_param_bounds);
 
         // Bracket deps (injected fields)
         let injected: Vec<&Field> = cls.fields.iter().filter(|f| f.is_injected).collect();
@@ -626,7 +627,7 @@ impl PrettyPrinter {
         }
         self.write("fn ");
         self.write(&func.name.node);
-        self.emit_type_params(&func.type_params);
+        self.emit_type_params(&func.type_params, &func.type_param_bounds);
         self.write("(");
         self.emit_params(&func.params);
         self.write(")");
@@ -983,7 +984,13 @@ impl PrettyPrinter {
         }
     }
 
-    fn emit_type_params(&mut self, type_params: &[crate::span::Spanned<String>]) {
+    /// `<T, U: Ord + Hash>`: each parameter with its trait bounds, in the
+    /// form `parse_type_params` reads back.
+    fn emit_type_params(
+        &mut self,
+        type_params: &[crate::span::Spanned<String>],
+        bounds: &std::collections::HashMap<String, Vec<crate::span::Spanned<String>>>,
+    ) {
         if !type_params.is_empty() {
             self.write("<");
             for (i, tp) in type_params.iter().enumerate() {
@@ -991,6 +998,15 @@ impl PrettyPrinter {
                     self.write(", ");
                 }
                 self.write(&tp.node);
+                if let Some(tp_bounds) = bounds.get(&tp.node).filter(|b| !b.is_empty()) {
+                    self.write(": ");
+                    for (j, bound) in tp_bounds.iter().enumerate() {
+                        if j > 0 {
+                            self.write(" + ");
+                        }
+                        self.write(&bound.node);
+                    }
+                }
             }
             self.write(">");
         }
@@ -2138,6 +2154,32 @@ fn main() {
         let result = pp(src);
         assert!(result.contains("error NotFound {"));
         assert!(result.contains("message: string"));
+        assert_roundtrip_stable(src);
+    }
+
+    #[test]
+    fn test_type_param_bounds_are_printed() {
+        let src = r#"trait Shape {
+    fn area(self) int
+    fn scaled<U: Shape>(self, other: U) int
+}
+
+trait Named {
+    fn name(self) string
+}
+
+class Holder<T: Shape + Named> {
+    value: T
+}
+
+fn biggest<T: Shape, U>(a: T, b: U) int {
+    return a.area()
+}
+"#;
+        let result = pp(src);
+        assert!(result.contains("fn scaled<U: Shape>(self, other: U) int"), "{result}");
+        assert!(result.contains("class Holder<T: Shape + Named>"), "{result}");
+        assert!(result.contains("fn biggest<T: Shape, U>(a: T, b: U) int"), "{result}");
         assert_roundtrip_stable(src);
     }
 
