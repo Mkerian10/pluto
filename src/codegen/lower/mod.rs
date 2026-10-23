@@ -5827,44 +5827,96 @@ fn count_yields_in_block(stmts: &[crate::span::Spanned<Stmt>]) -> u32 {
 
 /// Collect all local variable declarations in a function body.
 /// Returns (name, type) pairs. Walks into if/while/for/match bodies.
+///
+/// Every `for` loop also gets two hidden slots (see [`gen_for_slots`]) holding
+/// its iteration state, so a loop whose body yields can resume where it left
+/// off: nothing a loop needs may live only in an SSA value, because a yield
+/// returns from the next function and the resume block re-enters from the
+/// dispatch chain.
 struct LocalDeclCollector<'a> {
     env: &'a TypeEnv,
     locals: &'a mut Vec<(String, PlutoType)>,
     seen: &'a mut HashSet<String>,
+    /// Types of parameters and of the locals collected so far, so iterables
+    /// and initializers that name them infer to their real type.
+    known: HashMap<String, PlutoType>,
+}
+
+impl LocalDeclCollector<'_> {
+    fn push(&mut self, name: String, ty: PlutoType) {
+        if self.seen.insert(name.clone()) {
+            self.known.insert(name.clone(), ty.clone());
+            self.locals.push((name, ty));
+        }
+    }
 }
 
 impl Visitor for LocalDeclCollector<'_> {
     fn visit_stmt(&mut self, stmt: &crate::span::Spanned<Stmt>) {
         match &stmt.node {
             Stmt::Let { name, ty, value, .. } => {
-                if self.seen.insert(name.node.clone()) {
+                if !self.seen.contains(&name.node) {
                     let pty = if let Some(t) = ty {
                         resolve_type_expr_to_pluto(&t.node, self.env)
                     } else {
-                        infer_type_for_expr(&value.node, self.env, &HashMap::new())
+                        infer_type_for_expr(&value.node, self.env, &self.known)
                     };
-                    self.locals.push((name.node.clone(), pty));
+                    self.push(name.node.clone(), pty);
                 }
             }
             Stmt::For { var, iterable, body, .. } => {
-                if self.seen.insert(var.node.clone()) {
-                    let iter_type = infer_type_for_expr(&iterable.node, self.env, &HashMap::new());
-                    let elem_type = match iter_type {
-                        PlutoType::Array(e) => *e,
-                        PlutoType::Range => PlutoType::Int,
-                        PlutoType::String => PlutoType::String,
-                        PlutoType::Bytes => PlutoType::Byte,
-                        PlutoType::Receiver(e) => *e,
-                        PlutoType::Stream(e) => *e,
-                        _ => PlutoType::Int,
-                    };
-                    self.locals.push((var.node.clone(), elem_type));
-                }
+                let iter_type = infer_type_for_expr(&iterable.node, self.env, &self.known);
+                let elem_type = match &iter_type {
+                    PlutoType::Array(e) => (**e).clone(),
+                    PlutoType::Range => PlutoType::Int,
+                    PlutoType::String => PlutoType::String,
+                    PlutoType::Bytes => PlutoType::Byte,
+                    PlutoType::Receiver(e) => (**e).clone(),
+                    PlutoType::Stream(e) => (**e).clone(),
+                    _ => PlutoType::Int,
+                };
+                let (src, idx) = gen_for_slots(var);
+                self.push(gen_binding_slot(var), elem_type.clone());
+                // The body refers to the variable by name.
+                self.known.insert(var.node.clone(), elem_type);
+                // Range: `src` holds the end bound. Otherwise it holds the
+                // array/string/bytes/stream/receiver handle.
+                let src_ty = if iter_type == PlutoType::Range { PlutoType::Int } else { iter_type };
+                self.push(src, src_ty);
+                self.push(idx, PlutoType::Int);
                 // Manually visit the body
                 for s in &body.node.stmts {
                     self.visit_stmt(s);
                 }
                 return;
+            }
+            Stmt::LetChan { sender, receiver, elem_type, .. } => {
+                let elem = resolve_type_expr_to_pluto(&elem_type.node, self.env);
+                self.push(sender.node.clone(), PlutoType::Sender(Box::new(elem.clone())));
+                self.push(receiver.node.clone(), PlutoType::Receiver(Box::new(elem)));
+            }
+            Stmt::Match { expr, arms } => {
+                let scrutinee = infer_type_for_expr(&expr.node, self.env, &self.known);
+                if let PlutoType::Enum(enum_name) = scrutinee {
+                    if let Some(info) = self.env.enums.get(&enum_name) {
+                        let variants = info.variants.clone();
+                        for arm in arms {
+                            let crate::parser::ast::MatchPattern::Variant { variant_name, bindings, .. } = &arm.pattern else {
+                                continue;
+                            };
+                            let Some((_, fields)) = variants.iter().find(|(n, _)| *n == variant_name.node) else {
+                                continue;
+                            };
+                            for (field, rename) in bindings {
+                                if let Some((_, fty)) = fields.iter().find(|(n, _)| *n == field.node) {
+                                    self.push(gen_binding_slot(field), fty.clone());
+                                    let name = rename.as_ref().map_or(&field.node, |r| &r.node);
+                                    self.known.insert(name.clone(), fty.clone());
+                                }
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -5872,21 +5924,43 @@ impl Visitor for LocalDeclCollector<'_> {
     }
 }
 
-fn collect_local_decls(stmts: &[crate::span::Spanned<Stmt>], env: &TypeEnv) -> Vec<(String, PlutoType)> {
+/// Name of the hidden generator slot for a binding introduced by a `for`
+/// loop variable or a match-arm field. Keyed by the binding's span rather
+/// than its name, so two loops (or arms) that reuse a name with different
+/// types get separate, correctly typed slots.
+fn gen_binding_slot(binding: &crate::span::Spanned<String>) -> String {
+    format!("$bind{}:{}", binding.span.start, binding.span.end)
+}
+
+/// Names of the hidden generator slots for the `for` loop binding `var`:
+/// the iteration source and the index/counter. `$` cannot appear in a
+/// source identifier, and the loop variable's span makes them unique.
+fn gen_for_slots(var: &crate::span::Spanned<String>) -> (String, String) {
+    let key = format!("$for{}:{}", var.span.start, var.span.end);
+    (format!("{key}$src"), format!("{key}$idx"))
+}
+
+fn collect_local_decls(func: &Function, env: &TypeEnv) -> Vec<(String, PlutoType)> {
     let mut locals = Vec::new();
     let mut seen = HashSet::new();
+    let known = func
+        .params
+        .iter()
+        .map(|p| (p.name.node.clone(), resolve_type_expr_to_pluto(&p.ty.node, env)))
+        .collect();
     let mut collector = LocalDeclCollector {
         env,
         locals: &mut locals,
         seen: &mut seen,
+        known,
     };
-    for stmt in stmts {
+    for stmt in &func.body.node.stmts {
         collector.visit_stmt(stmt);
     }
     locals
 }
 
-/// Lower the generator creator function./// Lower the generator creator function.
+/// Lower the generator creator function.
 /// Allocates a generator object with [next_fn_ptr, state, done, result, params..., locals...]
 /// and stores the next function pointer + initial parameter values.
 #[allow(clippy::too_many_arguments)]
@@ -5904,7 +5978,7 @@ pub fn lower_generator_creator(
     builder.seal_block(entry_block);
 
     let num_params = func.params.len();
-    let local_decls = collect_local_decls(&func.body.node.stmts, env);
+    let local_decls = collect_local_decls(func, env);
     let num_locals = local_decls.len();
 
     // Layout: [next_fn_ptr(0) | state(8) | done(16) | result(24) | params(32..) | locals(32+P*8..)]
@@ -5979,7 +6053,7 @@ pub fn lower_generator_next(
     builder.switch_to_block(entry_block);
 
     let num_params = func.params.len();
-    let local_decls = collect_local_decls(&func.body.node.stmts, env);
+    let local_decls = collect_local_decls(func, env);
     let _num_locals = local_decls.len();
     let num_yields = count_yields_in_block(&func.body.node.stmts);
 
@@ -6276,6 +6350,19 @@ fn lower_generator_block(
                 })?;
                 ctx.builder.def_var(*var, final_val);
             }
+            Stmt::LetChan { sender, receiver, elem_type, capacity } => {
+                // `lower_let_chan` writes the sender into its pre-declared
+                // slot but binds the receiver to a fresh variable; move it
+                // into the receiver's slot so it survives a yield.
+                let rx_slot = *ctx.variables.get(&receiver.node).ok_or_else(|| {
+                    CompileError::codegen(format!("generator local variable '{}' not found in pre-declared slots", receiver.node))
+                })?;
+                ctx.lower_let_chan(sender, receiver, elem_type, capacity)?;
+                let rx_fresh = ctx.variables[&receiver.node];
+                let rx_val = ctx.builder.use_var(rx_fresh);
+                ctx.builder.def_var(rx_slot, rx_val);
+                ctx.variables.insert(receiver.node.clone(), rx_slot);
+            }
             Stmt::If { condition, then_block, else_block } => {
                 lower_generator_if(ctx, condition, then_block, else_block.as_ref(), terminated, yield_counter, resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb)?;
             }
@@ -6285,11 +6372,161 @@ fn lower_generator_block(
             Stmt::For { var, iterable, body } => {
                 lower_generator_for(ctx, var, iterable, body, terminated, yield_counter, resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb)?;
             }
+            Stmt::Match { expr, arms } if arms.iter().any(|a| count_yields_in_block(&a.body.node.stmts) > 0) => {
+                lower_generator_match(ctx, expr, arms, terminated, yield_counter, resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb)?;
+            }
+            _ if count_yields_in_block(std::slice::from_ref(stmt)) > 0 => {
+                // The ordinary statement lowering cannot suspend; say so
+                // instead of reaching its `unreachable!` on the yield.
+                let kind = match &stmt.node {
+                    Stmt::Scope { .. } => "a scope block",
+                    Stmt::Select { .. } => "a select",
+                    Stmt::ExpectRaises { .. } => "expect(...).to_raise",
+                    _ => "this statement",
+                };
+                return Err(CompileError::codegen(format!(
+                    "yield inside {kind} is not supported in a generator yet"
+                )));
+            }
+            Stmt::Match { .. } => {
+                // No yield in any arm: the ordinary lowering is exact. Arm
+                // bindings are fresh variables; restore the slot bindings.
+                let saved_vars = ctx.variables.clone();
+                let saved_types = ctx.var_types.clone();
+                ctx.lower_stmt_covered(stmt, terminated)?;
+                ctx.variables = saved_vars;
+                ctx.var_types = saved_types;
+            }
             _ => {
                 // For all other statements, delegate to the normal lower_stmt
                 ctx.lower_stmt_covered(stmt, terminated)?;
             }
         }
+    }
+    Ok(())
+}
+
+/// Put back the binding a generator `for` variable or match-arm field shadowed.
+fn restore_binding(
+    ctx: &mut LowerContext<'_>,
+    name: &str,
+    prev_var: Option<Variable>,
+    prev_type: Option<PlutoType>,
+) {
+    match prev_var {
+        Some(v) => { ctx.variables.insert(name.to_string(), v); }
+        None => { ctx.variables.remove(name); }
+    }
+    match prev_type {
+        Some(t) => { ctx.var_types.insert(name.to_string(), t); }
+        None => { ctx.var_types.remove(name); }
+    }
+}
+
+/// Lower a match statement inside a generator body when an arm yields.
+/// Mirrors `lower_match_stmt`, except arm bindings live in pre-declared
+/// slots (so they survive a yield) and arm bodies go through
+/// `lower_generator_block`. The scrutinee is only needed before any arm
+/// runs, so it needs no slot.
+#[allow(clippy::too_many_arguments)]
+fn lower_generator_match(
+    ctx: &mut LowerContext<'_>,
+    expr: &crate::span::Spanned<Expr>,
+    arms: &[MatchArm],
+    terminated: &mut bool,
+    yield_counter: &mut u32,
+    resume_blocks: &[cranelift_codegen::ir::Block],
+    param_slots: &[(String, PlutoType, Variable)],
+    local_slots: &[(String, PlutoType, Variable)],
+    num_params: usize,
+    gen_ptr_var: Variable,
+    done_bb: cranelift_codegen::ir::Block,
+) -> Result<(), CompileError> {
+    let ptr = ctx.lower_expr(&expr.node)?;
+    let tag = ctx.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(0));
+    let enum_name = match infer_type_for_expr(&expr.node, ctx.env, &ctx.var_types) {
+        PlutoType::Enum(name) => name,
+        other => return Err(CompileError::codegen(format!("match requires enum type, found {other}"))),
+    };
+    let enum_info = ctx.env.enums.get(&enum_name).ok_or_else(|| {
+        CompileError::codegen(format!("unknown enum '{enum_name}'"))
+    })?.clone();
+
+    let merge_bb = ctx.builder.create_block();
+    let check_blocks: Vec<_> = arms.iter().map(|_| ctx.builder.create_block()).collect();
+    let body_blocks: Vec<_> = arms.iter().map(|_| ctx.builder.create_block()).collect();
+    ctx.builder.ins().jump(check_blocks[0], &[]);
+
+    let mut all_terminated = true;
+    for (i, arm) in arms.iter().enumerate() {
+        let (variant, bindings): (Option<&crate::span::Spanned<String>>, &[(crate::span::Spanned<String>, Option<crate::span::Spanned<String>>)]) =
+            match &arm.pattern {
+                crate::parser::ast::MatchPattern::Wildcard { .. } => (None, &[]),
+                crate::parser::ast::MatchPattern::Variant { variant_name, bindings, .. } => (Some(variant_name), bindings),
+            };
+
+        ctx.builder.switch_to_block(check_blocks[i]);
+        ctx.builder.seal_block(check_blocks[i]);
+        if let Some(variant_name) = variant {
+            let variant_idx = enum_info.variants.iter()
+                .position(|(n, _)| *n == variant_name.node)
+                .expect("match arm variant should exist after typeck") as i64;
+            let expected = ctx.builder.ins().iconst(types::I64, variant_idx);
+            let cmp = ctx.builder.ins().icmp(IntCC::Equal, tag, expected);
+            let fallthrough = if i + 1 < arms.len() { check_blocks[i + 1] } else { merge_bb };
+            ctx.builder.ins().brif(cmp, body_blocks[i], &[], fallthrough, &[]);
+        } else {
+            ctx.builder.ins().jump(body_blocks[i], &[]);
+        }
+
+        ctx.builder.switch_to_block(body_blocks[i]);
+        ctx.builder.seal_block(body_blocks[i]);
+        ctx.emit_coverage_hit(arm.body.span.file_id, arm.body.span.start, 1);
+
+        let mut prev = Vec::new();
+        if let Some(variant_name) = variant {
+            let fields = &enum_info.variants.iter()
+                .find(|(n, _)| *n == variant_name.node)
+                .expect("match arm variant should exist after typeck").1;
+            for (field, rename) in bindings {
+                let field_idx = fields.iter()
+                    .position(|(n, _)| *n == field.node)
+                    .expect("binding field should exist in variant after typeck");
+                let field_type = fields[field_idx].1.clone();
+                let offset = ((1 + field_idx) as i32) * POINTER_SIZE;
+                let raw = ctx.builder.ins().load(types::I64, MemFlags::new(), ptr, Offset32::new(offset));
+                let val = from_array_slot(raw, &field_type, &mut ctx.builder);
+                let slot_name = gen_binding_slot(field);
+                let var = *ctx.variables.get(&slot_name).ok_or_else(|| {
+                    CompileError::codegen(format!("generator match binding slot '{slot_name}' not found"))
+                })?;
+                ctx.builder.def_var(var, val);
+                let name = rename.as_ref().map_or(&field.node, |r| &r.node).clone();
+                let prev_var = ctx.variables.insert(name.clone(), var);
+                let prev_type = ctx.var_types.insert(name.clone(), field_type);
+                prev.push((name, prev_var, prev_type));
+            }
+        }
+
+        let mut arm_terminated = false;
+        lower_generator_block(
+            &arm.body.node.stmts, ctx, &mut arm_terminated, yield_counter,
+            resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
+        )?;
+        for (name, prev_var, prev_type) in prev.into_iter().rev() {
+            restore_binding(ctx, &name, prev_var, prev_type);
+        }
+        if !arm_terminated {
+            ctx.builder.ins().jump(merge_bb, &[]);
+            all_terminated = false;
+        }
+    }
+
+    ctx.builder.switch_to_block(merge_bb);
+    ctx.builder.seal_block(merge_bb);
+    if all_terminated {
+        *terminated = true;
+        ctx.builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
     }
     Ok(())
 }
@@ -6419,6 +6656,12 @@ fn lower_generator_while(
 }
 
 /// Lower a for loop inside a generator body, handling yields in the loop body.
+///
+/// A loop with no yield in its body never suspends, so the ordinary for-loop
+/// lowering is exact. A loop that does yield keeps its whole iteration state
+/// (source handle or range end, index) in hidden local slots that the yield
+/// saves and the resume block restores; the header re-derives everything else
+/// (lengths, next element) from those slots on each trip.
 #[allow(clippy::too_many_arguments)]
 fn lower_generator_for(
     ctx: &mut LowerContext<'_>,
@@ -6434,141 +6677,165 @@ fn lower_generator_for(
     gen_ptr_var: Variable,
     done_bb: cranelift_codegen::ir::Block,
 ) -> Result<(), CompileError> {
-    // For loops in generators: delegate to normal for-loop lowering for the iteration
-    // mechanism, but the body needs generator-aware handling.
-    // For simplicity in Phase 1, we only support range-based for loops in generators
-    // with yields. The for-loop variable is already pre-declared as a local slot.
+    if count_yields_in_block(&body.node.stmts) == 0 {
+        // `let`s in the body bind fresh variables; put the pre-declared slot
+        // bindings back so later statements keep saving the right ones.
+        let saved_vars = ctx.variables.clone();
+        let saved_types = ctx.var_types.clone();
+        ctx.lower_for(var, iterable, body)?;
+        ctx.variables = saved_vars;
+        ctx.var_types = saved_types;
+        return Ok(());
+    }
 
     let iter_type = infer_type_for_expr(&iterable.node, ctx.env, &ctx.var_types);
+    let (src_name, idx_name) = gen_for_slots(var);
+    let slot = |ctx: &LowerContext<'_>, name: &str| {
+        ctx.variables.get(name).copied().ok_or_else(|| {
+            CompileError::codegen(format!("generator for-loop slot '{name}' not found"))
+        })
+    };
+    let src_var = slot(ctx, &src_name)?;
+    let idx_var = slot(ctx, &idx_name)?;
+    let loop_var = slot(ctx, &gen_binding_slot(var))?;
 
-    match &iter_type {
+    // Initialise the iteration state.
+    let mut inclusive = false;
+    let elem_type = match &iter_type {
         PlutoType::Range => {
-            // Lower range for loop with generator-aware body
-            let range_val = ctx.lower_expr(&iterable.node)?;
-
-            // Extract start and end from Range struct
-            let start = ctx.builder.ins().load(types::I64, MemFlags::new(), range_val, Offset32::new(0));
-            let end = ctx.builder.ins().load(types::I64, MemFlags::new(), range_val, Offset32::new(8));
-
-            // The loop variable should already exist in variables from local_slots
-            let loop_var = *ctx.variables.get(&var.node).ok_or_else(|| {
-                CompileError::codegen(format!("generator for-loop variable '{}' not found", var.node))
-            })?;
-            ctx.builder.def_var(loop_var, start);
-
-            let header_bb = ctx.builder.create_block();
-            let body_bb = ctx.builder.create_block();
-            let exit_bb = ctx.builder.create_block();
-
-            ctx.builder.ins().jump(header_bb, &[]);
-
-            // Header: check i < end
-            ctx.builder.switch_to_block(header_bb);
-            let i_val = ctx.builder.use_var(loop_var);
-            let cond = ctx.builder.ins().icmp(IntCC::SignedLessThan, i_val, end);
-            ctx.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
-
-            // Body
-            ctx.builder.switch_to_block(body_bb);
-            ctx.builder.seal_block(body_bb);
-
-            ctx.loop_stack.push((header_bb, exit_bb));
-            let mut body_terminated = false;
-            lower_generator_block(
-                &body.node.stmts, ctx, &mut body_terminated, yield_counter,
-                resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
-            )?;
-            ctx.loop_stack.pop();
-
-            if !body_terminated {
-                // Increment loop variable
-                let i_val = ctx.builder.use_var(loop_var);
-                let one = ctx.builder.ins().iconst(types::I64, 1);
-                let next_i = ctx.builder.ins().iadd(i_val, one);
-                ctx.builder.def_var(loop_var, next_i);
-                ctx.builder.ins().jump(header_bb, &[]);
-            }
-
-            ctx.builder.seal_block(header_bb);
-            ctx.builder.switch_to_block(exit_bb);
-            ctx.builder.seal_block(exit_bb);
-            Ok(())
-        }
-        PlutoType::Array(_) => {
-            // Array for loop: use index-based iteration
-            let arr_val = ctx.lower_expr(&iterable.node)?;
-            let elem_type = match &iter_type {
-                PlutoType::Array(e) => *e.clone(),
-                _ => unreachable!(),
+            let (start, end, incl) = match &iterable.node {
+                Expr::Range { start, end, inclusive } => (start, end, *inclusive),
+                _ => return Err(CompileError::codegen("expected range expression".to_string())),
             };
-
-            // Get array length
-            let len_ref = ctx.module.declare_func_in_func(ctx.runtime.get("__pluto_array_len"), ctx.builder.func);
-            let call = ctx.builder.ins().call(len_ref, &[arr_val]);
-            let len = ctx.builder.inst_results(call)[0];
-
-            // Index variable
-            let idx_var = Variable::from_u32(ctx.next_var);
-            ctx.next_var += 1;
-            ctx.builder.declare_var(idx_var, types::I64);
+            inclusive = incl;
+            let start_val = ctx.lower_expr(&start.node)?;
+            let end_val = ctx.lower_expr(&end.node)?;
+            ctx.builder.def_var(idx_var, start_val);
+            ctx.builder.def_var(src_var, end_val);
+            PlutoType::Int
+        }
+        PlutoType::Array(_) | PlutoType::String | PlutoType::Bytes
+        | PlutoType::Stream(_) | PlutoType::Receiver(_) => {
+            let handle = ctx.lower_expr(&iterable.node)?;
+            ctx.builder.def_var(src_var, handle);
             let zero = ctx.builder.ins().iconst(types::I64, 0);
             ctx.builder.def_var(idx_var, zero);
-
-            let loop_var = *ctx.variables.get(&var.node).ok_or_else(|| {
-                CompileError::codegen(format!("generator for-loop variable '{}' not found", var.node))
-            })?;
-
-            let header_bb = ctx.builder.create_block();
-            let body_bb = ctx.builder.create_block();
-            let exit_bb = ctx.builder.create_block();
-
-            ctx.builder.ins().jump(header_bb, &[]);
-
-            // Header
-            ctx.builder.switch_to_block(header_bb);
-            let i_val = ctx.builder.use_var(idx_var);
-            let cond = ctx.builder.ins().icmp(IntCC::SignedLessThan, i_val, len);
-            ctx.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
-
-            // Body
-            ctx.builder.switch_to_block(body_bb);
-            ctx.builder.seal_block(body_bb);
-
-            // Load element: array_get(arr, idx)
-            let get_ref = ctx.module.declare_func_in_func(ctx.runtime.get("__pluto_array_get"), ctx.builder.func);
-            let i_val = ctx.builder.use_var(idx_var);
-            let get_call = ctx.builder.ins().call(get_ref, &[arr_val, i_val]);
-            let raw_elem = ctx.builder.inst_results(get_call)[0];
-            let elem_val = from_array_slot(raw_elem, &elem_type, &mut ctx.builder);
-            ctx.builder.def_var(loop_var, elem_val);
-
-            ctx.loop_stack.push((header_bb, exit_bb));
-            let mut body_terminated = false;
-            lower_generator_block(
-                &body.node.stmts, ctx, &mut body_terminated, yield_counter,
-                resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
-            )?;
-            ctx.loop_stack.pop();
-
-            if !body_terminated {
-                let i_val = ctx.builder.use_var(idx_var);
-                let one = ctx.builder.ins().iconst(types::I64, 1);
-                let next_i = ctx.builder.ins().iadd(i_val, one);
-                ctx.builder.def_var(idx_var, next_i);
-                ctx.builder.ins().jump(header_bb, &[]);
+            match &iter_type {
+                PlutoType::Array(e) | PlutoType::Stream(e) | PlutoType::Receiver(e) => (**e).clone(),
+                PlutoType::String => PlutoType::String,
+                _ => PlutoType::Byte,
             }
+        }
+        other => {
+            return Err(CompileError::codegen(format!(
+                "for loop requires array, range, string, bytes, receiver, or stream, found {other}"
+            )))
+        }
+    };
 
-            ctx.builder.seal_block(header_bb);
-            ctx.builder.switch_to_block(exit_bb);
-            ctx.builder.seal_block(exit_bb);
-            Ok(())
+    let header_bb = ctx.builder.create_block();
+    let body_bb = ctx.builder.create_block();
+    let step_bb = ctx.builder.create_block();
+    let exit_bb = ctx.builder.create_block();
+    ctx.builder.ins().jump(header_bb, &[]);
+
+    // Header: decide whether there is another element, producing it in
+    // `body_bb` from the restored slots.
+    ctx.builder.switch_to_block(header_bb);
+    let src = ctx.builder.use_var(src_var);
+    let idx = ctx.builder.use_var(idx_var);
+    let elem_val = match &iter_type {
+        PlutoType::Range => {
+            let cmp = if inclusive { IntCC::SignedLessThanOrEqual } else { IntCC::SignedLessThan };
+            let cond = ctx.builder.ins().icmp(cmp, idx, src);
+            ctx.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+            ctx.builder.switch_to_block(body_bb);
+            ctx.builder.use_var(idx_var)
+        }
+        PlutoType::Array(_) | PlutoType::String | PlutoType::Bytes => {
+            let (len_fn, get_fn) = match &iter_type {
+                PlutoType::Array(_) => ("__pluto_array_len", "__pluto_array_get"),
+                PlutoType::String => ("__pluto_string_len", "__pluto_string_char_at"),
+                _ => ("__pluto_bytes_len", "__pluto_bytes_get"),
+            };
+            let len = ctx.call_runtime(len_fn, &[src]);
+            let cond = ctx.builder.ins().icmp(IntCC::SignedLessThan, idx, len);
+            ctx.builder.ins().brif(cond, body_bb, &[], exit_bb, &[]);
+            ctx.builder.switch_to_block(body_bb);
+            let src = ctx.builder.use_var(src_var);
+            let idx = ctx.builder.use_var(idx_var);
+            let raw = ctx.call_runtime(get_fn, &[src, idx]);
+            match &iter_type {
+                PlutoType::Array(_) => from_array_slot(raw, &elem_type, &mut ctx.builder),
+                PlutoType::String => raw,
+                _ => ctx.builder.ins().ireduce(types::I8, raw),
+            }
+        }
+        PlutoType::Stream(_) => {
+            let next_fn_ptr = ctx.builder.ins().load(types::I64, MemFlags::new(), src, Offset32::new(0));
+            let mut next_sig = ctx.module.make_signature();
+            next_sig.params.push(AbiParam::new(types::I64));
+            let next_sig_ref = ctx.builder.func.import_signature(next_sig);
+            ctx.builder.ins().call_indirect(next_sig_ref, next_fn_ptr, &[src]);
+            let done = ctx.builder.ins().load(types::I64, MemFlags::new(), src, Offset32::new(16));
+            let zero = ctx.builder.ins().iconst(types::I64, 0);
+            let is_done = ctx.builder.ins().icmp(IntCC::NotEqual, done, zero);
+            ctx.builder.ins().brif(is_done, exit_bb, &[], body_bb, &[]);
+            ctx.builder.switch_to_block(body_bb);
+            let src = ctx.builder.use_var(src_var);
+            let raw = ctx.builder.ins().load(types::I64, MemFlags::new(), src, Offset32::new(24));
+            from_array_slot(raw, &elem_type, &mut ctx.builder)
         }
         _ => {
-            // For other iterable types in generators, fall back to normal lowering
-            // (no yields expected inside)
-            ctx.lower_for(var, iterable, body)
+            // Receiver: recv until the channel reports closed.
+            let raw = ctx.call_runtime("__pluto_chan_recv", &[src]);
+            let has_err = ctx.call_runtime("__pluto_has_error", &[]);
+            let zero = ctx.builder.ins().iconst(types::I64, 0);
+            let err_cond = ctx.builder.ins().icmp(IntCC::NotEqual, has_err, zero);
+            let closed_bb = ctx.builder.create_block();
+            ctx.builder.ins().brif(err_cond, closed_bb, &[], body_bb, &[]);
+            ctx.builder.switch_to_block(closed_bb);
+            ctx.builder.seal_block(closed_bb);
+            ctx.call_runtime_void("__pluto_clear_error", &[]);
+            ctx.builder.ins().jump(exit_bb, &[]);
+            ctx.builder.switch_to_block(body_bb);
+            from_array_slot(raw, &elem_type, &mut ctx.builder)
         }
+    };
+    ctx.builder.seal_block(body_bb);
+    ctx.emit_coverage_hit(body.span.file_id, body.span.start, 1);
+    ctx.builder.def_var(loop_var, elem_val);
+    let prev_var = ctx.variables.insert(var.node.clone(), loop_var);
+    let prev_type = ctx.var_types.insert(var.node.clone(), elem_type);
+
+    // `continue` goes through the step block so the index still advances.
+    ctx.loop_stack.push((step_bb, exit_bb));
+    let mut body_terminated = false;
+    lower_generator_block(
+        &body.node.stmts, ctx, &mut body_terminated, yield_counter,
+        resume_blocks, param_slots, local_slots, num_params, gen_ptr_var, done_bb,
+    )?;
+    ctx.loop_stack.pop();
+    restore_binding(ctx, &var.node, prev_var, prev_type);
+    if !body_terminated {
+        ctx.builder.ins().jump(step_bb, &[]);
     }
+
+    ctx.builder.switch_to_block(step_bb);
+    ctx.builder.seal_block(step_bb);
+    if matches!(iter_type, PlutoType::Range | PlutoType::Array(_) | PlutoType::String | PlutoType::Bytes) {
+        let i = ctx.builder.use_var(idx_var);
+        let one = ctx.builder.ins().iconst(types::I64, 1);
+        let next = ctx.builder.ins().iadd(i, one);
+        ctx.builder.def_var(idx_var, next);
+    }
+    ctx.call_runtime_void("__pluto_safepoint", &[]);
+    ctx.builder.ins().jump(header_bb, &[]);
+
+    ctx.builder.seal_block(header_bb);
+    ctx.builder.switch_to_block(exit_bb);
+    ctx.builder.seal_block(exit_bb);
+    Ok(())
 }
 
 fn resolve_param_type(param: &Param, env: &TypeEnv) -> PlutoType {
