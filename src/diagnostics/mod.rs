@@ -66,6 +66,17 @@ impl CompileError {
         Self::Manifest { msg: msg.into(), path }
     }
 
+    /// Shift a located error's span by `by` bytes (for errors produced while
+    /// lexing a substring, such as an f-string interpolation, whose spans are
+    /// relative to that substring). Errors without a location are unchanged.
+    pub fn offset_span(self, by: usize) -> Self {
+        match self {
+            Self::Syntax { msg, span } => Self::Syntax { msg, span: Span { start: span.start + by, end: span.end + by, ..span } },
+            Self::Type { msg, span } => Self::Type { msg, span: Span { start: span.start + by, end: span.end + by, ..span } },
+            other => other,
+        }
+    }
+
     pub fn sibling_file(path: PathBuf, source: CompileError) -> Self {
         Self::SiblingFile { path, source: Box::new(source) }
     }

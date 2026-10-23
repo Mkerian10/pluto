@@ -4616,10 +4616,22 @@ impl<'a> Parser<'a> {
                     if !lit_buf.is_empty() {
                         parts.push(StringInterpPart::Lit(std::mem::take(&mut lit_buf)));
                     }
+                    // Sub-parse the expression with spans that point into the
+                    // real source: the token body starts after `f"`, so shift
+                    // every sub-token by the expression's absolute offset and
+                    // give the sub-parser the full source to slice. Spans
+                    // relative to the `{...}` text would point diagnostics at
+                    // the top of the file and could collide with the
+                    // span-keyed tables typeck fills (method resolutions,
+                    // coercion sites) for code that really lives there.
+                    let base = span.start + 2 + range.start;
                     let expr_str = &raw[range];
-                    // Sub-parse the expression
-                    let tokens = crate::lexer::lex(expr_str)?;
-                    let mut sub_parser = Parser::new(&tokens, expr_str);
+                    let mut tokens = crate::lexer::lex(expr_str).map_err(|e| e.offset_span(base))?;
+                    for tok in &mut tokens {
+                        tok.span.start += base;
+                        tok.span.end += base;
+                    }
+                    let mut sub_parser = Parser::new(&tokens, self.source);
                     let expr = sub_parser.parse_expr(0)?;
                     if !sub_parser.is_at_end() {
                         return Err(CompileError::syntax(
@@ -6446,6 +6458,26 @@ mod tests {
             }
             _ => panic!("expected let"),
         }
+    }
+
+    #[test]
+    fn parse_string_interp_spans_are_absolute() {
+        // Interpolated expressions carry spans into the real source, not
+        // offsets relative to the `{...}` text.
+        let src = "fn main() {\n    let s = f\"a {x.len()} b {f\"{y}\"}\"\n}";
+        let prog = parse(src);
+        let f = &prog.functions[0].node;
+        let Stmt::Let { value, .. } = &f.body.node.stmts[0].node else { panic!("expected let") };
+        let Expr::StringInterp { parts } = &value.node else { panic!("expected interp") };
+        let StringInterpPart::Expr(call) = &parts[1] else { panic!("expected expr") };
+        assert_eq!(&src[call.span.start..call.span.end], "x.len()");
+        let Expr::MethodCall { method, .. } = &call.node else { panic!("expected method call") };
+        assert_eq!(&src[method.span.start..method.span.end], "len");
+        // Nested f-string: its own interpolation is absolute too.
+        let StringInterpPart::Expr(inner) = &parts[3] else { panic!("expected expr") };
+        let Expr::StringInterp { parts: inner_parts } = &inner.node else { panic!("expected inner interp") };
+        let StringInterpPart::Expr(y) = &inner_parts[0] else { panic!("expected expr") };
+        assert_eq!(&src[y.span.start..y.span.end], "y");
     }
 
     #[test]
