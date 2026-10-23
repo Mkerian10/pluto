@@ -445,3 +445,15 @@ fn main() {
         "method 'append' does not exist on 'wal.Wal<wal.Poisoned>'",
     );
 }
+
+#[test]
+fn wal_and_blob_import_together() {
+    // std.blob has a guarded `data` field; std.wal has an unrelated `data`
+    // field on Entry, read as `self.entries[i].data` inside the generic
+    // Wal<S>. The guard check could not type that receiver and fell back to
+    // matching any guarded field named `data`, so importing both failed.
+    let out = run_with_stdlib(
+        "import std.blob\nimport std.wal\n\nfn main() {\n    print(\"ok\")\n}\n",
+    );
+    assert_eq!(out.trim(), "ok");
+}
