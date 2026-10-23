@@ -17,6 +17,38 @@ fn fibonacci() stream int {
     }
 }
 
+// A generic generator that consumes another stream: stops after `count`
+// values, so it can safely wrap an infinite one.
+fn take<T>(s: stream T, count: int) stream T {
+    let mut i = 0
+    for x in s {
+        if i >= count {
+            return
+        }
+        yield x
+        i = i + 1
+    }
+}
+
+enum Token {
+    Num { value: int }
+    Plus
+}
+
+// `yield` works inside `for` loops and `match` arms, at any depth.
+fn describe(tokens: [Token]) stream string {
+    for t in tokens {
+        match t {
+            Token.Num { value } {
+                yield f"number {value}"
+            }
+            Token.Plus {
+                yield "plus"
+            }
+        }
+    }
+}
+
 fn main() {
     print("Range 0..10:")
     for n in range(0, 10) {
@@ -29,5 +61,16 @@ fn main() {
             break
         }
         print(f)
+    }
+
+    print("First 5 Fibonacci numbers, via take:")
+    for f in take(fibonacci(), 5) {
+        print(f)
+    }
+
+    print("Tokens:")
+    let tokens = [Token.Num { value: 1 }, Token.Plus, Token.Num { value: 2 }]
+    for d in describe(tokens) {
+        print(d)
     }
 }

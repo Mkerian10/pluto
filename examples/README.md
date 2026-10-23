@@ -337,7 +337,7 @@ cargo run -- run examples/stages/main.pt
 
 ## generators
 
-Demonstrates generators with `stream T` return types and `yield`: lazy integer ranges, infinite Fibonacci sequence with early `break`, and composing multiple generators.
+Demonstrates generators with `stream T` return types and `yield`: lazy integer ranges, an infinite Fibonacci sequence with early `break`, a generic `take` that wraps another stream, and a generator that yields from inside `for` and `match`.
 
 ```bash
 cargo run -- run examples/generators/main.pt

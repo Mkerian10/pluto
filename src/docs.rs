@@ -284,6 +284,25 @@ pub fn greet(name: string) string {
 - Return type goes after the parameter list
 - Omit return type for `void` functions
 
+### Generators
+```
+fn evens(limit: int) stream int {
+    for i in 0..limit {
+        if i % 2 == 0 {
+            yield i
+        }
+    }
+}
+
+for n in evens(10) { print(n) }   // 0 2 4 6 8
+```
+- A `stream T` return type makes a function a generator; calling it runs nothing until iterated
+- Each `for` iteration runs the body to the next `yield`; the stream ends at the end of the body or a bare `return` (no `return` needed)
+- `yield` works inside `if`, `while`, `for` and `match` arms, but not inside closures
+- Streams are lazy (infinite generators are fine; `break` stops pulling) and single-pass (call again for a fresh stream)
+- Generators can be generic (`fn each<T>(xs: [T]) stream T`) and take streams as parameters
+- Generators must be top-level functions, not methods
+
 ### Classes
 ```
 class Point {
