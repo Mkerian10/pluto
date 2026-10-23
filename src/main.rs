@@ -184,11 +184,11 @@ enum WatchCommands {
 /// For sibling file errors, returns the sibling file path instead of the entry file.
 /// Print a compile error for the entry `file` and exit nonzero.
 ///
-/// Syntax and type errors get a source snippet when their span is in a file
-/// we can name: the entry file (file id 0) or an auto-included sibling.
-/// Errors located in an imported module, or with no location, keep the
-/// one-line form.
-fn report_error(err: &pluto::diagnostics::CompileError, file: &std::path::Path) -> ! {
+/// Syntax and type errors get a source snippet framed in the file their span
+/// is in: the entry file (file id 0), an auto-included sibling, or an
+/// imported module (found by re-resolving the module graph). Errors with no
+/// location keep the one-line form.
+fn report_error(err: &pluto::diagnostics::CompileError, file: &std::path::Path, stdlib: Option<&std::path::Path>) -> ! {
     use pluto::diagnostics::{render_error, CompileError};
     let located_in = |e: &CompileError| match e {
         CompileError::Syntax { span, .. } | CompileError::Type { span, .. } => Some(span.file_id),
@@ -201,12 +201,28 @@ fn report_error(err: &pluto::diagnostics::CompileError, file: &std::path::Path) 
                 std::process::exit(1);
             }
         }
+        CompileError::Syntax { .. } | CompileError::Type { .. } if located_in(err).is_some() => {
+            let file_id = located_in(err).unwrap_or(0);
+            if let Some((path, src)) = pluto::locate_source(file, stdlib, file_id) {
+                render_error(&src, &path.display().to_string(), err);
+                std::process::exit(1);
+            }
+        }
         CompileError::SiblingFile { source, .. } if located_in(source).is_some() => {
             // render_error reads the sibling's own source.
             render_error("", "", err);
             std::process::exit(1);
         }
         _ => {}
+    }
+    if let CompileError::Syntax { span, .. } | CompileError::Type { span, .. } = err
+        && span.file_id != 0
+        && !span.is_synthetic()
+    {
+        // Located in a module we could not re-resolve (it may not parse):
+        // don't attribute it to the entry file.
+        eprintln!("error (in a module imported by {}): {err}", file.display());
+        std::process::exit(1);
     }
     let filename = error_filename(err).unwrap_or_else(|| file.to_string_lossy().to_string());
     eprintln!("error [{}]: {err}", filename);
@@ -325,7 +341,7 @@ fn main() {
                             eprintln!("system: {} member(s) compiled", members.len());
                         }
                         Err(err) => {
-                            report_error(&err, &file);
+                            report_error(&err, &file, stdlib);
                         }
                     }
                 }
@@ -365,7 +381,7 @@ fn main() {
                     }
                 }
                 Err(err) => {
-                    report_error(&err, &file);
+                    report_error(&err, &file, stdlib);
                 }
             }
         }
@@ -378,7 +394,7 @@ fn main() {
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    report_error(&err, &file);
+                    report_error(&err, &file, stdlib);
                 }
             }
 
@@ -391,12 +407,12 @@ fn main() {
                 match pluto::compile_file_with_coverage(&file, &tmp, stdlib) {
                     Ok(map) => Some(map),
                     Err(err) => {
-                        report_error(&err, &file);
+                        report_error(&err, &file, stdlib);
                     }
                 }
             } else {
                 if let Err(err) = pluto::compile_file_with_options(&file, &tmp, stdlib, gc, false) {
-                    report_error(&err, &file);
+                    report_error(&err, &file, stdlib);
                 }
                 None
             };
@@ -467,7 +483,7 @@ fn main() {
             let coverage_map = match pluto::compile_file_for_tests_with_coverage(&file, &tmp, stdlib, use_cache, coverage) {
                 Ok(map) => map,
                 Err(err) => {
-                    report_error(&err, &file);
+                    report_error(&err, &file, stdlib);
                 }
             };
 
@@ -572,7 +588,7 @@ fn main() {
                     }
                 }
                 Err(err) => {
-                    report_error(&err, &file);
+                    report_error(&err, &file, stdlib);
                 }
             }
         }

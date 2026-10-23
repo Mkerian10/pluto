@@ -77,6 +77,16 @@ impl CompileError {
         }
     }
 
+    /// Attribute a located error to file `file_id` (lexer and parser errors
+    /// are produced before a file's spans are stamped, so they carry id 0).
+    pub fn with_file_id(self, file_id: u32) -> Self {
+        match self {
+            Self::Syntax { msg, span } => Self::Syntax { msg, span: Span { file_id, ..span } },
+            Self::Type { msg, span } => Self::Type { msg, span: Span { file_id, ..span } },
+            other => other,
+        }
+    }
+
     pub fn sibling_file(path: PathBuf, source: CompileError) -> Self {
         Self::SiblingFile { path, source: Box::new(source) }
     }

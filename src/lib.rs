@@ -167,6 +167,29 @@ fn on_compile_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
     })
 }
 
+/// The path and source text of the file a span's `file_id` refers to, for a
+/// text entry compiled with module resolution (file id 0 is the entry, and
+/// imported modules and siblings follow in resolution order).
+///
+/// Errors carry only a file id; this re-runs the same, deterministic module
+/// resolution the compile used to recover which file that is, so a caller can
+/// show a code frame for an error inside an imported module. Returns `None`
+/// for a binary entry or if resolution fails.
+pub fn locate_source(entry_file: &Path, stdlib_root: Option<&Path>, file_id: u32) -> Option<(PathBuf, String)> {
+    let data = std::fs::read(entry_file).ok()?;
+    if binary::is_binary_format(&data) {
+        return None;
+    }
+    let effective_stdlib = resolve_stdlib(stdlib_root);
+    let entry_dir = entry_file.parent().unwrap_or(Path::new("."));
+    let pkg_graph = manifest::find_and_resolve(entry_dir).ok()?;
+    let graph = modules::resolve_modules(entry_file, effective_stdlib.as_deref(), &pkg_graph).ok()?;
+    let (_, source_map) = modules::flatten_modules(graph).ok()?;
+    source_map
+        .get_source(file_id)
+        .map(|(path, src)| (path.to_path_buf(), src.to_string()))
+}
+
 /// Render warnings against the file each one is in. A warning in an imported
 /// module carries that module's file id and byte offsets, so rendering it
 /// against the entry source would point at unrelated code. File id 0 is the

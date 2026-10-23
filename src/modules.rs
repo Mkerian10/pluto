@@ -220,9 +220,11 @@ fn load_file_auto(path: &Path, source_map: &mut SourceMap) -> Result<(Program, u
             CompileError::codegen(format!("'{}' is not valid UTF-8: {e}", path.display()))
         })?;
         let file_id = source_map.add_file(canonical_path, source.clone());
-        let tokens = lexer::lex(&source)?;
+        // Stamp lex/parse errors with this file's id so they are never
+        // reported against the entry file's source.
+        let tokens = lexer::lex(&source).map_err(|e| e.with_file_id(file_id))?;
         let mut parser = Parser::new_with_path(&tokens, &source, path.display().to_string());
-        let mut program = parser.parse_program()?;
+        let mut program = parser.parse_program().map_err(|e| e.with_file_id(file_id))?;
         set_program_file_id(&mut program, file_id);
         Ok((program, file_id))
     }
