@@ -75,7 +75,7 @@ class Order impl Validator {
 }
 
 // Bracket deps for explicit DI
-class OrderService[db: APIDatabase, accounts: AccountsService] uses Logger {
+class OrderService uses Logger [db: APIDatabase, accounts: AccountsService] {
     fn create(mut self, order: Order) Order {
         if !order.validate() {
             raise ValidationError { field: "order", message: "invalid order" }
