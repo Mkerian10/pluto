@@ -630,6 +630,30 @@ fn collect_xrefs(program: &Program, collector: &mut XrefCollector) {
 
 // ========== DiagnosticSpan helper ==========
 
+/// Diagnostic for an error from compiling the entry file `path`. A span in
+/// the entry file (file id 0) gets its line and column; a span in an
+/// imported module keeps byte offsets only, since those index that module's
+/// source, not the entry's.
+fn entry_error_diagnostic(err: &crate::diagnostics::CompileError, path: &Path) -> Diagnostic {
+    use crate::diagnostics::CompileError;
+    let span = match err {
+        CompileError::Syntax { span, .. } | CompileError::Type { span, .. } if span.file_id == 0 => Some(*span),
+        _ => None,
+    };
+    let source = span.and_then(|span| {
+        let data = std::fs::read(path).ok()?;
+        if crate::binary::is_binary_format(&data) {
+            return None;
+        }
+        let text = String::from_utf8(data).ok()?;
+        let fits = span.start <= span.end
+            && span.end <= text.len()
+            && text.is_char_boundary(span.start);
+        fits.then_some(text)
+    });
+    Diagnostic::from_compile_error(err, source.as_deref())
+}
+
 impl DiagnosticSpan {
     /// Create a DiagnosticSpan from byte offsets and source text.
     fn from_offset(start: usize, end: usize, source: &str) -> Self {
@@ -1203,7 +1227,7 @@ impl CompilerService for InProcessServer {
             Err(err) => CheckResult {
                 success: false,
                 path: path.to_path_buf(),
-                errors: vec![Diagnostic::from_compile_error(&err, None)],
+                errors: vec![entry_error_diagnostic(&err, path)],
                 warnings: vec![],
             },
         }
@@ -1222,7 +1246,7 @@ impl CompilerService for InProcessServer {
                 success: false,
                 path: path.to_path_buf(),
                 output: None,
-                errors: vec![Diagnostic::from_compile_error(&err, None)],
+                errors: vec![entry_error_diagnostic(&err, path)],
                 warnings: vec![],
             },
         }
@@ -1298,7 +1322,7 @@ impl CompilerService for InProcessServer {
                 stderr: String::new(),
                 exit_code: None,
                 timed_out: false,
-                compile_errors: vec![Diagnostic::from_compile_error(&err, None)],
+                compile_errors: vec![entry_error_diagnostic(&err, path)],
             },
         }
     }
@@ -1368,7 +1392,7 @@ impl CompilerService for InProcessServer {
                 stderr: String::new(),
                 exit_code: None,
                 timed_out: false,
-                compile_errors: vec![Diagnostic::from_compile_error(&err, None)],
+                compile_errors: vec![entry_error_diagnostic(&err, path)],
             },
         }
     }
@@ -1394,6 +1418,28 @@ impl CompilerService for InProcessServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entry_errors_carry_line_and_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.pt");
+        std::fs::write(&path, "fn main() {\n    let x: int = \"s\"\n}\n").unwrap();
+        let err = crate::diagnostics::CompileError::type_err(
+            "type mismatch",
+            crate::span::Span::new(29, 32),
+        );
+        let span = entry_error_diagnostic(&err, &path).span.unwrap();
+        assert_eq!((span.line, span.column), (Some(2), Some(18)));
+
+        // A span in another file (an imported module) must not be mapped
+        // onto the entry's lines.
+        let elsewhere = crate::diagnostics::CompileError::type_err(
+            "type mismatch",
+            crate::span::Span::with_file(29, 32, 3),
+        );
+        let span = entry_error_diagnostic(&elsewhere, &path).span.unwrap();
+        assert_eq!((span.line, span.column), (None, None));
+    }
 
     #[test]
     fn test_new_server() {

@@ -393,7 +393,54 @@ fn cli_compile_error_formatting() {
     let output = pluto().arg("compile").arg(&src).arg("-o").arg(&bin).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("error"), "Expected CLI error format, got: {}", stderr);
+    assert!(stderr.to_lowercase().contains("error"), "Expected CLI error format, got: {}", stderr);
+}
+
+#[test]
+fn cli_errors_point_at_the_source() {
+    // Both `run` and `compile` show where a type or syntax error is, not
+    // just the message.
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("test_bin");
+    let cases = [
+        ("type.pt", "fn main() {\n    let x: int = \"hello\"\n}\n", "type.pt:2:18", "Error: type mismatch: expected int, found string"),
+        ("syntax.pt", "fn main() {\n    let x = (1 +\n}\n", "syntax.pt:3:1", "Error: unexpected token"),
+    ];
+    for (name, source, location, message) in cases {
+        let src = dir.path().join(name);
+        std::fs::write(&src, source).unwrap();
+        for args in [vec!["run"], vec!["compile"]] {
+            let mut cmd = pluto();
+            cmd.args(&args).arg(&src);
+            if args[0] == "compile" {
+                cmd.arg("-o").arg(&bin);
+            }
+            let output = cmd.env("NO_COLOR", "1").output().unwrap();
+            assert!(!output.status.success());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains(location), "{args:?} {name}: expected {location} in:\n{stderr}");
+            assert!(stderr.contains(message), "{args:?} {name}: expected {message:?} in:\n{stderr}");
+        }
+    }
+}
+
+#[test]
+fn module_warning_points_at_the_module_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("mathx")).unwrap();
+    std::fs::write(
+        dir.path().join("main.pt"),
+        "import mathx\n\nfn main() {\n    print(mathx.f())\n}\n",
+    ).unwrap();
+    std::fs::write(
+        dir.path().join("mathx").join("mathx.pt"),
+        "pub fn f() int {\n    let unused = 3\n    return 4\n}\n",
+    ).unwrap();
+    let output = pluto().arg("run").arg(dir.path().join("main.pt")).env("NO_COLOR", "1").output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("mathx.pt:2:9"), "warning should be framed in the module file:\n{stderr}");
+    assert!(stderr.contains("let unused = 3"), "warning should quote the module's line:\n{stderr}");
 }
 
 #[test]

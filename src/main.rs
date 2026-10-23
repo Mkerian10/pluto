@@ -182,6 +182,47 @@ enum WatchCommands {
 
 /// Get the appropriate filename to display in error messages.
 /// For sibling file errors, returns the sibling file path instead of the entry file.
+/// Print a compile error for the entry `file` and exit nonzero.
+///
+/// Syntax and type errors get a source snippet when their span is in a file
+/// we can name: the entry file (file id 0) or an auto-included sibling.
+/// Errors located in an imported module, or with no location, keep the
+/// one-line form.
+fn report_error(err: &pluto::diagnostics::CompileError, file: &std::path::Path) -> ! {
+    use pluto::diagnostics::{render_error, CompileError};
+    let located_in = |e: &CompileError| match e {
+        CompileError::Syntax { span, .. } | CompileError::Type { span, .. } => Some(span.file_id),
+        _ => None,
+    };
+    match err {
+        CompileError::Syntax { .. } | CompileError::Type { .. } if located_in(err) == Some(0) => {
+            if let Some(src) = read_text_source(file) {
+                render_error(&src, &file.display().to_string(), err);
+                std::process::exit(1);
+            }
+        }
+        CompileError::SiblingFile { source, .. } if located_in(source).is_some() => {
+            // render_error reads the sibling's own source.
+            render_error("", "", err);
+            std::process::exit(1);
+        }
+        _ => {}
+    }
+    let filename = error_filename(err).unwrap_or_else(|| file.to_string_lossy().to_string());
+    eprintln!("error [{}]: {err}", filename);
+    std::process::exit(1);
+}
+
+/// The text of a `.pt` source file, or None for a binary `.pluto` file or an
+/// unreadable one (spans in a binary file index its embedded source).
+fn read_text_source(file: &std::path::Path) -> Option<String> {
+    let data = std::fs::read(file).ok()?;
+    if pluto::binary::is_binary_format(&data) {
+        return None;
+    }
+    String::from_utf8(data).ok()
+}
+
 fn error_filename(err: &pluto::diagnostics::CompileError) -> Option<String> {
     match err {
         pluto::diagnostics::CompileError::SiblingFile { path, .. } => {
@@ -284,10 +325,7 @@ fn main() {
                             eprintln!("system: {} member(s) compiled", members.len());
                         }
                         Err(err) => {
-                            let filename = error_filename(&err)
-                                .unwrap_or_else(|| file.to_string_lossy().to_string());
-                            eprintln!("error [{}]: {err}", filename);
-                            std::process::exit(1);
+                            report_error(&err, &file);
                         }
                     }
                 }
@@ -306,17 +344,28 @@ fn main() {
                     );
 
                     if !result.success {
+                        let source = read_text_source(&file);
                         for err in &result.errors {
-                            eprintln!("error [{}]: {}", file.display(), err.message);
+                            // A line number means the span is in the entry
+                            // file (see entry_error_diagnostic); show it.
+                            match (&err.span, &source) {
+                                (Some(span), Some(src)) if span.line.is_some() => {
+                                    pluto::diagnostics::render_error_at(
+                                        src,
+                                        &file.display().to_string(),
+                                        &err.message,
+                                        &err.message,
+                                        span.start..span.end,
+                                    );
+                                }
+                                _ => eprintln!("error [{}]: {}", file.display(), err.message),
+                            }
                         }
                         std::process::exit(1);
                     }
                 }
                 Err(err) => {
-                    let filename = error_filename(&err)
-                        .unwrap_or_else(|| file.to_string_lossy().to_string());
-                    eprintln!("error [{}]: {err}", filename);
-                    std::process::exit(1);
+                    report_error(&err, &file);
                 }
             }
         }
@@ -329,10 +378,7 @@ fn main() {
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    let filename = error_filename(&err)
-                        .unwrap_or_else(|| file.to_string_lossy().to_string());
-                    eprintln!("error [{}]: {err}", filename);
-                    std::process::exit(1);
+                    report_error(&err, &file);
                 }
             }
 
@@ -345,18 +391,12 @@ fn main() {
                 match pluto::compile_file_with_coverage(&file, &tmp, stdlib) {
                     Ok(map) => Some(map),
                     Err(err) => {
-                        let filename = error_filename(&err)
-                            .unwrap_or_else(|| file.to_string_lossy().to_string());
-                        eprintln!("error [{}]: {err}", filename);
-                        std::process::exit(1);
+                        report_error(&err, &file);
                     }
                 }
             } else {
                 if let Err(err) = pluto::compile_file_with_options(&file, &tmp, stdlib, gc, false) {
-                    let filename = error_filename(&err)
-                        .unwrap_or_else(|| file.to_string_lossy().to_string());
-                    eprintln!("error [{}]: {err}", filename);
-                    std::process::exit(1);
+                    report_error(&err, &file);
                 }
                 None
             };
@@ -427,9 +467,7 @@ fn main() {
             let coverage_map = match pluto::compile_file_for_tests_with_coverage(&file, &tmp, stdlib, use_cache, coverage) {
                 Ok(map) => map,
                 Err(err) => {
-                    let filename = file.to_string_lossy().to_string();
-                    eprintln!("error [{}]: {err}", filename);
-                    std::process::exit(1);
+                    report_error(&err, &file);
                 }
             };
 
@@ -534,10 +572,7 @@ fn main() {
                     }
                 }
                 Err(err) => {
-                    let filename = error_filename(&err)
-                        .unwrap_or_else(|| file.to_string_lossy().to_string());
-                    eprintln!("error [{}]: {err}", filename);
-                    std::process::exit(1);
+                    report_error(&err, &file);
                 }
             }
         }
