@@ -11,9 +11,9 @@ use libfuzzer_sys::fuzz_target;
 // and `at` placement — plus near-valid mutations of each.
 //
 // Errors at any stage are fine (malformed input must be *rejected*, not
-// crash); panics and aborts are findings. The pipeline runs on a 16MB
-// stack thread, exactly like `pluto::compile_to_object`, so stack
-// headroom matches production.
+// crash); panics and aborts are findings. The pipeline runs on a 64MB
+// stack thread, exactly like `pluto::compile_to_object` (COMPILE_STACK_BYTES
+// in src/lib.rs), so stack headroom matches production.
 fuzz_target!(|data: &[u8]| {
     let Ok(s) = std::str::from_utf8(data) else {
         return;
@@ -25,7 +25,7 @@ fuzz_target!(|data: &[u8]| {
     }
     let source = s.to_string();
     std::thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
+        .stack_size(64 * 1024 * 1024)
         .spawn(move || {
             let Ok(mut program) = pluto::parse_source(&source) else {
                 return;

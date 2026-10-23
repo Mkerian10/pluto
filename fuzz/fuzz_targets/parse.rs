@@ -161,7 +161,7 @@ struct FuzzTokens {
 
 fuzz_target!(|input: FuzzTokens| {
     // Cap the token count: nesting tokens (`(`, `{`) recurse in the parser,
-    // and production parses on a 16MB stack (see pluto::compile_to_object);
+    // and production parses on a 64MB stack (see pluto::compile_to_object);
     // the default fuzz thread is smaller.
     if input.tokens.len() > 512 {
         return;
