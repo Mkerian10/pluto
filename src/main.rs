@@ -182,6 +182,21 @@ enum WatchCommands {
 
 /// Get the appropriate filename to display in error messages.
 /// For sibling file errors, returns the sibling file path instead of the entry file.
+/// Exit with a plain message when the input path is missing or not a file,
+/// instead of letting the read fail deep in the pipeline as a mislabelled
+/// "Codegen error: failed to read file".
+fn require_source_file(file: &std::path::Path) {
+    if file.is_file() {
+        return;
+    }
+    if file.is_dir() {
+        eprintln!("error: {} is a directory; pass the entry source file (e.g. {}/main.pt)", file.display(), file.display());
+    } else {
+        eprintln!("error: no such file: {}", file.display());
+    }
+    std::process::exit(1);
+}
+
 /// Print a compile error for the entry `file` and exit nonzero.
 ///
 /// Syntax and type errors get a source snippet framed in the file their span
@@ -329,6 +344,7 @@ fn main() {
 
     match cli.command {
         Commands::Compile { file, output, standalone } => {
+            require_source_file(&file);
             // Check if this is a system file (contains a `system` declaration)
             match pluto::detect_system_file(&file) {
                 Ok(Some(_program)) => {
@@ -386,6 +402,7 @@ fn main() {
             }
         }
         Commands::Run { file, coverage } => {
+            require_source_file(&file);
             // Reject system files — they produce multiple binaries
             match pluto::detect_system_file(&file) {
                 Ok(Some(_)) => {
@@ -471,6 +488,7 @@ fn main() {
             }
         },
         Commands::Test { file, seed, iterations, test_filter, strategy, schedule, until_failure, no_cache, coverage } => {
+            require_source_file(&file);
             let tmp = std::env::temp_dir().join("pluto_test");
             // A filter, strategy override, schedule, or failure hunt must
             // actually run the targeted tests — the unchanged-test cache
@@ -573,6 +591,7 @@ fn main() {
             }
         }
         Commands::EmitAst { file, output } => {
+            require_source_file(&file);
             let output = output.unwrap_or_else(|| file.with_extension("pluto"));
 
             match pluto::parse_file_for_editing(&file, stdlib) {
@@ -593,6 +612,7 @@ fn main() {
             }
         }
         Commands::GeneratePt { file, output } => {
+            require_source_file(&file);
             let data = match std::fs::read(&file) {
                 Ok(d) => d,
                 Err(e) => {
@@ -629,6 +649,7 @@ fn main() {
             }
         }
         Commands::Sync { file, output } => {
+            require_source_file(&file);
             let pluto_path = output.unwrap_or_else(|| file.with_extension("pluto"));
 
             match pluto::sync::sync_pt_to_pluto(&file, &pluto_path) {
@@ -664,6 +685,7 @@ fn main() {
             }
         }
         Commands::Analyze { file } => {
+            require_source_file(&file);
             // Analyze the file and update with fresh derived data
             match pluto::analyze_and_update(&file, stdlib) {
                 Ok(derived) => {
