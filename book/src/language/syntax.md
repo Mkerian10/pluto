@@ -144,6 +144,47 @@ Range endpoints can be expressions: `for i in 0..(n * 2) { ... }`
 
 **break / continue:** work in both `while` and `for`. `break` exits the innermost loop. Cannot be used inside closures.
 
+## Generators
+
+A function whose return type is `stream T` is a generator. Calling it creates the stream without running the body. Each turn of a `for` loop over the stream runs the body up to its next `yield`, which hands one value to the loop.
+
+```pluto
+fn evens(limit: int) stream int {
+    for i in 0..limit {
+        if i % 2 == 0 {
+            yield i
+        }
+    }
+}
+
+fn main() {
+    for n in evens(10) {
+        print(n)            // 0, 2, 4, 6, 8
+    }
+}
+```
+
+- The stream ends when the body finishes or runs a bare `return`. A generator needs no `return`.
+- `yield` can appear inside `if`, `while`, `for` and `match` arms, at any depth. It cannot appear inside a closure.
+- Generators are lazy, so an infinite one is fine. A `break` in the consuming loop simply stops asking for values.
+- A stream is single-pass. Iterating it a second time yields nothing, so call the generator again for a fresh stream.
+- Generators can be generic and can consume other streams:
+
+```pluto
+fn take<T>(s: stream T, count: int) stream T {
+    let mut i = 0
+    for x in s {
+        if i >= count {
+            return
+        }
+        yield x
+        i = i + 1
+    }
+}
+```
+
+Generators must be top-level functions. A method cannot be a generator.
+
 ## Builtins
 
 | Function | Signature | Notes |
