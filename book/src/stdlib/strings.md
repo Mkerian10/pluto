@@ -81,6 +81,8 @@ strings.to_upper("hello")    // "HELLO"
 strings.to_lower("HELLO")    // "hello"
 ```
 
+Only ASCII letters change case; every other character is copied unchanged.
+
 ### replace
 
 ```
