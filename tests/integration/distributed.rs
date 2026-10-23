@@ -133,6 +133,32 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+/// A spawned server process that is killed and reaped when it goes out of
+/// scope, including when an assertion panics first. Without it a failing
+/// test left its fixed-port server running (and every exit left a zombie),
+/// which broke later runs that wanted the same port.
+struct KillOnDrop(std::process::Child);
+
+impl std::ops::Deref for KillOnDrop {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for KillOnDrop {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 fn manifest_stdlib() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("stdlib")
 }
@@ -219,10 +245,10 @@ fn serve_generated_server_round_trips() {
     let (_cd, client_bin) =
         build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -294,10 +320,10 @@ fn complex_type_round_trips_over_rpc() {
     let (_cd, client_bin) =
         build_binary(&[("echo.pluto", STRUCT_IFACE), ("main.pluto", STRUCT_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -365,10 +391,10 @@ fn large_payload_round_trips() {
     let (_cd, client_bin) =
         build_binary(&[("store.pluto", BLOB_IFACE), ("main.pluto", BLOB_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -452,10 +478,10 @@ fn typed_error_propagates_over_rpc() {
     let (_cd, client_bin) =
         build_binary(&[("directory.pluto", ERR_IFACE), ("main.pluto", ERR_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -543,10 +569,10 @@ fn multi_catch_handles_typed_and_network_errors() {
         build_binary(&[("directory.pluto", MC_IFACE), ("main.pluto", MC_CLIENT_SRC)]);
 
     // Validation path: server is up and rejects id=-5.
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -582,7 +608,7 @@ fn serve_recovers_from_a_stuck_client() {
     let (_cd, client_bin) =
         build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -648,7 +674,7 @@ fn remote_call_rejected_on_interface_skew() {
     let (_cd, client_bin) =
         build_binary(&[("billing.pluto", SKEW_IFACE), ("main.pluto", SKEW_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -704,7 +730,7 @@ fn remote_call_rejected_on_contract_skew() {
     let (_cd, client_bin) =
         build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -727,7 +753,7 @@ fn remote_call_round_trips_with_mirrored_contract() {
     let (_cd, client_bin) =
         build_binary(&[("billing.pluto", CONTRACT_IFACE), ("main.pluto", CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -817,7 +843,7 @@ fn remote_call_rejected_on_field_reorder_skew() {
     let (_cd, client_bin) =
         build_binary(&[("registry.pluto", REORDER_IFACE), ("main.pluto", REORDER_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -840,7 +866,7 @@ fn remote_call_round_trips_with_same_layout() {
     let (_cd, client_bin) =
         build_binary(&[("registry.pluto", ALIGNED_IFACE), ("main.pluto", REORDER_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -914,7 +940,7 @@ fn remote_call_rejected_on_nullable_flip_skew() {
     let (_cd, client_bin) =
         build_binary(&[("svc.pluto", NULLABLE_FLIP_IFACE), ("main.pluto", NULLABLE_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1036,7 +1062,7 @@ fn boundary_failure_definite_on_interface_skew_rejection() {
     let (_cd, client_bin) =
         build_binary(&[("billing.pluto", SKEW_IFACE), ("main.pluto", CLASSIFY_SKEW_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1072,7 +1098,7 @@ fn serve_handles_clients_concurrently() {
     let (_cd, client_bin) =
         build_binary(&[("billing.pluto", BILLING_IFACE), ("main.pluto", CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1140,7 +1166,7 @@ fn remote_string_arg_with_newline_roundtrips() {
     let (_cd, client_bin) =
         build_binary(&[("echo.pluto", NL_IFACE), ("main.pluto", NL_CLIENT)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1203,7 +1229,7 @@ fn remote_struct_string_field_with_newline_roundtrips() {
     let (_cd, client_bin) =
         build_binary(&[("store.pluto", SNL_IFACE), ("main.pluto", SNL_CLIENT)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1254,7 +1280,7 @@ fn remote_string_return_with_newline_roundtrips() {
     let (_cd, client_bin) =
         build_binary(&[("banner.pluto", RET_IFACE), ("main.pluto", RET_CLIENT)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1288,7 +1314,7 @@ fn remote_string_arg_with_backslash_and_newline_roundtrips() {
     let (_cd, client_bin) =
         build_binary(&[("echo.pluto", NL_IFACE), ("main.pluto", BS_CLIENT)]);
 
-    let mut server = Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap();
+    let mut server = KillOnDrop(Command::new(&server_bin).stdout(Stdio::piped()).spawn().unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1374,10 +1400,10 @@ fn scalar_and_nullable_round_trip_over_rpc() {
     let (_cd, client_bin) =
         build_binary(&[("calc.pluto", SCALAR_IFACE), ("main.pluto", SCALAR_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1551,10 +1577,10 @@ fn containers_round_trip_over_rpc() {
     let (_cd, client_bin) =
         build_binary(&[("store.pluto", CONTAINER_IFACE), ("main.pluto", CONTAINER_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1671,10 +1697,10 @@ fn at_placement_same_binary_two_plans() {
 
     // Plan B: distributed — same binary, domain bound to a real server.
     let (_sd, server_bin) = build_binary(&[("main.pluto", AT_SERVER_SRC)]);
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1801,10 +1827,10 @@ fn entity_identity_survives_round_trip() {
 
     // Plan B: distributed — the entity round-trips a real socket.
     let (_sd, server_bin) = build_binary(&[("main.pluto", HANDLE_SERVER_SRC)]);
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1890,10 +1916,10 @@ fn entity_handle_call_routes_home() {
     assert_eq!(String::from_utf8_lossy(&colocated.stdout), "0\n100\n");
 
     // Plan B: distributed — the call routes to the entity's home process.
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -1953,10 +1979,10 @@ fn domain_data_fields_in_both_plans() {
     assert_eq!(String::from_utf8_lossy(&colocated.stdout), "[]\n0\n");
 
     // Plan B: distributed — the server's constructed state.
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -2019,10 +2045,10 @@ fn served_entity_self_call_in_dispatch() {
     let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
     let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -2243,10 +2269,10 @@ fn blob_authority_serves_fenced_writes_across_processes() {
     // Plan B: distributed.
     // The authority lives in the server process and every call routes home
     // over a real socket (dynamic port).
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -2324,10 +2350,10 @@ fn generic_entity_identity_survives_round_trip() {
 
     // Plan B: distributed — the instantiation round-trips a real socket.
     let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -2379,10 +2405,10 @@ class Registry {
     let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
     let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -2633,10 +2659,10 @@ class Registry {
     let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
     let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -2742,10 +2768,10 @@ fn entity_handle_calls_serialize_with_local_calls() {
     let (_sd, server_bin) = build_binary(&[("main.pluto", &server_src)]);
     let (_ad, app_bin) = build_binary(&[("main.pluto", &app_src)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -2940,10 +2966,10 @@ fn bytes_payload_round_trips_over_rpc() {
     let (_cd, client_bin) =
         build_binary(&[("blobecho.pluto", BYTES_IFACE), ("main.pluto", BYTES_CLIENT_SRC)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -3219,10 +3245,10 @@ app Client[s: remote svc.Svc] {
     let (_cd, client_bin) =
         build_binary(&[("svc.pluto", CYCLE_IFACE), ("main.pluto", CLIENT)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -3275,10 +3301,10 @@ app Client[s: remote svc.Svc] {
     let (_cd, client_bin) =
         build_binary(&[("svc.pluto", CYCLE_IFACE), ("main.pluto", CLIENT)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
@@ -3337,10 +3363,10 @@ app App[e: remote blobecho.BlobEcho] {
     let (_cd, client_bin) =
         build_binary(&[("blobecho.pluto", BYTES_IFACE), ("main.pluto", CLIENT)]);
 
-    let mut server = Command::new(&server_bin)
+    let mut server = KillOnDrop(Command::new(&server_bin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap();
+        .unwrap());
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
     reader.read_line(&mut port_line).unwrap();
