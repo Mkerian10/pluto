@@ -291,3 +291,15 @@ fn fstring_invalid_escape_in_literal_part_rejected() {
         "unknown escape sequence",
     );
 }
+
+#[test]
+fn interpolation_errors_point_at_the_expression() {
+    // Errors inside `{...}` carry the expression's real position, not an
+    // offset relative to the interpolation text (which landed on line 1).
+    let source = "fn main() {\n    let a = 1\n    print(f\"a={a} b={nope}\")\n}\n";
+    let err = pluto::compile_to_object(source).expect_err("undefined variable");
+    let pluto::diagnostics::CompileError::Type { span, .. } = err else {
+        panic!("expected a type error, got {err}");
+    };
+    assert_eq!(&source[span.start..span.end], "nope");
+}
