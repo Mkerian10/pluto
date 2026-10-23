@@ -404,7 +404,9 @@ impl PrettyPrinter {
             Lifecycle::Transient => self.write("transient "),
             Lifecycle::Singleton => {},
         }
-        self.write("class ");
+        // `object` declares an entity (identity, shared across spawn); printing
+        // it as `class` would silently turn it into a copied value type.
+        self.write(if cls.is_object { "object " } else { "class " });
         self.write(&cls.name.node);
         self.emit_type_params(&cls.type_params, &cls.type_param_bounds);
 
@@ -2206,6 +2208,15 @@ fn main() {
         let result = pp(src);
         assert!(result.contains("error NotFound {"));
         assert!(result.contains("message: string"));
+        assert_roundtrip_stable(src);
+    }
+
+    #[test]
+    fn test_object_keeps_its_keyword() {
+        let src = "object Counter {\n    value: int\n}\n\nclass Point {\n    x: int\n}\n";
+        let result = pp(src);
+        assert!(result.contains("object Counter {"), "{result}");
+        assert!(result.contains("class Point {"), "{result}");
         assert_roundtrip_stable(src);
     }
 
