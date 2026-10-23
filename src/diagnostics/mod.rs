@@ -245,6 +245,18 @@ fn warning_in_source(source_len: usize, span: &Span) -> bool {
     span.start <= span.end && span.end <= source_len
 }
 
+/// Whether diagnostics should be coloured: only on a terminal, and never when
+/// `NO_COLOR` is set (https://no-color.org). Piped or captured stderr gets
+/// plain text instead of escape codes.
+fn color_enabled() -> bool {
+    use std::io::IsTerminal;
+    std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
+}
+
+fn report_config() -> ariadne::Config {
+    ariadne::Config::default().with_color(color_enabled())
+}
+
 /// Render a CompileWarning with ariadne for nice terminal output (yellow).
 pub fn render_warning(source: &str, filename: &str, warning: &CompileWarning) {
     use ariadne::{Label, Report, ReportKind, Source};
@@ -261,6 +273,7 @@ pub fn render_warning(source: &str, filename: &str, warning: &CompileWarning) {
     // Carry the message on the header as well as the label, so it stays
     // readable even if the code frame can't be rendered.
     Report::build(ReportKind::Warning, filename, warning.span.start)
+        .with_config(report_config())
         .with_message(&warning.msg)
         .with_label(
             Label::new((filename, warning.span.start..warning.span.end))
@@ -271,22 +284,38 @@ pub fn render_warning(source: &str, filename: &str, warning: &CompileWarning) {
         .unwrap();
 }
 
-/// Render a CompileError with ariadne for nice terminal output.
-pub fn render_error(source: &str, filename: &str, err: &CompileError) {
+/// Render an error with a source snippet: `title` on the header, `label`
+/// under the code at `range`. A range outside `source` falls back to a plain
+/// line rather than a frame pointing at the wrong code.
+pub fn render_error_at(source: &str, filename: &str, title: &str, label: &str, range: std::ops::Range<usize>) {
     use ariadne::{Label, Report, ReportKind, Source};
 
+    let fits = range.start <= range.end
+        && range.end <= source.len()
+        && source.is_char_boundary(range.start)
+        && source.is_char_boundary(range.end);
+    if !fits {
+        eprintln!("error [{filename}]: {title}");
+        return;
+    }
+    // ReportKind::Error (not a lowercase Custom kind): ariadne colours a
+    // custom kind's label even when the config turns colour off.
+    Report::build(ReportKind::Error, filename, range.start)
+        .with_config(report_config())
+        .with_message(title)
+        .with_label(Label::new((filename, range)).with_message(label))
+        .finish()
+        .eprint((filename, Source::from(source)))
+        .unwrap();
+}
+
+/// Render a CompileError with ariadne for nice terminal output.
+///
+/// `source` must be the text of the file the error's span points into.
+pub fn render_error(source: &str, filename: &str, err: &CompileError) {
     match err {
         CompileError::Syntax { msg, span } | CompileError::Type { msg, span } => {
-            let kind_str = if matches!(err, CompileError::Syntax { .. }) { "syntax" } else { "type" };
-            Report::build(ReportKind::Error, filename, span.start)
-                .with_message(format!("{kind_str} error"))
-                .with_label(
-                    Label::new((filename, span.start..span.end))
-                        .with_message(msg),
-                )
-                .finish()
-                .eprint((filename, Source::from(source)))
-                .unwrap();
+            render_error_at(source, filename, msg, msg, span.start..span.end);
         }
         CompileError::Codegen { msg }
         | CompileError::Module { msg }

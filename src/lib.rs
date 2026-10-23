@@ -167,6 +167,29 @@ fn on_compile_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
     })
 }
 
+/// Render warnings against the file each one is in. A warning in an imported
+/// module carries that module's file id and byte offsets, so rendering it
+/// against the entry source would point at unrelated code. File id 0 is the
+/// entry; ids the source map doesn't know (a binary entry, generated code)
+/// fall back to the entry source, where `render_warning` handles spans that
+/// don't fit.
+fn render_warnings(
+    warnings: &[CompileWarning],
+    source_map: &modules::SourceMap,
+    entry_source: &str,
+    entry_file: &Path,
+) {
+    let entry_name = entry_file.display().to_string();
+    for w in warnings {
+        match source_map.get_source(w.span.file_id) {
+            Some((path, src)) if w.span.file_id != 0 => {
+                diagnostics::render_warning(src, &path.display().to_string(), w);
+            }
+            _ => diagnostics::render_warning(entry_source, &entry_name, w),
+        }
+    }
+}
+
 /// Compile a source string to object bytes (lex → parse → prelude → typeck → monomorphize → closures → codegen).
 /// No file I/O or linking. Useful for compile-fail tests that only need to check errors.
 pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
@@ -308,9 +331,7 @@ fn compile_file_impl_inner(entry_file: &Path, output_path: &Path, stdlib_root: O
     };
 
     let result = run_frontend(&mut program, false)?;
-    for w in &result.warnings {
-        diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
-    }
+    render_warnings(&result.warnings, &source_map, &source, &entry_file);
 
     let cov_map = if coverage {
         Some(coverage::build_coverage_map(&program, &source_map))
@@ -649,9 +670,7 @@ fn compile_file_for_tests_inner(
 
 
     let result = run_frontend(&mut program, true)?;
-    for w in &result.warnings {
-        diagnostics::render_warning(&source, &entry_file.display().to_string(), w);
-    }
+    render_warnings(&result.warnings, &source_map, &source, &entry_file);
 
     // Build derived info to get test dependency hashes
     let derived_info = derived::DerivedInfo::build(&result.env, &program, &source);
