@@ -99,7 +99,7 @@ impl Module {
     /// Look up a declaration by its stable UUID.
     pub fn get(&self, id: Uuid) -> Option<DeclRef<'_>> {
         let loc = self.index.by_uuid.get(&id)?;
-        self.resolve_location(loc)
+        self.resolve_location(loc, id)
     }
 
     // --- By-name lookup ---
@@ -366,20 +366,25 @@ impl Module {
 
     // --- Internal helpers ---
 
-    fn resolve_location(&self, loc: &crate::index::DeclLocation) -> Option<DeclRef<'_>> {
+    /// Resolve an index location to the declaration with UUID `id`.
+    ///
+    /// Nested locations are ambiguous on their own: a method's `parent_index`
+    /// is a class index for class methods but `0` for app methods, a field's
+    /// parent may be a class, an error or the app, and a method param's
+    /// location records the class but not the method. Those kinds are
+    /// therefore confirmed (or found) by UUID rather than trusted by position.
+    fn resolve_location(&self, loc: &crate::index::DeclLocation, id: Uuid) -> Option<DeclRef<'_>> {
         match loc.kind {
             DeclKind::Function => {
                 if let Some(parent_idx) = loc.parent_index {
-                    // Method on a class or app
-                    if let Some(class) = self.program.classes.get(parent_idx) {
-                        let method = class.node.methods.get(loc.index)?;
-                        return Some(DeclRef::function(&method.node));
-                    }
-                    if let Some(app) = &self.program.app {
-                        let method = app.node.methods.get(loc.index)?;
-                        return Some(DeclRef::function(&method.node));
-                    }
-                    None
+                    // Method on a class or the app.
+                    let class_method = self.program.classes.get(parent_idx)
+                        .and_then(|c| c.node.methods.get(loc.index));
+                    let app_method = self.program.app.as_ref()
+                        .and_then(|a| a.node.methods.get(loc.index));
+                    class_method.into_iter().chain(app_method)
+                        .find(|m| m.node.id == id)
+                        .map(|m| DeclRef::function(&m.node))
                 } else {
                     let f = self.program.functions.get(loc.index)?;
                     Some(DeclRef::function(&f.node))
@@ -416,13 +421,23 @@ impl Module {
                 Some(DeclRef::app(&a.node))
             }
             DeclKind::Field => {
-                // Fields can be on classes, errors, or app — we'd need more context
-                // For now, search by UUID in all field containers
-                None
+                let classes = self.program.classes.iter().flat_map(|c| c.node.fields.iter());
+                let errors = self.program.errors.iter().flat_map(|e| e.node.fields.iter());
+                let app = self.program.app.iter().flat_map(|a| a.node.inject_fields.iter());
+                classes.chain(errors).chain(app)
+                    .find(|f| f.id == id)
+                    .map(DeclRef::field)
             }
             DeclKind::Param => {
-                // Params similarly nested — search would be needed
-                None
+                let functions = self.program.functions.iter().map(|f| &f.node);
+                let class_methods = self.program.classes.iter()
+                    .flat_map(|c| c.node.methods.iter().map(|m| &m.node));
+                let app_methods = self.program.app.iter()
+                    .flat_map(|a| a.node.methods.iter().map(|m| &m.node));
+                functions.chain(class_methods).chain(app_methods)
+                    .flat_map(|f| f.params.iter())
+                    .find(|p| p.id == id)
+                    .map(DeclRef::param)
             }
         }
     }

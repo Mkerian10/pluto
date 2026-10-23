@@ -77,3 +77,62 @@ fn binary_round_trip() {
         assert_eq!(a.name(), b.name());
     }
 }
+
+// Nested declarations (fields, params, app methods) are indexed by UUID, and
+// `get`/`find` must resolve them to the right declaration.
+#[test]
+fn get_resolves_fields_params_and_app_methods() {
+    let src = r#"
+error NotFound {
+    key: string
+}
+
+class Store {
+    count: int
+
+    fn size(self) int {
+        return self.count
+    }
+}
+
+app Main {
+    fn main(self) {
+        print(helper(1))
+    }
+
+    fn extra(self, flag: bool) {
+    }
+}
+
+fn helper(amount: int) int {
+    return amount
+}
+"#;
+    let module = Module::from_source(src).unwrap();
+    let program = module.program();
+
+    let store = &program.classes[0].node;
+    let field = module.get(store.fields[0].id).expect("class field resolves");
+    assert_eq!((field.kind(), field.name()), (DeclKind::Field, "count"));
+
+    let err_field = module.get(program.errors[0].node.fields[0].id).expect("error field resolves");
+    assert_eq!(err_field.name(), "key");
+
+    let helper = &program.functions[0].node;
+    let param = module.get(helper.params[0].id).expect("function param resolves");
+    assert_eq!((param.kind(), param.name()), (DeclKind::Param, "amount"));
+
+    // An app method shares parent index 0 with class 0's methods; it must
+    // resolve to the app method, not Store's method at the same position.
+    let app = &program.app.as_ref().unwrap().node;
+    for method in &app.methods {
+        let found = module.get(method.node.id).expect("app method resolves");
+        assert_eq!(found.name(), method.node.name.node);
+    }
+    let flag = app.methods[1].node.params.iter().find(|p| p.name.node == "flag").unwrap();
+    assert_eq!(module.get(flag.id).expect("app method param resolves").name(), "flag");
+
+    // find() no longer drops fields and params.
+    assert!(module.find("count").iter().any(|d| d.kind() == DeclKind::Field));
+    assert!(module.find("amount").iter().any(|d| d.kind() == DeclKind::Param));
+}
