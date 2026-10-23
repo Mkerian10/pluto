@@ -347,7 +347,7 @@ impl PrettyPrinter {
         }
         self.emit_contracts(&method.contracts);
         if let Some(body) = &method.body {
-            self.write(" ");
+            self.emit_body_separator(&method.contracts);
             self.emit_block(&body.node);
         }
     }
@@ -408,9 +408,24 @@ impl PrettyPrinter {
         self.write(&cls.name.node);
         self.emit_type_params(&cls.type_params, &cls.type_param_bounds);
 
+        // Ambient deps come before bracket deps: `class C uses A, B [d: D]`,
+        // the order parse_class reads them in.
+        if !cls.uses.is_empty() {
+            self.write(" uses ");
+            for (i, u) in cls.uses.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&u.node);
+            }
+        }
+
         // Bracket deps (injected fields)
         let injected: Vec<&Field> = cls.fields.iter().filter(|f| f.is_injected).collect();
         if !injected.is_empty() {
+            if !cls.uses.is_empty() {
+                self.write(" ");
+            }
             self.write("[");
             for (i, f) in injected.iter().enumerate() {
                 if i > 0 {
@@ -441,17 +456,6 @@ impl PrettyPrinter {
                     }
                     self.write(">");
                 }
-            }
-        }
-
-        // uses traits
-        if !cls.uses.is_empty() {
-            self.write(" uses ");
-            for (i, u) in cls.uses.iter().enumerate() {
-                if i > 0 {
-                    self.write(", ");
-                }
-                self.write(&u.node);
             }
         }
 
@@ -533,7 +537,7 @@ impl PrettyPrinter {
             }
             self.write_indent();
             self.emit_function_header(&method.node);
-            self.write(" ");
+            self.emit_body_separator(&method.node.contracts);
             self.emit_block(&method.node.body.node);
             self.newline();
         }
@@ -612,8 +616,20 @@ impl PrettyPrinter {
 
     fn emit_function(&mut self, func: &Function) {
         self.emit_function_header(func);
-        self.write(" ");
+        self.emit_body_separator(&func.contracts);
         self.emit_block(&func.body.node);
+    }
+
+    /// Space before a body's `{`, or a newline when contract clauses were
+    /// printed: after `requires e` a same-line `{` would be read as part of
+    /// the clause expression, so the parser expects the body on its own line.
+    fn emit_body_separator(&mut self, contracts: &[crate::span::Spanned<ContractClause>]) {
+        if contracts.iter().any(|c| c.node.provenance.is_none()) {
+            self.newline();
+            self.write_indent();
+        } else {
+            self.write(" ");
+        }
     }
 
     fn emit_function_with_hint(&mut self, func: &Function) {
@@ -750,7 +766,7 @@ impl PrettyPrinter {
             }
             self.write_indent();
             self.emit_function_header(&method.node);
-            self.write(" ");
+            self.emit_body_separator(&method.node.contracts);
             self.emit_block(&method.node.body.node);
             self.newline();
         }
@@ -854,7 +870,7 @@ impl PrettyPrinter {
                 self.write("override ");
             }
             self.emit_function_header(&method.node);
-            self.write(" ");
+            self.emit_body_separator(&method.node.contracts);
             self.emit_block(&method.node.body.node);
             self.newline();
         }
@@ -1320,14 +1336,30 @@ impl PrettyPrinter {
                 self.write(") }");
             }
             Expr::IntLit(n) => {
+                // A negative literal prints with a prefix `-`, so it needs the
+                // same parentheses as a unary minus under a postfix receiver.
+                let wrap = *n < 0 && parent_prec > UNARY_PREC;
+                if wrap {
+                    self.write("(");
+                }
                 self.write(&n.to_string());
+                if wrap {
+                    self.write(")");
+                }
             }
             Expr::FloatLit(f) => {
                 let s = f.to_string();
+                let wrap = s.starts_with('-') && parent_prec > UNARY_PREC;
+                if wrap {
+                    self.write("(");
+                }
                 self.write(&s);
                 // Ensure decimal point is present
                 if !s.contains('.') && !s.contains('e') && !s.contains('E') {
                     self.write(".0");
+                }
+                if wrap {
+                    self.write(")");
                 }
             }
             Expr::BoolLit(b) => {
@@ -1375,8 +1407,18 @@ impl PrettyPrinter {
                     UnaryOp::Not => "!",
                     UnaryOp::BitNot => "~",
                 };
+                // A postfix receiver (`.m()`, `.f`, `[i]`, parent 25) binds
+                // tighter than a prefix operator: `(-1).low_byte()` must keep
+                // its parentheses or it reparses as `-(1.low_byte())`.
+                let wrap = parent_prec > UNARY_PREC;
+                if wrap {
+                    self.write("(");
+                }
                 self.write(op_str);
                 self.emit_expr(&operand.node, 25);
+                if wrap {
+                    self.write(")");
+                }
             }
             Expr::Call { name, args, .. } => {
                 self.write(&name.node);
@@ -1725,8 +1767,13 @@ impl PrettyPrinter {
                 self.emit_expr(&expr.node, 0);
                 self.write(" {");
                 self.indent += 1;
-                for arm in arms {
+                for (i, arm) in arms.iter().enumerate() {
+                    if i > 0 {
+                        // Match-expression arms are comma-separated.
+                        self.write(",");
+                    }
                     self.newline();
+                    self.write_indent();
                     match &arm.pattern {
                         MatchPattern::Wildcard { .. } => {
                             self.write("_");
@@ -1756,6 +1803,7 @@ impl PrettyPrinter {
                 }
                 self.indent -= 1;
                 self.newline();
+                self.write_indent();
                 self.write("}");
             }
             Expr::QualifiedAccess { segments } => {
@@ -1766,6 +1814,10 @@ impl PrettyPrinter {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/// Precedence of prefix operators (`-x`, `!x`, `~x`): above every binary
+/// operator, below postfix receivers (25).
+const UNARY_PREC: u8 = 21;
 
 fn binop_prec(op: BinOp) -> u8 {
     match op {
@@ -2154,6 +2206,56 @@ fn main() {
         let result = pp(src);
         assert!(result.contains("error NotFound {"));
         assert!(result.contains("message: string"));
+        assert_roundtrip_stable(src);
+    }
+
+    #[test]
+    fn test_round_trip_fixes() {
+        // Each of these used to pretty-print into source that no longer
+        // parsed or meant something else.
+        let src = r#"trait Logger {
+    fn log(self, m: string)
+}
+
+class Svc uses Logger [db: Db] {
+    n: int
+
+    fn get(self, i: int) int
+        requires i >= 0
+    {
+        return self.n
+    }
+}
+
+fn first(xs: [int]) int
+    requires xs.len() > 0
+{
+    return xs[0]
+}
+
+fn kind(s: Shape) string {
+    return match s {
+        Shape.Circle { r } => "round",
+        _ => "angular"
+    }
+}
+
+fn main() {
+    let a = (-1).low_byte()
+    let b = (-16.0).abs()
+    let c = (-x).len()
+    let d = -(-x)
+}
+"#;
+        let result = pp(src);
+        assert!(result.contains("class Svc uses Logger [db: Db]"), "{result}");
+        assert!(result.contains("requires i >= 0\n    {"), "{result}");
+        assert!(result.contains("requires xs.len() > 0\n{"), "{result}");
+        assert!(result.contains("Shape.Circle { r } => \"round\",\n        _ => \"angular\"\n    }"), "{result}");
+        assert!(result.contains("(-1).low_byte()"), "{result}");
+        assert!(result.contains("(-16.0).abs()"), "{result}");
+        assert!(result.contains("(-x).len()"), "{result}");
+        assert!(result.contains("-(-x)"), "{result}");
         assert_roundtrip_stable(src);
     }
 
