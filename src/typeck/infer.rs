@@ -2325,6 +2325,27 @@ fn infer_method_call(
                         span,
                     ));
                 }
+                // Mirror the types the runtime can compare and print; anything
+                // else used to reach codegen as a location-less error. A type
+                // parameter (or its skolem `%T` while a generic body is checked)
+                // is checked per instantiation, after monomorphization.
+                let is_type_param = match &inner_type {
+                    PlutoType::TypeParam(_) => true,
+                    PlutoType::Class(n) => n.starts_with('%'),
+                    _ => false,
+                };
+                if !is_type_param && !matches!(
+                    inner_type,
+                    PlutoType::Int | PlutoType::Float | PlutoType::Bool | PlutoType::String | PlutoType::Byte
+                ) {
+                    return Err(CompileError::type_err(
+                        format!(
+                            "to_equal() supports int, float, bool, string and byte, not {inner_type}; \
+                             compare with == instead: expect(actual == expected).to_be_true()"
+                        ),
+                        span,
+                    ));
+                }
                 let expected_type = infer_expr(&args[0].node, args[0].span, env, None)?;
                 if inner_type != expected_type {
                     return Err(CompileError::type_err(
