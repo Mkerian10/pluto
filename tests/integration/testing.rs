@@ -978,3 +978,26 @@ test "bare call" {
 }
 "#, "must be handled with ! or catch");
 }
+
+#[test]
+fn test_to_equal_unsupported_type_is_a_type_error() {
+    // Arrays, classes, enums, nullables, ... are rejected at the call with a
+    // pointer to `==`, not as a location-less codegen error.
+    compile_test_should_fail_with(
+        "test \"arrays\" {\n    expect([1, 2]).to_equal([1, 2])\n}\n",
+        "to_equal() supports int, float, bool, string and byte, not [int]",
+    );
+    compile_test_should_fail_with(
+        "class P {\n    x: int\n}\n\ntest \"classes\" {\n    expect(P { x: 1 }).to_equal(P { x: 1 })\n}\n",
+        "expect(actual == expected).to_be_true()",
+    );
+}
+
+#[test]
+fn test_to_equal_in_generic_helper() {
+    // Checked per instantiation, so a generic helper over supported types works.
+    let (_, stderr, code) = compile_test_and_run(
+        "fn same<T>(a: T, b: T) {\n    expect(a).to_equal(b)\n}\n\ntest \"generic helper\" {\n    same(1, 1)\n    same(\"x\", \"x\")\n}\n",
+    );
+    assert_eq!(code, 0, "{stderr}");
+}
