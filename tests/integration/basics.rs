@@ -425,6 +425,26 @@ fn cli_errors_point_at_the_source() {
 }
 
 #[test]
+fn cli_missing_input_is_a_plain_error() {
+    let dir = tempfile::tempdir().unwrap();
+    for cmd in ["run", "test", "compile"] {
+        let mut c = pluto();
+        c.arg(cmd).arg(dir.path().join("nope.pt"));
+        if cmd == "compile" {
+            c.arg("-o").arg(dir.path().join("bin"));
+        }
+        let output = c.output().unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("error: no such file:"), "{cmd}: {stderr}");
+        assert!(!stderr.contains("Codegen error"), "{cmd}: {stderr}");
+    }
+    let output = pluto().arg("run").arg(dir.path()).output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is a directory"));
+}
+
+#[test]
 fn module_errors_point_at_the_module_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("mathx")).unwrap();
