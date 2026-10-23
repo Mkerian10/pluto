@@ -4739,6 +4739,22 @@ impl<'a> LowerContext<'a> {
     /// them), `Byte` params widen to i64 for the C ABI, everything else
     /// passes through. `Bool` results reduce from the runtime's i64,
     /// `Elem` results convert back from a slot, `Void` yields a dummy 0.
+    /// How `__pluto_array_contains` / `__pluto_array_index_of` compare
+    /// elements, mirroring [`Self::emit_comparison`]'s `==`: 1 = float
+    /// (numeric, so -0.0 matches 0.0 and NaN never matches), 3 = string,
+    /// 5 = structural (`__pluto_deep_eq`; classes, value enums, arrays,
+    /// maps, sets, nullables), 0 = raw word (ints, bools, bytes, objects,
+    /// trait objects, handles).
+    fn array_eq_tag(&self, elem: &PlutoType) -> i64 {
+        match elem {
+            PlutoType::Float => 1,
+            PlutoType::String => 3,
+            PlutoType::Class(n) | PlutoType::Enum(n) if !self.env.object_types.contains(n) => 5,
+            PlutoType::Array(_) | PlutoType::Map(..) | PlutoType::Set(_) | PlutoType::Nullable(_) => 5,
+            _ => 0,
+        }
+    }
+
     fn lower_builtin_runtime_call(
         &mut self,
         entry: &'static crate::typeck::builtins::BuiltinMethod,
@@ -4776,8 +4792,11 @@ impl<'a> LowerContext<'a> {
             }
         }
         if tag == Tag::AfterArgs {
+            // Array contains/index_of: tell the runtime how to compare
+            // elements so the search agrees with `==` on the element type.
             let tag_ty = tag_source_type(obj_type);
-            vals.push(self.builder.ins().iconst(types::I64, key_type_tag(&tag_ty)));
+            let eq_tag = self.array_eq_tag(&tag_ty);
+            vals.push(self.builder.ins().iconst(types::I64, eq_tag));
         }
         match entry.ret {
             SymTy::Void => {
