@@ -106,11 +106,11 @@ j.to_string() string    // JSON-encoded string
 import std.json
 
 fn main() {
-    let response = json.object()
+    let mut response = json.object()
     response.set("status", json.string("ok"))
     response.set("count", json.int(3))
 
-    let items = json.array()
+    let mut items = json.array()
     items.push(json.string("apple"))
     items.push(json.string("banana"))
     response.set("items", items)
@@ -121,6 +121,6 @@ fn main() {
 
     let parsed = json.parse(s)!
     print(parsed.get("status").get_string())    // ok
-    print("{parsed.get("count").get_int()}")     // 3
+    print(f"{parsed.get("count").get_int()!}")    // 3
 }
 ```

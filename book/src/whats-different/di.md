@@ -182,8 +182,8 @@ Environment variable access uses the `std.env` stdlib module:
 import std.env
 
 fn main() {
-    let host = env.get("DATABASE_HOST") catch "localhost"
-    let port = env.get("DATABASE_PORT") catch "5432"
+    let host = env.get_or("DATABASE_HOST", "localhost")
+    let port = env.get_or("DATABASE_PORT", "5432")
     print(f"Connecting to {host}:{port}")
 }
 ```

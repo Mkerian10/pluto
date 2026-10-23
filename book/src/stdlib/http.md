@@ -94,7 +94,7 @@ import std.json
 
 fn handle(req: http.Request) http.Response {
     if req.path == "/hello" {
-        let body = json.object()
+        let mut body = json.object()
         body.set("message", json.string("Hello, World!"))
         return http.ok_json(body.to_string())
     }
@@ -105,7 +105,7 @@ fn handle(req: http.Request) http.Response {
                 tag: 0, int_val: 0, float_val: 0.0,
                 string_val: "", children: [], keys: []
             }
-            let resp = json.object()
+            let mut resp = json.object()
             resp.set("echo", data)
             return http.ok_json(resp.to_string())
         }
