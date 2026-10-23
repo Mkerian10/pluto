@@ -62,8 +62,8 @@ app OrderSystem[orders: OrderService, payments: PaymentProcessor] {
 git clone https://github.com/Mkerian10/pluto.git && cd pluto
 cargo build --release
 
-echo 'fn main() { print("hello, pluto") }' > hello.pluto
-./target/release/pluto run hello.pluto
+echo 'fn main() { print("hello, pluto") }' > hello.pt
+./target/release/pluto run hello.pt
 ```
 
 ## A Real Program
