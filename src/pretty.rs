@@ -433,9 +433,7 @@ impl PrettyPrinter {
                 if i > 0 {
                     self.write(", ");
                 }
-                self.write(&f.name.node);
-                self.write(": ");
-                self.emit_type_expr(&f.ty.node);
+                self.emit_bracket_dep(f);
             }
             self.write("]");
         }
@@ -725,9 +723,7 @@ impl PrettyPrinter {
                 if i > 0 {
                     self.write(", ");
                 }
-                self.write(&f.name.node);
-                self.write(": ");
-                self.emit_type_expr(&f.ty.node);
+                self.emit_bracket_dep(f);
             }
             self.write("]");
         }
@@ -799,9 +795,7 @@ impl PrettyPrinter {
                 if i > 0 {
                     self.write(", ");
                 }
-                self.write(&f.name.node);
-                self.write(": ");
-                self.emit_type_expr(&f.ty.node);
+                self.emit_bracket_dep(f);
             }
             self.write("]");
         }
@@ -1002,6 +996,34 @@ impl PrettyPrinter {
         }
     }
 
+    /// An expression directly followed by a block (`if`/`while` conditions,
+    /// `for` iterables, `match` scrutinees). There a struct or enum literal's
+    /// `{` would read as the block, so the parser requires parentheses
+    /// (`if (Foo { x: 1 }) { ... }`); any braces in the printed condition
+    /// get them. Parentheses are always valid and are not kept in the AST,
+    /// so this stays idempotent.
+    fn emit_condition(&mut self, expr: &Expr) {
+        let start = self.buf.len();
+        self.emit_expr(expr, 0);
+        if self.buf[start..].contains('{') {
+            self.buf.insert(start, '(');
+            self.buf.push(')');
+        }
+    }
+
+    /// One bracket dependency, `name: [remote|domain] Type`, keeping the
+    /// boundary qualifier parse_bracket_deps reads.
+    fn emit_bracket_dep(&mut self, f: &Field) {
+        self.write(&f.name.node);
+        self.write(": ");
+        if f.is_remote {
+            self.write("remote ");
+        } else if f.is_domain {
+            self.write("domain ");
+        }
+        self.emit_type_expr(&f.ty.node);
+    }
+
     /// `<T, U: Ord + Hash>`: each parameter with its trait bounds, in the
     /// form `parse_type_params` reads back.
     fn emit_type_params(
@@ -1093,7 +1115,7 @@ impl PrettyPrinter {
                 else_block,
             } => {
                 self.write("if ");
-                self.emit_expr(&condition.node, 0);
+                self.emit_condition(&condition.node);
                 self.write(" ");
                 self.emit_block(&then_block.node);
                 if let Some(else_blk) = else_block {
@@ -1110,7 +1132,7 @@ impl PrettyPrinter {
             }
             Stmt::While { condition, body } => {
                 self.write("while ");
-                self.emit_expr(&condition.node, 0);
+                self.emit_condition(&condition.node);
                 self.write(" ");
                 self.emit_block(&body.node);
             }
@@ -1122,7 +1144,7 @@ impl PrettyPrinter {
                 self.write("for ");
                 self.write(&var.node);
                 self.write(" in ");
-                self.emit_expr(&iterable.node, 0);
+                self.emit_condition(&iterable.node);
                 self.write(" ");
                 self.emit_block(&body.node);
             }
@@ -1140,7 +1162,7 @@ impl PrettyPrinter {
             }
             Stmt::Match { expr, arms } => {
                 self.write("match ");
-                self.emit_expr(&expr.node, 0);
+                self.emit_condition(&expr.node);
                 self.write(" {");
                 self.newline();
                 self.indent();
@@ -1422,8 +1444,20 @@ impl PrettyPrinter {
                     self.write(")");
                 }
             }
-            Expr::Call { name, args, .. } => {
+            Expr::Call { name, args, type_args, .. } => {
                 self.write(&name.node);
+                // Explicit type arguments (`fresh<int>()`); dropping them
+                // breaks calls whose type parameter can't be inferred.
+                if !type_args.is_empty() {
+                    self.write("<");
+                    for (i, ta) in type_args.iter().enumerate() {
+                        if i > 0 {
+                            self.write(", ");
+                        }
+                        self.emit_type_expr(&ta.node);
+                    }
+                    self.write(">");
+                }
                 self.write("(");
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
@@ -1570,7 +1604,13 @@ impl PrettyPrinter {
                         }
                         StringInterpPart::Expr(e) => {
                             self.write("{");
+                            // An interpolation is one line of source; block
+                            // expressions (`{if c { 1 } else { 2 }}`) would
+                            // otherwise print across several.
+                            let start = self.buf.len();
                             self.emit_expr(&e.node, 0);
+                            let text = self.buf.split_off(start);
+                            self.buf.push_str(&collapse_lines(&text));
                             self.write("}");
                         }
                     }
@@ -1758,15 +1798,24 @@ impl PrettyPrinter {
             }
             Expr::If { condition, then_block, else_block } => {
                 self.write("if ");
-                self.emit_expr(&condition.node, 0);
+                self.emit_condition(&condition.node);
                 self.write(" ");
                 self.emit_block(&then_block.node);
                 self.write(" else ");
-                self.emit_block(&else_block.node);
+                // `else if` parses to an else block holding just the nested
+                // if-expression; print it back as `else if`.
+                if let [only] = else_block.node.stmts.as_slice()
+                    && let Stmt::Expr(inner) = &only.node
+                    && let Expr::If { .. } = &inner.node
+                {
+                    self.emit_expr(&inner.node, 0);
+                } else {
+                    self.emit_block(&else_block.node);
+                }
             }
             Expr::Match { expr, arms } => {
                 self.write("match ");
-                self.emit_expr(&expr.node, 0);
+                self.emit_condition(&expr.node);
                 self.write(" {");
                 self.indent += 1;
                 for (i, arm) in arms.iter().enumerate() {
@@ -1816,6 +1865,15 @@ impl PrettyPrinter {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/// Join a multi-line rendering into one line: each newline and the
+/// indentation after it becomes a single space (`{\n    42\n}` → `{ 42 }`).
+fn collapse_lines(text: &str) -> String {
+    if !text.contains('\n') {
+        return text.to_string();
+    }
+    text.split('\n').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
+}
 
 /// Precedence of prefix operators (`-x`, `!x`, `~x`): above every binary
 /// operator, below postfix receivers (25).
@@ -2208,6 +2266,42 @@ fn main() {
         let result = pp(src);
         assert!(result.contains("error NotFound {"));
         assert!(result.contains("message: string"));
+        assert_roundtrip_stable(src);
+    }
+
+    #[test]
+    fn test_round_trip_fixes_from_test_programs() {
+        let src = r#"class Foo {
+    x: int
+}
+
+class Gauge<T> {
+    v: int
+}
+
+fn fresh<T>() Gauge<T> {
+    return Gauge<T> { v: 0 }
+}
+
+app A[pay: domain PayService, bill: remote Billing] {
+    fn main(self) {
+        let msg = f"result: {if true { 42 } else { 99 }}"
+        let x = if (Foo { x: 1 }) == (Foo { x: 1 }) { 1 } else { 2 }
+        let r = if x == 0 { 0 } else if x == 1 { 1 } else { 2 }
+        let g = fresh<int>()
+        while (Foo { x: 1 }).x > 5 {
+            print(1)
+        }
+    }
+}
+"#;
+        let result = pp(src);
+        assert!(result.contains(r#"f"result: {if true { 42 } else { 99 }}""#), "{result}");
+        assert!(result.contains("if (Foo { x: 1 } == Foo { x: 1 }) {"), "{result}");
+        assert!(result.contains("} else if x == 1 {"), "{result}");
+        assert!(result.contains("fresh<int>()"), "{result}");
+        assert!(result.contains("[pay: domain PayService, bill: remote Billing]"), "{result}");
+        assert!(result.contains("while (Foo { x: 1 }.x > 5) {"), "{result}");
         assert_roundtrip_stable(src);
     }
 
