@@ -114,7 +114,7 @@ stdlib_docs({ module: "collections" })
 
 **Available language topics:** `types`, `operators`, `statements`, `declarations`, `strings`, `errors`, `closures`, `generics`, `modules`, `contracts`, `concurrency`, `gotchas`
 
-**Stdlib modules with embedded docs:** `strings`, `math`, `fs`, `json`, `http`, `net`, `socket`, `collections`, `io`, `random`, `time`, `compress` (the other modules are documented in the book and in their source)
+**Stdlib modules with embedded docs:** `strings`, `math`, `fs`, `json`, `http`, `net`, `socket`, `collections`, `io`, `random`, `time`, `compress`, `base64`, `env`, `hash`, `log`, `path`, `regex`, `uuid` (the other modules are documented in the book and in their source)
 
 **Check the `gotchas` topic.** It covers common pitfalls like newline sensitivity, empty struct literals, and generic syntax ambiguities.
 
