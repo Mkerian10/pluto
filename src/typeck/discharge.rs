@@ -2881,8 +2881,8 @@ fn stage_call_ensures(stmt: &Stmt, env: &mut TypeEnv) {
                     }
                 }
                 BinOp::Eq => {
-                    if plo.is_some() && plo == phi {
-                        if let Some(dd) = affine_add_const(&cur, plo.expect("checked")) {
+                    if let Some(lo) = plo && plo == phi {
+                        if let Some(dd) = affine_add_const(&cur, lo) {
                             staged.extend(facts_from_diff(BinOp::Eq, &dd));
                         }
                     } else {

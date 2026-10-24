@@ -409,16 +409,13 @@ pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, CompileError> {
         .retain(|t| !matches!(t.node, Token::Comment));
 
     // Process escape sequences in string literals
+    // F-strings stay raw: escapes apply only to their literal parts, which
+    // the parser splits out (nested string literals inside an interpolation
+    // are escape-processed when that expression is lexed).
     for token in &mut tokens {
-        match &token.node {
-            Token::StringLit(raw) => {
-                let processed = process_escapes(raw, token.span, 1)?;
-                token.node = Token::StringLit(processed);
-            }
-            // F-strings stay raw: escapes apply only to their literal parts,
-            // which the parser splits out (nested string literals inside an
-            // interpolation are escape-processed when that expression is lexed).
-            _ => {}
+        if let Token::StringLit(raw) = &token.node {
+            let processed = process_escapes(raw, token.span, 1)?;
+            token.node = Token::StringLit(processed);
         }
     }
 

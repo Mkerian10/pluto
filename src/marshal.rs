@@ -1,3 +1,15 @@
+//! Generate marshal/unmarshal functions for types crossing stage boundaries.
+//!
+//! Two-phase generation:
+//! - Phase A (before typeck): Non-generic classes and enums
+//! - Phase B (after monomorphize): Generic instantiations (e.g., Box__int)
+//!
+//! For each serializable type T that crosses a stage boundary, generates:
+//! - `__marshal_T(value: T, enc: Encoder)` — encodes value using encoder methods
+//! - `__unmarshal_T(dec: Decoder) T` — decodes value using decoder methods (fallible)
+//!
+//! Arrays, maps, sets, nullable: marshaling is inlined at use sites, not separate functions.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use uuid::Uuid;
@@ -9,18 +21,6 @@ use crate::parser::ast::{
 use crate::span::{Span, Spanned};
 use crate::typeck::env::TypeEnv;
 use crate::typeck::types::PlutoType;
-
-/// Generate marshal/unmarshal functions for types crossing stage boundaries.
-///
-/// Two-phase generation:
-/// - Phase A (before typeck): Non-generic classes and enums
-/// - Phase B (after monomorphize): Generic instantiations (e.g., Box__int)
-///
-/// For each serializable type T that crosses a stage boundary, generates:
-/// - `__marshal_T(value: T, enc: Encoder)` — encodes value using encoder methods
-/// - `__unmarshal_T(dec: Decoder) T` — decodes value using decoder methods (fallible)
-///
-/// Arrays, maps, sets, nullable: marshaling is inlined at use sites, not separate functions.
 
 /// Phase A: Generate marshalers for non-generic types before typeck.
 ///

@@ -114,6 +114,12 @@ static STARTUP_BINARY_MTIME: std::sync::LazyLock<Option<SystemTime>> =
             .and_then(|m| m.modified().ok())
     });
 
+impl Default for PlutoMcp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[tool_router]
 impl PlutoMcp {
     pub fn new() -> Self {

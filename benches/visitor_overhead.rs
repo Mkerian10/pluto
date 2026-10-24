@@ -1,10 +1,10 @@
-/// Performance benchmarks for visitor pattern overhead
-///
-/// This benchmark verifies the RFC claim that the visitor pattern has "no runtime overhead"
-/// due to monomorphization. We compare visitor-based AST traversal against equivalent
-/// manual match-based traversal.
-///
-/// Expected result: Visitor and manual should have identical performance (within 5%).
+//! Performance benchmarks for visitor pattern overhead
+//!
+//! This benchmark verifies the RFC claim that the visitor pattern has "no runtime overhead"
+//! due to monomorphization. We compare visitor-based AST traversal against equivalent
+//! manual match-based traversal.
+//!
+//! Expected result: Visitor and manual should have identical performance (within 5%).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use pluto::lexer;

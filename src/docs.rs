@@ -1,4 +1,4 @@
-/// Pluto language reference documentation and stdlib docs.
+//! Pluto language reference documentation and stdlib docs.
 
 pub fn get_docs(topic: Option<&str>) -> String {
     match topic {
