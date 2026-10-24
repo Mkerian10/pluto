@@ -1278,7 +1278,6 @@ static void *__pluto_spawn_trampoline(void *arg) {
     __pluto_current_task = task;   // set TLS for cancellation checks
 
     // Register this thread's stack with GC for root scanning
-    int my_stack_slot = -1;
     {
         pthread_t self = pthread_self();
         void *stack_lo = NULL;
@@ -3545,15 +3544,9 @@ long __pluto_env_clear(void *name_ptr) {
 // For MVP/testing: returns a dummy JSON response
 // TODO: Implement actual HTTP client with libcurl or sockets
 void *__pluto_http_post(void *url_ptr, void *body_ptr, long timeout_ms) {
-    // Extract URL string
-    long *url_header = (long *)url_ptr;
-    long url_len = url_header[0];
-    char *url_data = (char *)&url_header[1];
-
-    // Extract body string
-    long *body_header = (long *)body_ptr;
-    long body_len = body_header[0];
-    char *body_data = (char *)&body_header[1];
+    (void)url_ptr;
+    (void)body_ptr;
+    (void)timeout_ms;
 
     // For MVP: just return a dummy JSON response for testing
     // In test mode, this will be intercepted before actual HTTP happens
@@ -3569,7 +3562,6 @@ void *__pluto_http_post(void *url_ptr, void *body_ptr, long timeout_ms) {
 // Extract int from JSON response
 long __pluto_rpc_extract_int(void *response_ptr) {
     long *header = (long *)response_ptr;
-    long len = header[0];
     const char *data = (const char *)&header[1];
 
     // Find "result": in the JSON
@@ -3596,7 +3588,6 @@ long __pluto_rpc_extract_int(void *response_ptr) {
 // Extract float from JSON response
 double __pluto_rpc_extract_float(void *response_ptr) {
     long *header = (long *)response_ptr;
-    long len = header[0];
     const char *data = (const char *)&header[1];
 
     const char *result_key = "\"result\":";
@@ -3620,7 +3611,6 @@ double __pluto_rpc_extract_float(void *response_ptr) {
 // Extract string from JSON response (handles quoted strings)
 void *__pluto_rpc_extract_string(void *response_ptr) {
     long *header = (long *)response_ptr;
-    long len = header[0];
     const char *data = (const char *)&header[1];
 
     const char *result_key = "\"result\":\"";
@@ -3654,7 +3644,6 @@ void *__pluto_rpc_extract_string(void *response_ptr) {
 // Extract bool from JSON response
 long __pluto_rpc_extract_bool(void *response_ptr) {
     long *header = (long *)response_ptr;
-    long len = header[0];
     const char *data = (const char *)&header[1];
 
     const char *result_key = "\"result\":";
