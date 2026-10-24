@@ -168,7 +168,7 @@ Tasks and threads communicate through **channels** and **ownership transfer** â€
 `mut self` alone is not sufficient for race safety without ownership or borrow tracking. Instead, Pluto enforces isolation:
 
 - Values passed to `spawn` are moved into the task. Using them after spawn is a compile error.
-- Shared data flows through channels (see [Communication](communication.md)).
+- Shared data flows through channels (see [Communication](../communication.md)).
 - Immutable data can be freely shared (no mutation, no races).
 
 ```
@@ -183,7 +183,7 @@ print(data.len())
 
 ### Channels for Communication
 
-Channels (designed in [Communication](communication.md)) are the primary mechanism for inter-task communication:
+Channels (designed in [Communication](../communication.md)) are the primary mechanism for inter-task communication:
 
 ```
 let (tx, rx) = chan<Order>()
