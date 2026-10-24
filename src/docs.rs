@@ -883,7 +883,7 @@ Import: `import std.strings`
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `substring` | `(s: string, start: int, end: int) string` | Extract substring by byte indices |
+| `substring` | `(s: string, start: int, length: int) string` | `length` bytes starting at byte offset `start` (`substring("hello, world", 7, 5)` is `"world"`) |
 | `contains` | `(haystack: string, needle: string) bool` | Check if string contains substring |
 | `starts_with` | `(s: string, prefix: string) bool` | Check prefix |
 | `ends_with` | `(s: string, suffix: string) bool` | Check suffix |
