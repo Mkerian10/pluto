@@ -1,4 +1,5 @@
 import std.compress
+import std.strings
 
 // Helpers -------------------------------------------------------------------
 
@@ -214,5 +215,41 @@ test "deflate rejects level above 9" {
     let data = "x".to_bytes()
     expect_raises(compress.CompressError) {
         compress.deflate(data, 99)!
+    }
+}
+
+// Size cap ------------------------------------------------------------------
+// Decompression refuses to expand past default_max_size(), so a small hostile
+// input can't balloon into an arbitrarily large allocation. A run of one byte
+// compresses ~1000:1, which makes the cap cheap to reach in a test.
+
+test "default_max_size is 64 MiB" {
+    expect(compress.default_max_size()).to_equal(67108864)
+}
+
+test "gunzip accepts output exactly at the size cap" {
+    let cap = compress.default_max_size()
+    let gz = compress.gzip(strings.repeat("a", cap).to_bytes(), 6)!
+    expect(compress.gunzip(gz)!.len()).to_equal(cap)
+}
+
+test "gunzip rejects output one byte past the size cap" {
+    let gz = compress.gzip(strings.repeat("a", compress.default_max_size() + 1).to_bytes(), 6)!
+    expect(gz.len() < 100000).to_be_true()
+    expect_raises(compress.CompressError) {
+        compress.gunzip(gz)!
+    }
+}
+
+test "inflate accepts output exactly at the size cap" {
+    let cap = compress.default_max_size()
+    let d = compress.deflate(strings.repeat("a", cap).to_bytes(), 6)!
+    expect(compress.inflate(d)!.len()).to_equal(cap)
+}
+
+test "inflate rejects output one byte past the size cap" {
+    let d = compress.deflate(strings.repeat("a", compress.default_max_size() + 1).to_bytes(), 6)!
+    expect_raises(compress.CompressError) {
+        compress.inflate(d)!
     }
 }
