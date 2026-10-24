@@ -38,6 +38,14 @@ let content = fs.read_all("hello.txt")!
 fs.append_all("hello.txt", "\nmore data")!
 ```
 
+Binary-safe variants take and return `bytes` instead of a string:
+
+```
+fs.read_all_bytes(path: string) bytes           // raises NotFound | FileError
+fs.write_all_bytes(path: string, data: bytes)   // raises NotFound | FileError
+fs.append_all_bytes(path: string, data: bytes)  // raises NotFound | FileError
+```
+
 The descriptor lives and dies inside the call, so no handle value appears — and close errors are folded into the result: success means the bytes were written *and* the descriptor closed cleanly. (On NFS-class filesystems, close is where deferred write errors surface; these helpers do not swallow them.)
 
 ## Durable Replace
@@ -68,6 +76,14 @@ fs.replace_all(config, "retries = 5\n") catch e: fs.SyncError {
 ```
 
 The four steps are packaged because this is the only safe traversal, and intermediate failures must clean up the temp file.
+
+### replace_all_bytes
+
+```
+fs.replace_all_bytes(path: string, data: bytes)   // raises NotFound | FileError | SyncError
+```
+
+The bytes variant of `replace_all`, for binary files (logs, snapshots, indexes): the same temp → sync → rename → sync-dir sequence and the same error contract.
 
 ### sync_dir
 
@@ -218,7 +234,10 @@ fs.file_size(path: string) int     // = stat(path).size; raises NotFound | FileE
 fs.remove(path: string)                   // delete a file; raises NotFound | FileError
 fs.rename(from: string, to: string)       // rename or move; raises NotFound | FileError
 fs.copy(from: string, to: string)         // copy; close errors surfaced; raises NotFound | FileError
+fs.truncate(path: string, len: int)       // set the file's length; raises NotFound | FileError
 ```
+
+`truncate` matches `write_all`'s durability stance: success means the kernel accepted the new length, not that it is durable. To make a shrink durable, use the handle form (`open_append` → `truncate` → `sync` → `close`).
 
 ## Directory Operations
 

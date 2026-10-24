@@ -42,6 +42,7 @@ wire.wire_int(v: int) WireValue
 wire.wire_float(v: float) WireValue
 wire.wire_bool(v: bool) WireValue
 wire.wire_string(v: string) WireValue
+wire.wire_bytes(v: bytes) WireValue
 wire.wire_array(elems: [WireValue]) WireValue
 wire.wire_record(keys: [string], values: [WireValue]) WireValue
 wire.wire_variant(name: string, data: WireValue) WireValue

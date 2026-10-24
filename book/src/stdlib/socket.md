@@ -64,6 +64,24 @@ socket.write(fd: int, data: string) int
 
 Writes data to a socket. Returns number of bytes written.
 
+### read_bytes / write_bytes
+
+```
+socket.read_bytes(fd: int, max_bytes: int) bytes
+socket.write_bytes(fd: int, data: bytes) int
+```
+
+Binary-safe variants of `read` and `write`. `read_bytes` returns empty bytes on EOF or error.
+
+### set_read_timeout / read_timed_out
+
+```
+socket.set_read_timeout(fd: int, ms: int) int
+socket.read_timed_out() int
+```
+
+`set_read_timeout` sets a read deadline (`SO_RCVTIMEO`): later reads block at most `ms` milliseconds, and `ms <= 0` clears it. After a read comes back empty, `read_timed_out()` returns `1` if the deadline elapsed and `0` for EOF or a connection error.
+
 ### close
 
 ```
