@@ -490,22 +490,30 @@ The `!` postfix propagates the error to the caller. The compiler infers which fu
 
 ### Catching errors
 ```
-// Catch all errors from a call
-let result = risky_call() catch {
-    // handle error, must return compatible type or return/raise
-    return default_value
+// Shorthand: a fallback value
+let result = risky_call() catch 0
+
+// Block: binds the error, runs statements, ends with the value
+// (or leaves with return/raise)
+let result = risky_call() catch err {
+    log_failure()
+    fallback
 }
 
-// Catch specific error
-let result = risky_call() catch err {
-    print("Error: {err.message}")
-    return fallback
+// Typed: handles one error type, whose fields are accessible; other errors
+// propagate, or chain a wildcard handler after it
+let result = risky_call() catch err: MyError {
+    print(f"failed with code {err.code}")
+    fallback
+} catch err {
+    other_fallback
 }
 ```
+A block handler always names the error (`catch err { ... }`); `catch { ... }` is a syntax error.
 
 ### Compiler-inferred error-ability
 - You do NOT annotate functions as fallible — the compiler infers it from the call graph
-- If a function calls a fallible function without `catch`, it becomes fallible itself
+- A function that propagates an error with `!` becomes fallible itself
 - All fallible call sites must use `!` (propagate) or `catch` (handle)
 - The compiler enforces this at every call site"#
         .to_string()
@@ -714,10 +722,8 @@ let result = task.get()
 ### Error handling with tasks
 ```
 // If the spawned function is fallible:
-let result = task.get()!        // propagate error
-let result = task.get() catch { // catch error
-    return default
-}
+let result = task.get()!          // propagate error
+let result = task.get() catch 0   // or handle it
 ```
 
 ### Restrictions
@@ -742,6 +748,9 @@ Arrays cannot be concatenated with `+`. Build arrays by iterating or use stdlib 
 
 ### No semicolons
 Pluto uses newlines for statement termination. Don't add semicolons.
+
+### A line starting with an operator, `.` or `[` continues the previous one
+Newlines end statements, except that a line beginning with a binary operator, `.` or `[` continues the expression above it (so long chains can break across lines). That makes `print(x)` followed by a line `-1` read as `print(x) - 1`, and a following `[]` read as `print(x)[]`. When a block should end with such a value, bind it first (`let fallback = -1`) or write it another way (`0 - 1`).
 
 ### `>>` is two tokens
 The right-shift operator `>>` is parsed as two `>` tokens (to avoid conflict with generic syntax). This works transparently in expressions but is worth knowing.
