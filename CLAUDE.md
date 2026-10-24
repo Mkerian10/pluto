@@ -59,7 +59,7 @@ Defined in `src/lib.rs::compile_file()` (file-based with module resolution) and 
 8. **Generic trait instantiation** (`src/generic_traits.rs`) — stamps generic traits into concrete traits (`Convert<int>` → `Convert$$int`) before typeck
 9. **Generic method hoisting** (`src/generic_methods.rs`) — hoists methods with their own type params into top-level generic functions (`C$foo`)
 10. **Spawn desugar** (`src/spawn.rs`) — transforms `spawn func(args)` into `Expr::Spawn { call: Closure { ... } }`
-11. **Contract validation** (`src/contracts.rs`) — validates decidable fragment for invariants/requires; checks `where` typestate clause placement (`ensures` is rejected at parse)
+11. **Contract validation** (`src/contracts.rs`) — validates decidable fragment for invariants/requires; checks `where` typestate clause placement (`ensures` exists only as a compile-time proof obligation, discharged in typeck — never a runtime check)
 12. **Marshal phase A** (`src/marshal.rs`) — generates marshaler stubs before typeck
 13. **Type check** (`src/typeck/`) — multi-pass: registers declarations (traits, enums, app, errors, classes, functions), registers + discharges invariants (`discharge.rs`), checks bodies (with flow-fact narrowing, `facts.rs`), infers error sets, enforces error handling, checks typestate transition linearity (`linearity.rs`), infers synchronization. Returns `TypeEnv`
 14. **Reflection generation** (`src/reflection.rs`) — generates `TypeInfo` intrinsic implementations
