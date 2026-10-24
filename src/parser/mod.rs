@@ -192,14 +192,13 @@ impl<'a> Parser<'a> {
         if self.split_pos < self.split_tokens.len() {
             return false;
         }
-        if let Some(tok) = self.tokens.get(self.pos) {
-            if matches!(tok.node, Token::Ident)
+        if let Some(tok) = self.tokens.get(self.pos)
+            && matches!(tok.node, Token::Ident)
                 && &self.source[tok.span.start..tok.span.end] == word
             {
                 self.pos += 1;
                 return true;
             }
-        }
         false
     }
 
@@ -2127,10 +2126,10 @@ impl<'a> Parser<'a> {
             if !args.is_empty() {
                 self.expect(&Token::Comma)?;
                 // Check for trailing comma
-                if let Some(tok) = self.peek() {
-                    if matches!(tok.node, Token::Gt | Token::GtEq) {
-                        break;
-                    }
+                if let Some(tok) = self.peek()
+                    && matches!(tok.node, Token::Gt | Token::GtEq)
+                {
+                    break;
                 }
             }
             args.push(self.parse_type()?);
@@ -4017,9 +4016,10 @@ impl<'a> Parser<'a> {
 
             // Right shift: detect adjacent `>` `>` as `>>` without adding a lexer token.
             if matches!(tok.node, Token::Gt)
-                && self.tokens.get(self.pos + 1).is_some_and(|next| {
-                    matches!(next.node, Token::Gt) && tok.span.end == next.span.start
-                })
+                && self.tokens.get(self.pos + 1).is_some_and(|next|
+            {
+                matches!(next.node, Token::Gt) && tok.span.end == next.span.start
+            })
             {
                 let op = BinOp::Shr;
                 let (lbp, rbp) = infix_binding_power(op);

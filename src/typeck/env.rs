@@ -773,13 +773,13 @@ impl TypeEnv {
                 span,
             ));
         }
-        if let Some((app_name, _)) = &self.app {
-            if name == *app_name {
-                return Err(CompileError::type_err(
-                    format!("variable '{}' shadows the app", name),
-                    span,
-                ));
-            }
+        if let Some((app_name, _)) = &self.app
+            && name == *app_name
+        {
+            return Err(CompileError::type_err(
+                format!("variable '{}' shadows the app", name),
+                span,
+            ));
         }
         Ok(())
     }

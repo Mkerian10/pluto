@@ -433,10 +433,10 @@ fn collect_rpc_interface_classes(program: &Program) -> HashSet<String> {
 
     let mut add_remote = |fields: &[crate::parser::ast::Field]| {
         for fld in fields {
-            if fld.is_remote || fld.is_domain {
-                if let TypeExpr::Named(n) = &fld.ty.node {
-                    classes.insert(n.clone());
-                }
+            if (fld.is_remote || fld.is_domain)
+                && let TypeExpr::Named(n) = &fld.ty.node
+            {
+                classes.insert(n.clone());
             }
         }
     };
@@ -1920,10 +1920,10 @@ fn collect_container_type(ty: &TypeExpr, seen: &mut HashSet<String>, out: &mut V
         TypeExpr::Nullable(inner) => collect_container_type(&inner.node, seen, out),
         TypeExpr::Array(_) | TypeExpr::Generic { .. } => {
             // wire_type_suffix is None for non-Map/Set generics (Box<int>, ...)
-            if let Some(suffix) = wire_type_suffix(ty) {
-                if seen.insert(suffix) {
-                    out.push(ty.clone());
-                }
+            if let Some(suffix) = wire_type_suffix(ty)
+                && seen.insert(suffix)
+            {
+                out.push(ty.clone());
             }
         }
         _ => {}

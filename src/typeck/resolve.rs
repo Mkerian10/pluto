@@ -696,10 +696,10 @@ pub(crate) fn ensure_generic_class_instantiated(
                             env.mut_self_methods.insert(method_mangled);
                         }
                         // Add default method to class info
-                        if let Some(info) = env.classes.get_mut(&mangled) {
-                            if !info.methods.contains(method_name) {
-                                info.methods.push(method_name.clone());
-                            }
+                        if let Some(info) = env.classes.get_mut(&mangled)
+                            && !info.methods.contains(method_name)
+                        {
+                            info.methods.push(method_name.clone());
                         }
                     }
                 }

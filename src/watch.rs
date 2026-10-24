@@ -161,10 +161,10 @@ fn get_watched_files(entry_file: &Path, stdlib: Option<&Path>) -> Result<Vec<Pat
                 .collect();
 
             // Always watch the entry file
-            if let Ok(canonical_entry) = entry_file.canonicalize() {
-                if !files.contains(&canonical_entry) {
-                    files.push(canonical_entry);
-                }
+            if let Ok(canonical_entry) = entry_file.canonicalize()
+                && !files.contains(&canonical_entry)
+            {
+                files.push(canonical_entry);
             }
 
             Ok(files)

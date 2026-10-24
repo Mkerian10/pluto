@@ -330,20 +330,20 @@ fn validate_property_decl(prop: &PropertyDecl) -> Result<(), CompileError> {
                 }
                 match &clause.binder_ty.node {
                     TypeExpr::Named(n) => {
-                        if let Some(p) = params.get(n.as_str()) {
-                            if p.kind.node != PropertyParamKind::Type {
-                                return Err(CompileError::type_err(
-                                    format!(
-                                        "guard binder type '{}' in property '{}' names a \
-                                         parameter of kind '{}': a binder type parameter \
-                                         must have kind 'type'",
-                                        n,
-                                        prop.name.node,
-                                        param_kind_name(&p.kind.node)
-                                    ),
-                                    clause.binder_ty.span,
-                                ));
-                            }
+                        if let Some(p) = params.get(n.as_str())
+                            && p.kind.node != PropertyParamKind::Type
+                        {
+                            return Err(CompileError::type_err(
+                                format!(
+                                    "guard binder type '{}' in property '{}' names a \
+                                     parameter of kind '{}': a binder type parameter \
+                                     must have kind 'type'",
+                                    n,
+                                    prop.name.node,
+                                    param_kind_name(&p.kind.node)
+                                ),
+                                clause.binder_ty.span,
+                            ));
                         }
                         // A non-parameter name is a concrete class, validated
                         // (as a value class, non-entity) at guard registration.
@@ -745,20 +745,20 @@ fn resolve_arg(
                     arg.span,
                 ));
             };
-            if let Some(expected) = ty {
-                if field.ty.node != expected.node {
-                    return Err(CompileError::type_err(
-                        format!(
-                            "parameter '{}' of property '{prop_name}' requires a field of \
-                             type {}, but field '{field_name}' of '{}' has type {}",
-                            param.name.node,
-                            format_type_expr(&expected.node),
-                            class.name.node,
-                            format_type_expr(&field.ty.node)
-                        ),
-                        arg.span,
-                    ));
-                }
+            if let Some(expected) = ty
+                && field.ty.node != expected.node
+            {
+                return Err(CompileError::type_err(
+                    format!(
+                        "parameter '{}' of property '{prop_name}' requires a field of \
+                         type {}, but field '{field_name}' of '{}' has type {}",
+                        param.name.node,
+                        format_type_expr(&expected.node),
+                        class.name.node,
+                        format_type_expr(&field.ty.node)
+                    ),
+                    arg.span,
+                ));
             }
             Ok(ArgValue::Field(field_name))
         }
@@ -888,11 +888,11 @@ fn substitute_expr(expr: &mut Spanned<Expr>, subst: &HashMap<String, Expr>, span
     impl VisitMut for Subst<'_> {
         fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
             expr.span = self.span;
-            if let Expr::Ident(name) = &expr.node {
-                if let Some(replacement) = self.subst.get(name) {
-                    expr.node = replacement.clone();
-                    return; // replacements carry the clause span already
-                }
+            if let Expr::Ident(name) = &expr.node
+                && let Some(replacement) = self.subst.get(name)
+            {
+                expr.node = replacement.clone();
+                return; // replacements carry the clause span already
             }
             walk_expr_mut(self, expr);
         }

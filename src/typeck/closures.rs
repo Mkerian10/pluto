@@ -229,8 +229,8 @@ fn infer_closure_return_type(block: &Block, env: &mut TypeEnv) -> Result<PlutoTy
                 // An arrow body `=> if c { return a } else { return b }`
                 // desugars to `return <if-expr>` whose arms both diverge; the
                 // closure's real return type comes from the nested returns.
-                if let Expr::If { then_block, else_block, .. } = &expr.node {
-                    if crate::typeck::block_always_terminates(&then_block.node)
+                if let Expr::If { then_block, else_block, .. } = &expr.node
+                    && crate::typeck::block_always_terminates(&then_block.node)
                         && crate::typeck::block_always_terminates(&else_block.node)
                     {
                         // An arm may diverge without a return (raise) — take
@@ -241,7 +241,6 @@ fn infer_closure_return_type(block: &Block, env: &mut TypeEnv) -> Result<PlutoTy
                         }
                         return infer_closure_return_type(&else_block.node, env);
                     }
-                }
                 return infer_expr(&expr.node, expr.span, env, None);
             }
             _ => {}

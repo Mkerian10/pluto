@@ -169,11 +169,10 @@ pub fn installed_versions() -> Result<Vec<String>, CompileError> {
         if entry.file_type()
             .map_err(|e| CompileError::toolchain(format!("failed to get file type: {}", e)))?
             .is_dir()
-        {
-            if let Some(name) = entry.file_name().to_str() {
+            && let Some(name) = entry.file_name().to_str()
+            {
                 versions.push(name.to_string());
             }
-        }
     }
 
     // Sort versions for consistent output

@@ -37,12 +37,12 @@ impl VisitMut for FnRefExpander<'_> {
         // here. Wrap it in NullPropagate so codegen unboxes value types and
         // downstream typing sees the narrowed type — the none branch the
         // wrap emits is provably dead.
-        if let Expr::Ident(n) = &expr.node {
-            if self.env.narrow_sites.get(&key) == Some(n) {
-                let inner = Spanned::new(Expr::Ident(n.clone()), expr.span);
-                expr.node = Expr::NullPropagate { expr: Box::new(inner) };
-                return;
-            }
+        if let Expr::Ident(n) = &expr.node
+            && self.env.narrow_sites.get(&key) == Some(n)
+        {
+            let inner = Spanned::new(Expr::Ident(n.clone()), expr.span);
+            expr.node = Expr::NullPropagate { expr: Box::new(inner) };
+            return;
         }
         let fn_name = match &expr.node {
             // Requiring the recorded name to match guards against span-key

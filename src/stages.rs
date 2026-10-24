@@ -24,13 +24,13 @@ pub fn flatten_stage_hierarchy(program: &mut Program) -> Result<(), CompileError
 
     // Validate parent references exist
     for stage in &program.stages {
-        if let Some(ref parent_name) = stage.node.parent {
-            if !name_to_idx.contains_key(&parent_name.node) {
-                return Err(CompileError::type_err(
-                    format!("stage '{}' inherits from unknown stage '{}'", stage.node.name.node, parent_name.node),
-                    parent_name.span,
-                ));
-            }
+        if let Some(ref parent_name) = stage.node.parent
+            && !name_to_idx.contains_key(&parent_name.node)
+        {
+            return Err(CompileError::type_err(
+                format!("stage '{}' inherits from unknown stage '{}'", stage.node.name.node, parent_name.node),
+                parent_name.span,
+            ));
         }
     }
 

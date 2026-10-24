@@ -321,10 +321,10 @@ fn instantiate_class(
                             env.mut_self_methods.insert(method_mangled);
                         }
                         // Add method name to class info
-                        if let Some(info) = env.classes.get_mut(mangled) {
-                            if !info.methods.contains(method_name) {
-                                info.methods.push(method_name.clone());
-                            }
+                        if let Some(info) = env.classes.get_mut(mangled)
+                            && !info.methods.contains(method_name)
+                        {
+                            info.methods.push(method_name.clone());
                         }
                     }
                 }
@@ -2242,10 +2242,10 @@ mod tests {
                 assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "int"));
             }
             // Check else block
-            if let Some(eb) = else_block {
-                if let Stmt::Let { ty, .. } = &eb.node.stmts[0].node {
-                    assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "float"));
-                }
+            if let Some(eb) = else_block
+                && let Stmt::Let { ty, .. } = &eb.node.stmts[0].node
+            {
+                assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "float"));
             }
         } else {
             panic!("Expected If statement");
@@ -2502,10 +2502,10 @@ mod tests {
                 assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "int"));
             }
             // Check default block
-            if let Some(def) = default {
-                if let Stmt::Let { ty, .. } = &def.node.stmts[0].node {
-                    assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "string"));
-                }
+            if let Some(def) = default
+                && let Stmt::Let { ty, .. } = &def.node.stmts[0].node
+            {
+                assert!(matches!(ty.as_ref().unwrap().node, TypeExpr::Named(ref n) if n == "string"));
             }
         } else {
             panic!("Expected Select statement");
@@ -2937,10 +2937,10 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::StringInterp { parts } = expr {
-            if let StringInterpPart::Expr(e) = &parts[1] {
-                if let Expr::Call { type_args, .. } = &e.node {
-                    assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "string"));
-                }
+            if let StringInterpPart::Expr(e) = &parts[1]
+                && let Expr::Call { type_args, .. } = &e.node
+            {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "string"));
             }
         } else {
             panic!("Expected StringInterp expression");
@@ -3008,10 +3008,10 @@ mod tests {
         substitute_in_expr(&mut expr, &bindings);
 
         if let Expr::Catch { handlers, .. } = expr {
-            if let CatchHandler::Shorthand(body) = &handlers[0] {
-                if let Expr::Call { type_args, .. } = &body.node {
-                    assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
-                }
+            if let CatchHandler::Shorthand(body) = &handlers[0]
+                && let Expr::Call { type_args, .. } = &body.node
+            {
+                assert!(matches!(&type_args[0].node, TypeExpr::Named(n) if n == "int"));
             }
         } else {
             panic!("Expected Catch expression");
@@ -3222,10 +3222,10 @@ mod tests {
         assert!(resolve_generic_te_in_function(&mut func, &mut env).is_ok());
 
         // Check that the cast target type was visited
-        if let Stmt::Let { value, .. } = &func.body.node.stmts[0].node {
-            if let Expr::Call { type_args, .. } = &value.node {
-                assert!(matches!(&type_args[0].node, TypeExpr::Generic { name, .. } if name == "Task"));
-            }
+        if let Stmt::Let { value, .. } = &func.body.node.stmts[0].node
+            && let Expr::Call { type_args, .. } = &value.node
+        {
+            assert!(matches!(&type_args[0].node, TypeExpr::Generic { name, .. } if name == "Task"));
         }
     }
 

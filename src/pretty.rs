@@ -493,15 +493,15 @@ impl PrettyPrinter {
             self.write(&field.name.node);
             self.write(": ");
             self.emit_type_expr(&field.ty.node);
-            if let Some(guard) = &field.guarded_by {
-                if guard.provenance.is_none() {
-                    self.write(" guarded_by (");
-                    self.write(&guard.binder.node);
-                    self.write(": ");
-                    self.emit_type_expr(&guard.binder_ty.node);
-                    self.write(") ");
-                    self.emit_expr(&guard.predicate.node, 0);
-                }
+            if let Some(guard) = &field.guarded_by
+                && guard.provenance.is_none()
+            {
+                self.write(" guarded_by (");
+                self.write(&guard.binder.node);
+                self.write(": ");
+                self.emit_type_expr(&guard.binder_ty.node);
+                self.write(") ");
+                self.emit_expr(&guard.predicate.node, 0);
             }
             self.newline();
         }

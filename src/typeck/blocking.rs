@@ -141,10 +141,10 @@ pub fn infer_blocking_effects(program: &Program, env: &mut TypeEnv) {
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == impl_trait.name.node {
                     for tm in &trait_decl.node.methods {
-                        if let Some(body) = &tm.body {
-                            if !own.contains(&tm.name.node) {
-                                collect(mangle_method(class_name, &tm.name.node), &body.node, env);
-                            }
+                        if let Some(body) = &tm.body
+                            && !own.contains(&tm.name.node)
+                        {
+                            collect(mangle_method(class_name, &tm.name.node), &body.node, env);
                         }
                     }
                 }

@@ -310,27 +310,25 @@ impl DedupFieldScan<'_> {
 
 impl Visitor for DedupFieldScan<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
-        if let Expr::MethodCall { object, method, args, .. } = &expr.node {
-            if (method.node == "contains" || method.node == "insert") && args.len() == 1 {
-                if let Expr::FieldAccess { object: fobj, field } = &object.node {
-                    if matches!(&fobj.node, Expr::Ident(s) if s == "self") {
-                        let cname = &self.class.name.node;
-                        let is_set_field = self
-                            .env
-                            .classes
-                            .get(cname)
-                            .and_then(|ci| ci.fields.iter().find(|(n, _, _)| *n == field.node))
-                            .is_some_and(|(_, t, _)| matches!(t, PlutoType::Set(_)));
-                        let arg_is_key = Self::syntactic_path(&args[0].node)
-                            .is_some_and(|p| self.key_paths.contains(p.as_str()));
-                        if is_set_field && arg_is_key {
-                            self.registry
-                                .entry(cname.clone())
-                                .or_default()
-                                .insert(field.node.clone());
-                        }
-                    }
-                }
+        if let Expr::MethodCall { object, method, args, .. } = &expr.node
+            && (method.node == "contains" || method.node == "insert") && args.len() == 1
+                && let Expr::FieldAccess { object: fobj, field } = &object.node
+                    && matches!(&fobj.node, Expr::Ident(s) if s == "self")
+        {
+            let cname = &self.class.name.node;
+            let is_set_field = self
+                .env
+                .classes
+                .get(cname)
+                .and_then(|ci| ci.fields.iter().find(|(n, _, _)| *n == field.node))
+                .is_some_and(|(_, t, _)| matches!(t, PlutoType::Set(_)));
+            let arg_is_key = Self::syntactic_path(&args[0].node)
+                .is_some_and(|p| self.key_paths.contains(p.as_str()));
+            if is_set_field && arg_is_key {
+                self.registry
+                    .entry(cname.clone())
+                    .or_default()
+                    .insert(field.node.clone());
             }
         }
         walk_expr(self, expr);
@@ -489,15 +487,14 @@ impl<'a> Analyzer<'a> {
         match expr {
             Expr::Ident(name) => {
                 let ty = self.lookup(name)?;
-                if let PlutoType::Class(c) = ty {
-                    if name != "self"
+                if let PlutoType::Class(c) = ty
+                    && name != "self"
                         && (self.env.object_types.contains(c)
                             || self.env.remote_types.contains(c)
                             || self.env.domain_types.contains(c))
                     {
                         return None;
                     }
-                }
                 Some((name.clone(), ty.clone()))
             }
             Expr::FieldAccess { object, field } => {
@@ -819,14 +816,14 @@ impl<'a> Analyzer<'a> {
     /// the conservative by-name fallback for untypable receivers.
     fn dedup_field_access(&self, expr: &Expr) -> Option<(String, String, bool, bool)> {
         let Expr::FieldAccess { object, field } = expr else { return None };
-        if let Expr::Ident(root) = &object.node {
-            if root == "self" {
-                let owner = self.owner_class.as_deref()?;
-                if self.registry.get(owner).is_some_and(|fs| fs.contains(&field.node)) {
-                    return Some((owner.to_string(), field.node.clone(), true, true));
-                }
-                return None;
+        if let Expr::Ident(root) = &object.node
+            && root == "self"
+        {
+            let owner = self.owner_class.as_deref()?;
+            if self.registry.get(owner).is_some_and(|fs| fs.contains(&field.node)) {
+                return Some((owner.to_string(), field.node.clone(), true, true));
             }
+            return None;
         }
         match self.type_of_expr(&object.node) {
             Some(PlutoType::Class(c)) => {
@@ -1306,14 +1303,14 @@ impl<'a> Analyzer<'a> {
         // unarmed inserts are effects like any other mutation, except the
         // benign re-insert of an already-armed key (a set-level no-op).
         if let Some((set_path, key_arg, span)) = self.as_dedup_insert(&stmt.node) {
-            if let Stmt::Expr(e) = &stmt.node {
-                if let Expr::MethodCall { args, .. } = &e.node {
-                    // Effects nested in the argument are not exempt.
-                    if args.iter().any(|a| self.contains_effect(a, None)) {
-                        self.require_licensed(span);
-                    }
-                    self.scan_expr(&args[0]);
+            if let Stmt::Expr(e) = &stmt.node
+                && let Expr::MethodCall { args, .. } = &e.node
+            {
+                // Effects nested in the argument are not exempt.
+                if args.iter().any(|a| self.contains_effect(a, None)) {
+                    self.require_licensed(span);
                 }
+                self.scan_expr(&args[0]);
             }
             if self.error.is_some() {
                 return false;
