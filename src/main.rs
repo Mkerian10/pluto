@@ -8,7 +8,7 @@ struct Cli {
     #[arg(long, global = true)]
     stdlib: Option<PathBuf>,
 
-    /// Garbage collector backend: "marksweep" (default) or "noop"
+    /// Garbage collector backend: "marksweep" or "noop"
     #[arg(long, global = true, default_value = "marksweep")]
     gc: String,
 
