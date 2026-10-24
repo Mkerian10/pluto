@@ -121,6 +121,65 @@ test "join longer array" {
     expect(strings.join(["a", "b", "c", "d", "e"], "-")).to_equal("a-b-c-d-e")
 }
 
+// -- trim_start / trim_end --
+
+test "trim_start strips leading whitespace only" {
+    expect(strings.trim_start("  hi  ")).to_equal("hi  ")
+    expect(strings.trim_start("\t\nhi")).to_equal("hi")
+    expect(strings.trim_start("hi")).to_equal("hi")
+    expect(strings.trim_start("   ")).to_equal("")
+}
+
+test "trim_end strips trailing whitespace only" {
+    expect(strings.trim_end("  hi  ")).to_equal("  hi")
+    expect(strings.trim_end("hi\n\t")).to_equal("hi")
+    expect(strings.trim_end("hi")).to_equal("hi")
+    expect(strings.trim_end("   ")).to_equal("")
+}
+
+// -- last_index_of / count --
+
+test "last_index_of finds the final occurrence" {
+    expect(strings.last_index_of("a/b/c", "/")).to_equal(3)
+    expect(strings.last_index_of("abcabc", "abc")).to_equal(3)
+    expect(strings.last_index_of("abc", "a")).to_equal(0)
+    expect(strings.last_index_of("abc", "x")).to_equal(-1)
+}
+
+test "count is non-overlapping" {
+    expect(strings.count("banana", "an")).to_equal(2)
+    expect(strings.count("aaaa", "aa")).to_equal(2)
+    expect(strings.count("abc", "x")).to_equal(0)
+}
+
+// -- is_empty / is_whitespace --
+
+test "is_empty" {
+    expect(strings.is_empty("")).to_be_true()
+    expect(strings.is_empty(" ")).to_be_false()
+    expect(strings.is_empty("a")).to_be_false()
+}
+
+test "is_whitespace" {
+    expect(strings.is_whitespace("")).to_be_true()
+    expect(strings.is_whitespace(" \t\n")).to_be_true()
+    expect(strings.is_whitespace(" a ")).to_be_false()
+}
+
+// -- byte_at / format_float --
+
+test "byte_at returns raw byte values" {
+    expect(strings.byte_at("A", 0)).to_equal(65)
+    expect(strings.byte_at("az", 1)).to_equal(122)
+    expect(strings.byte_at("\u{e9}", 0)).to_equal(195)
+}
+
+test "format_float matches f-string formatting" {
+    expect(strings.format_float(2.5)).to_equal(f"{2.5}")
+    expect(strings.format_float(0.1)).to_equal(f"{0.1}")
+    expect(strings.format_float(-3.0)).to_equal(f"{-3.0}")
+}
+
 // -- compare --
 
 test "compare orders lexicographically" {
