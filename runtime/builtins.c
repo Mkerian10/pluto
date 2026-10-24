@@ -2922,6 +2922,9 @@ typedef struct {
     long err;           // OUT: errno (0 = ok)
 } FsReadReq;
 
+// The two raw readers below run on the green offload pool, which only exists
+// outside test mode (every caller is under #ifndef PLUTO_TEST_MODE).
+#ifndef PLUTO_TEST_MODE
 // Read up to req->max_bytes from req->fd (positioned if req->offset >= 0) into a
 // fresh malloc buffer. No GC allocation. Runs on a pool worker.
 static long fs_raw_read_fd(long req_l, long u1, long u2) {
@@ -2968,6 +2971,7 @@ static long fs_raw_read_all_path(long req_l, long u1, long u2) {
     r->buf = buf; r->n = (long)total;
     return 0;
 }
+#endif // !PLUTO_TEST_MODE
 
 // EOF/error disambiguation (issue #367): "" with last_errno == 0 is EOF;
 // "" with last_errno != 0 is a read failure.
