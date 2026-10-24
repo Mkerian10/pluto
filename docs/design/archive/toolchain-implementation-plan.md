@@ -1,6 +1,6 @@
 # Toolchain Implementation Plan
 
-**Parent RFC:** [rfc-toolchain-architecture.md](rfc-toolchain-architecture.md)
+**Parent RFC:** [rfc-toolchain-architecture.md](../rfc-toolchain-architecture.md)
 **Status:** Draft
 **Scope:** Phased migration from current `plutoc` workspace to unified `pluto` binary
 
