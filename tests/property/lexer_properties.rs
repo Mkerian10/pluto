@@ -567,10 +567,10 @@ fn prop_newline_handling_consistent() {
 // SECTION 7: SHRINKING DEMONSTRATION
 // =============================================================================
 
-/// This test is designed to FAIL on purpose to demonstrate shrinking.
-/// When it fails, proptest will find the MINIMAL failing input.
-///
-/// Uncomment to see shrinking in action!
+// This test is designed to FAIL on purpose to demonstrate shrinking.
+// When it fails, proptest will find the MINIMAL failing input.
+//
+// Uncomment to see shrinking in action!
 /*
 #[test]
 fn prop_demonstrate_shrinking() {

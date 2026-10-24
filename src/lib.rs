@@ -107,10 +107,6 @@ fn run_frontend(program: &mut Program, test_mode: bool) -> Result<FrontendResult
     Ok(FrontendResult { env, warnings })
 }
 
-/// Resolve extern rust crates and inject their extern fn declarations into the program.
-
-/// Add Rust FFI artifact static libs and native lib flags to a link config.
-
 /// Parse a source string and reject extern rust declarations (which need file-based compilation).
 pub fn parse_source(source: &str) -> Result<Program, CompileError> {
     let tokens = lexer::lex(source)?;
@@ -225,25 +221,25 @@ pub fn compile_to_object(source: &str) -> Result<Vec<u8>, CompileError> {
 /// producing a binary is where an entry point must exist.
 fn compile_to_object_inner(source: &str, require_entry: bool) -> Result<Vec<u8>, CompileError> {
     on_compile_stack(|| {
-            let mut program = parse_source(&source)?;
+            let mut program = parse_source(source)?;
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
             if require_entry {
                 ensure_entry_point(&program)?;
             }
-            codegen::codegen(&program, &result.env, &source, None)
+            codegen::codegen(&program, &result.env, source, None)
     })
 }
 
 /// Compile a source string and return both the object bytes and any compiler warnings.
 pub fn compile_to_object_with_warnings(source: &str) -> Result<(Vec<u8>, Vec<CompileWarning>), CompileError> {
     on_compile_stack(|| {
-            let mut program = parse_source(&source)?;
+            let mut program = parse_source(source)?;
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, false)?;
-            let obj = codegen::codegen(&program, &result.env, &source, None)?;
+            let obj = codegen::codegen(&program, &result.env, source, None)?;
             Ok((obj, result.warnings))
     })
 }
@@ -268,11 +264,11 @@ pub fn compile(source: &str, output_path: &Path) -> Result<(), CompileError> {
 /// Tests are preserved and a test runner main is generated.
 pub fn compile_to_object_test_mode(source: &str) -> Result<Vec<u8>, CompileError> {
     on_compile_stack(|| {
-            let mut program = parse_source(&source)?;
+            let mut program = parse_source(source)?;
             // Resolve QualifiedAccess for single-file programs (no module flattening)
             modules::resolve_qualified_access_single_file(&mut program)?;
             let result = run_frontend(&mut program, true)?;
-            codegen::codegen(&program, &result.env, &source, None)
+            codegen::codegen(&program, &result.env, source, None)
     })
 }
 

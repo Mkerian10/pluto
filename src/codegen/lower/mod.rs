@@ -1167,12 +1167,6 @@ impl<'a> LowerContext<'a> {
         Ok(())
     }
 
-    /// Build the `ERR\n<Type>\n<field>...` response for a raised error. When the
-    /// method's static error set has exactly one type, the error is serialized
-    /// precisely (its primitive fields read from the live error object). With
-    /// zero or multiple possible types there's no runtime tag to disambiguate,
-    /// so an `__unknown` marker is sent (the client raises a generic error).
-
     /// Wrapper-name suffix for a wire-supported type — must mirror
     /// `marshal::wire_type_suffix` (which names the generated wrappers from
     /// the pre-typeck TypeExprs).
@@ -1382,6 +1376,11 @@ impl<'a> LowerContext<'a> {
         })
     }
 
+    /// Build the `ERR\n<Type>\n<field>...` response for a raised error. When the
+    /// method's static error set has exactly one type, the error is serialized
+    /// precisely (its primitive fields read from the live error object). With
+    /// zero or multiple possible types there's no runtime tag to disambiguate,
+    /// so an `__unknown` marker is sent (the client raises a generic error).
     fn build_error_response(&mut self, errs: &[String]) -> Result<Value, CompileError> {
         if errs.len() != 1 {
             return self.make_string_literal("ERR\n__unknown");
@@ -4536,8 +4535,7 @@ impl<'a> LowerContext<'a> {
             self.builder.seal_block(check_blocks[i]);
 
             // For the last arm (or a wildcard), a match is guaranteed, so skip the check
-            if i + 1 < arms.len() && arm_variant_name.is_some() {
-                let variant_name = arm_variant_name.expect("checked is_some above");
+            if i + 1 < arms.len() && let Some(variant_name) = arm_variant_name {
                 let variant_idx = enum_info.variants
                     .iter()
                     .position(|(name, _)| name == &variant_name.node)
@@ -5461,8 +5459,6 @@ fn collect_sender_var_names(stmts: &[crate::span::Spanned<Stmt>]) -> Vec<String>
     names
 }
 
-/// Lower a function body into Cranelift IR./// Lower a function body into Cranelift IR.
-#[allow(clippy::too_many_arguments)]
 /// Lower the synthetic serve-handler function for a served class:
 /// `fn __pluto_serve_handler_<C>(svc: i64, conn: i64) -> i64`, run on one
 /// detached thread per accepted connection (see lower_serve).

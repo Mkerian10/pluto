@@ -453,12 +453,11 @@ fn main() {
             let _ = std::fs::remove_file(&tmp);
 
             // Print coverage summary after run
-            if coverage_map.is_some() {
+            if let Some(map) = &coverage_map {
                 let cov_dir = std::path::Path::new(".pluto-coverage");
                 let data_path = cov_dir.join("coverage-data.bin");
                 match pluto::coverage::CoverageData::read_binary(&data_path) {
                     Ok(data) => {
-                        let map = coverage_map.as_ref().unwrap();
                         let stats = pluto::coverage::generate_terminal_report(map, &data);
                         pluto::coverage::print_terminal_summary(&stats);
                     }
@@ -550,12 +549,11 @@ fn main() {
             let _ = std::fs::remove_file(&tmp);
 
             // Print coverage summary after tests
-            if coverage_map.is_some() {
+            if let Some(map) = &coverage_map {
                 let cov_dir = std::path::Path::new(".pluto-coverage");
                 let data_path = cov_dir.join("coverage-data.bin");
                 match pluto::coverage::CoverageData::read_binary(&data_path) {
                     Ok(data) => {
-                        let map = coverage_map.as_ref().unwrap();
                         let stats = pluto::coverage::generate_terminal_report(map, &data);
                         pluto::coverage::print_terminal_summary(&stats);
                     }

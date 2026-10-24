@@ -7,16 +7,6 @@ use crate::typeck::env::{FuncSig, TypeEnv};
 use crate::typeck::types::{PlutoType, pluto_type_to_type_expr};
 use crate::visit::{walk_expr_mut, walk_stmt_mut, VisitMut};
 
-/// Lift closures out of function/method bodies into top-level functions.
-///
-/// For each `Expr::Closure` found, this pass:
-/// 1. Generates a unique function name `__closure_N`
-/// 2. Creates a new top-level `Function` with an `__env: int` first param + original params
-/// 3. Replaces the `Expr::Closure` with `Expr::ClosureCreate { fn_name, captures }`
-/// 4. Registers the lifted function in `env.functions` and `env.closure_fns`
-///
-/// Returns the list of newly created functions to append to `program.functions`.
-
 /// Eta-expand named-function references into wrapper closures.
 ///
 /// Typeck recorded every identifier site that resolved to a function (not a
@@ -100,6 +90,15 @@ impl VisitMut for FnRefExpander<'_> {
     }
 }
 
+/// Lift closures out of function/method bodies into top-level functions.
+///
+/// For each `Expr::Closure` found, this pass:
+/// 1. Generates a unique function name `__closure_N`
+/// 2. Creates a new top-level `Function` with an `__env: int` first param + original params
+/// 3. Replaces the `Expr::Closure` with `Expr::ClosureCreate { fn_name, captures }`
+/// 4. Registers the lifted function in `env.functions` and `env.closure_fns`
+///
+/// Returns the list of newly created functions to append to `program.functions`.
 pub fn lift_closures(program: &mut Program, env: &mut TypeEnv) -> Result<(), CompileError> {
     // Rewrite named-function references into wrapper closures first, so the
     // lifting below treats them like any other closure literal.

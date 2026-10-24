@@ -1,52 +1,52 @@
-/// Scope tracking utility for managing nested scopes during AST traversal.
-///
-/// Many compiler passes need to track scope-local state (variables, types, bindings)
-/// with proper nesting semantics. This utility provides a clean abstraction over the
-/// common pattern of maintaining a stack of scopes.
-///
-/// # Examples
-///
-/// ## Basic usage
-///
-/// ```rust
-/// use pluto::visit::scope_tracker::ScopeTracker;
-/// use pluto::typeck::types::PlutoType;
-///
-/// let mut tracker = ScopeTracker::<PlutoType>::new();
-///
-/// // Enter function scope
-/// tracker.push_scope();
-/// tracker.insert("x".to_string(), PlutoType::Int);
-///
-/// // Enter nested block
-/// tracker.push_scope();
-/// tracker.insert("y".to_string(), PlutoType::Float);
-///
-/// // Lookup searches from innermost to outermost
-/// assert_eq!(tracker.lookup("y"), Some(&PlutoType::Float));
-/// assert_eq!(tracker.lookup("x"), Some(&PlutoType::Int));
-///
-/// // Exit block
-/// tracker.pop_scope();
-/// assert_eq!(tracker.lookup("y"), None);
-/// assert_eq!(tracker.lookup("x"), Some(&PlutoType::Int));
-/// ```
-///
-/// ## With depth tracking
-///
-/// ```rust
-/// use pluto::visit::scope_tracker::ScopeTracker;
-///
-/// let mut tracker = ScopeTracker::<i32>::new();
-/// tracker.push_scope();
-/// tracker.insert("x".to_string(), 1);
-/// tracker.push_scope();
-/// tracker.insert("y".to_string(), 2);
-///
-/// // Depth 0 = outermost, 1 = inner
-/// assert_eq!(tracker.lookup_with_depth("x"), Some((&1, 0)));
-/// assert_eq!(tracker.lookup_with_depth("y"), Some((&2, 1)));
-/// ```
+//! Scope tracking utility for managing nested scopes during AST traversal.
+//!
+//! Many compiler passes need to track scope-local state (variables, types, bindings)
+//! with proper nesting semantics. This utility provides a clean abstraction over the
+//! common pattern of maintaining a stack of scopes.
+//!
+//! # Examples
+//!
+//! ## Basic usage
+//!
+//! ```rust
+//! use pluto::visit::scope_tracker::ScopeTracker;
+//! use pluto::typeck::types::PlutoType;
+//!
+//! let mut tracker = ScopeTracker::<PlutoType>::new();
+//!
+//! // Enter function scope
+//! tracker.push_scope();
+//! tracker.insert("x".to_string(), PlutoType::Int);
+//!
+//! // Enter nested block
+//! tracker.push_scope();
+//! tracker.insert("y".to_string(), PlutoType::Float);
+//!
+//! // Lookup searches from innermost to outermost
+//! assert_eq!(tracker.lookup("y"), Some(&PlutoType::Float));
+//! assert_eq!(tracker.lookup("x"), Some(&PlutoType::Int));
+//!
+//! // Exit block
+//! tracker.pop_scope();
+//! assert_eq!(tracker.lookup("y"), None);
+//! assert_eq!(tracker.lookup("x"), Some(&PlutoType::Int));
+//! ```
+//!
+//! ## With depth tracking
+//!
+//! ```rust
+//! use pluto::visit::scope_tracker::ScopeTracker;
+//!
+//! let mut tracker = ScopeTracker::<i32>::new();
+//! tracker.push_scope();
+//! tracker.insert("x".to_string(), 1);
+//! tracker.push_scope();
+//! tracker.insert("y".to_string(), 2);
+//!
+//! // Depth 0 = outermost, 1 = inner
+//! assert_eq!(tracker.lookup_with_depth("x"), Some((&1, 0)));
+//! assert_eq!(tracker.lookup_with_depth("y"), Some((&2, 1)));
+//! ```
 
 use std::collections::HashMap;
 

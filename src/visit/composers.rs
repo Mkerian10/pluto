@@ -1,35 +1,35 @@
-/// Composition utilities for common visitor patterns.
-///
-/// This module provides helper functions that reduce boilerplate when writing
-/// visitors for common tasks like finding, counting, and collecting nodes.
-///
-/// # Examples
-///
-/// ```
-/// use pluto::visit::composers::{contains_expr, collect_exprs};
-/// use pluto::parser::ast::{BinOp, Expr};
-/// use pluto::span::{Span, Spanned};
-///
-/// let sp = |e: Expr| Spanned::new(e, Span::new(0, 0));
-/// let expr = sp(Expr::BinOp {
-///     op: BinOp::Add,
-///     lhs: Box::new(sp(Expr::Ident("a".to_string()))),
-///     rhs: Box::new(sp(Expr::IntLit(1))),
-/// });
-///
-/// // Check if an expression tree contains a matching node
-/// assert!(contains_expr(&expr, |e| matches!(e, Expr::Ident(_))));
-///
-/// // Collect all identifier names
-/// let idents = collect_exprs(&expr, |e| {
-///     if let Expr::Ident(name) = e {
-///         Some(name.clone())
-///     } else {
-///         None
-///     }
-/// });
-/// assert_eq!(idents, vec!["a".to_string()]);
-/// ```
+//! Composition utilities for common visitor patterns.
+//!
+//! This module provides helper functions that reduce boilerplate when writing
+//! visitors for common tasks like finding, counting, and collecting nodes.
+//!
+//! # Examples
+//!
+//! ```
+//! use pluto::visit::composers::{contains_expr, collect_exprs};
+//! use pluto::parser::ast::{BinOp, Expr};
+//! use pluto::span::{Span, Spanned};
+//!
+//! let sp = |e: Expr| Spanned::new(e, Span::new(0, 0));
+//! let expr = sp(Expr::BinOp {
+//!     op: BinOp::Add,
+//!     lhs: Box::new(sp(Expr::Ident("a".to_string()))),
+//!     rhs: Box::new(sp(Expr::IntLit(1))),
+//! });
+//!
+//! // Check if an expression tree contains a matching node
+//! assert!(contains_expr(&expr, |e| matches!(e, Expr::Ident(_))));
+//!
+//! // Collect all identifier names
+//! let idents = collect_exprs(&expr, |e| {
+//!     if let Expr::Ident(name) = e {
+//!         Some(name.clone())
+//!     } else {
+//!         None
+//!     }
+//! });
+//! assert_eq!(idents, vec!["a".to_string()]);
+//! ```
 
 use crate::parser::ast::*;
 use crate::span::Spanned;

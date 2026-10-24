@@ -1276,11 +1276,6 @@ fn resolve_modules_inner(
     })
 }
 
-/// Flatten imported modules into the root program by prefixing names.
-///
-/// For each imported module:
-/// - Add ALL items with prefixed names (visibility deferred)
-/// - Rewrite qualified references in the root program's AST
 /// Validate that qualified cross-module references (`module.item`) target items
 /// declared `pub`. A qualified reference is only ever written from *outside* the
 /// module (intra-module code uses unqualified names), so any `M.item` reference
@@ -1423,6 +1418,11 @@ fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
     Ok(())
 }
 
+/// Flatten imported modules into the root program by prefixing names.
+///
+/// For each imported module:
+/// - Add ALL items with prefixed names (visibility deferred)
+/// - Rewrite qualified references in the root program's AST
 pub fn flatten_modules(mut graph: ModuleGraph) -> Result<(Program, SourceMap), CompileError> {
     validate_imported_modules(&graph.imports)?;
     validate_module_visibility(&graph)?;

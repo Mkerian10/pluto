@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 ///   - change the prelude's shape in a way the stdlib depends on
 ///     (stdlib/prelude.pt), or
 ///   - change the marshaling / wire encoding contracts.
+///
 /// A pure-additive stdlib change (a new function the old compiler can still
 /// compile) does NOT need a bump. When in doubt, bump: a false bump only costs
 /// users an upgrade prompt, a missed one brings back the misleading type error.

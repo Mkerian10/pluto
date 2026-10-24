@@ -714,8 +714,8 @@ impl<'a> Parser<'a> {
         }
 
         // Reject system + app in same file
-        if system.is_some() && app.is_some() {
-            let app_span = app.as_ref().unwrap().span;
+        if system.is_some() && let Some(app_decl) = &app {
+            let app_span = app_decl.span;
             return Err(CompileError::syntax(
                 "a file cannot contain both 'system' and 'app' declarations",
                 app_span,
@@ -723,8 +723,8 @@ impl<'a> Parser<'a> {
         }
 
         // Reject tests + app in same file
-        if tests.is_some() && app.is_some() {
-            let tests_span = tests.as_ref().unwrap().span;
+        if app.is_some() && let Some(tests_decl) = &tests {
+            let tests_span = tests_decl.span;
             return Err(CompileError::syntax(
                 "a file cannot contain both 'tests' and 'app' declarations",
                 tests_span,
@@ -732,8 +732,8 @@ impl<'a> Parser<'a> {
         }
 
         // Reject tests + system in same file
-        if tests.is_some() && system.is_some() {
-            let tests_span = tests.as_ref().unwrap().span;
+        if system.is_some() && let Some(tests_decl) = &tests {
+            let tests_span = tests_decl.span;
             return Err(CompileError::syntax(
                 "a file cannot contain both 'tests' and 'system' declarations",
                 tests_span,
@@ -741,8 +741,8 @@ impl<'a> Parser<'a> {
         }
 
         // Reject stage + app in same file
-        if !stages.is_empty() && app.is_some() {
-            let app_span = app.as_ref().unwrap().span;
+        if !stages.is_empty() && let Some(app_decl) = &app {
+            let app_span = app_decl.span;
             return Err(CompileError::syntax(
                 "a file cannot contain both 'stage' and 'app' declarations",
                 app_span,
@@ -750,8 +750,8 @@ impl<'a> Parser<'a> {
         }
 
         // Reject stage + system in same file
-        if !stages.is_empty() && system.is_some() {
-            let system_span = system.as_ref().unwrap().span;
+        if !stages.is_empty() && let Some(system_decl) = &system {
+            let system_span = system_decl.span;
             return Err(CompileError::syntax(
                 "a file cannot contain both 'stage' and 'system' declarations",
                 system_span,
