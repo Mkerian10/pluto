@@ -834,7 +834,7 @@ Import: `import std.strings`
 | `char_at` | `(s: string, index: int) string` | One-byte string at byte index |
 | `len` | `(s: string) int` | String length in bytes |
 | `byte_at` | `(s: string, index: int) int` | Get byte value at index |
-| `format_float` | `(value: float, decimals: int) string` | Format float with N decimal places |
+| `format_float` | `(v: float) string` | Format a float the way `print` and f-strings do (shortest round-trip form) |
 | `join` | `(arr: [string], separator: string) string` | Join string array with separator |
 | `compare` | `(a: string, b: string) int` | Lexicographic byte order: -1, 0, or 1 |
 | `parse_int` | `(s: string) int` | Parse base-10 int; raises `ParseError` |
@@ -1090,12 +1090,12 @@ class HttpServer {
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `listen` | `(port: int) HttpServer` | Start HTTP server on port (fallible) |
+| `listen` | `(host: string, port: int) HttpServer` | Start an HTTP server on host:port (raises `HttpError`) |
 | `ok` | `(body: string) Response` | 200 OK with text body |
 | `ok_json` | `(body: string) Response` | 200 OK with JSON content type |
-| `not_found` | `(body: string) Response` | 404 Not Found |
-| `bad_request` | `(body: string) Response` | 400 Bad Request |
-| `response` | `(status: int, body: string) Response` | Custom status code |"#
+| `not_found` | `() Response` | 404 Not Found |
+| `bad_request` | `() Response` | 400 Bad Request |
+| `response` | `(status: int, status_text: string, body: string) Response` | Custom status code |"#
         .to_string()
 }
 
@@ -1128,7 +1128,7 @@ class TcpConnection {
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `listen` | `(port: int) TcpListener` | Bind and listen on TCP port (fallible) |
+| `listen` | `(host: string, port: int) TcpListener` | Bind and listen on host:port; on failure the listener's `fd` is -1 |
 | `connect` | `(host: string, port: int) TcpConnection` | Connect to TCP host:port (fallible) |"#
         .to_string()
 }
@@ -1146,15 +1146,15 @@ BSD-level socket operations. Lower level than `std.net`.
 |----------|-----------|-------------|
 | `create` | `(domain: int, sock_type: int, protocol: int) int` | Create a socket (`2, 1, 0` = IPv4 TCP), returns fd or -1 |
 | `bind` | `(fd: int, host: string, port: int) int` | Bind to host:port; host may be an IPv4 literal or a hostname; 0 on success, -1 on failure |
-| `listen` | `(fd: int, backlog: int)` | Start listening (fallible) |
-| `accept` | `(fd: int) int` | Accept connection, returns client fd (fallible) |
+| `listen` | `(fd: int, backlog: int) int` | Start listening; 0 on success, -1 on failure |
+| `accept` | `(fd: int) int` | Accept a connection; returns the client fd, or -1 on failure |
 | `connect` | `(fd: int, host: string, port: int) int` | Connect to host:port; host may be an IPv4 literal or a hostname; 0 on success, -1 on failure |
 | `read` | `(fd: int, max_bytes: int) string` | Read up to max_bytes as a string |
 | `read_bytes` | `(fd: int, max_bytes: int) bytes` | Read up to max_bytes as binary |
 | `write` | `(fd: int, data: string) int` | Write a string, returns bytes written or -1 |
 | `write_bytes` | `(fd: int, data: bytes) int` | Write binary, returns bytes written or -1 |
-| `close` | `(fd: int)` | Close socket |
-| `set_reuseaddr` | `(fd: int)` | Set SO_REUSEADDR option |
+| `close` | `(fd: int) int` | Close a socket; 0 on success, -1 on failure |
+| `set_reuseaddr` | `(fd: int) int` | Set SO_REUSEADDR; 0 on success, -1 on failure |
 | `get_port` | `(fd: int) int` | Get bound port number (useful with port 0) |
 | `set_read_timeout` | `(fd: int, ms: int) int` | Per-fd read deadline in ms (0 clears); 0 on success |
 | `read_timed_out` | `() int` | 1 if the last read on this thread stopped at its deadline rather than on data or an error |"#
@@ -1505,6 +1505,42 @@ Time utilities.
 #[cfg(test)]
 mod tests {
     use super::get_stdlib_docs;
+
+    /// Every `| `name` | `(params) ...` |` row in a module's stdlib_docs
+    /// table names a function that exists in that module's source with the
+    /// same number of parameters, so the reference can't silently drift.
+    #[test]
+    fn stdlib_doc_rows_match_the_sources() {
+        let err = get_stdlib_docs(Some("no_such_module")).unwrap_err();
+        let listed = err.split("Available: ").nth(1).unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("stdlib");
+        for module in listed.split(',').map(str::trim) {
+            let doc = get_stdlib_docs(Some(module)).unwrap();
+            let src = std::fs::read_to_string(root.join(module).join(format!("{module}.pt"))).unwrap();
+            for line in doc.lines() {
+                let Some(rest) = line.strip_prefix("| `") else { continue };
+                let Some((name, rest)) = rest.split_once("` | `(") else { continue };
+                if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+                    continue;
+                }
+                let params = rest.split_once(')').map(|(p, _)| p).unwrap_or("");
+                let doc_arity = params.split(',').filter(|p| !p.trim().is_empty()).count();
+                let arities: Vec<usize> = src
+                    .lines()
+                    .filter_map(|l| {
+                        let l = l.trim_start();
+                        let l = l.strip_prefix("pub fn ").or_else(|| l.strip_prefix("fn "))?;
+                        let after = l.strip_prefix(name)?;
+                        let after = after.strip_prefix('<').map(|a| a.split_once('>').map_or(a, |(_, r)| r)).unwrap_or(after);
+                        let inner = after.strip_prefix('(')?.split_once(')')?.0;
+                        Some(inner.split(',').filter(|p| { let p = p.trim(); !p.is_empty() && p != "self" && p != "mut self" }).count())
+                    })
+                    .collect();
+                assert!(!arities.is_empty(), "std.{module}: documented `{name}` is not in the source");
+                assert!(arities.contains(&doc_arity), "std.{module}: `{name}` documented with {doc_arity} params, source has {arities:?}");
+            }
+        }
+    }
 
     #[test]
     fn every_listed_stdlib_module_has_docs() {
