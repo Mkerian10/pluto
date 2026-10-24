@@ -41,9 +41,17 @@ pub fn get_stdlib_docs(module: Option<&str>) -> Result<String, String> {
             "random" => Ok(stdlib_random()),
             "time" => Ok(stdlib_time()),
             "compress" => Ok(stdlib_compress()),
+            "base64" => Ok(stdlib_base64()),
+            "env" => Ok(stdlib_env()),
+            "hash" => Ok(stdlib_hash()),
+            "log" => Ok(stdlib_log()),
+            "path" => Ok(stdlib_path()),
+            "regex" => Ok(stdlib_regex()),
+            "uuid" => Ok(stdlib_uuid()),
             _ => Err(format!(
                 "Unknown stdlib module: `{m}`. Available: strings, math, fs, json, http, \
-                 net, socket, collections, io, random, time, compress"
+                 net, socket, collections, io, random, time, compress, base64, env, hash, \
+                 log, path, regex, uuid"
             )),
         },
     }
@@ -775,6 +783,13 @@ Compile with `--stdlib <path-to-stdlib-dir>`.
 | `std.random` | Random number generation: seed, next, between, decimal |
 | `std.time` | Time utilities: now, sleep, elapsed, monotonic clock |
 | `std.compress` | Compression: gzip/gunzip and raw deflate/inflate over bytes (one-shot) |
+| `std.base64` | Standard and URL-safe base64: encode/decode for strings and for bytes |
+| `std.env` | Environment variables: get, get_or, set, exists, remove, list_names |
+| `std.hash` | Data-integrity hashes: CRC-32C, SHA-256, FNV-1a 64, hex encoding (one-shot and incremental) |
+| `std.log` | Leveled logging: debug, info, warn, log_error, with set_level/get_level |
+| `std.path` | Path manipulation: join, basename, dirname, ext, split_ext, normalize, is_absolute |
+| `std.regex` | Simple pattern matching: literals, `.`, `^`/`$`, `*`/`+`/`?`, `\d`/`\w`/`\s`, backslash escapes |
+| `std.uuid` | UUID generation: `generate()` |
 
 Use `stdlib_docs` with a module name for detailed function signatures.
 
@@ -782,15 +797,8 @@ The following modules also ship in `stdlib/` but have no `stdlib_docs` entry yet
 
 | Module | Description |
 |--------|-------------|
-| `std.base64` | Standard and URL-safe base64: encode/decode for strings and for bytes |
 | `std.blob` | Lockless single-writer blob store with fenced atomic writes |
-| `std.env` | Environment variables: get, get_or, set, exists, remove, list_names |
-| `std.hash` | Data-integrity hashes: CRC-32C, SHA-256, FNV-1a 64, hex encoding (one-shot and incremental) |
-| `std.log` | Leveled logging: debug, info, warn, log_error, with set_level/get_level |
-| `std.path` | Path manipulation: join, basename, dirname, ext, split_ext, normalize, is_absolute |
-| `std.regex` | Simple pattern matching: literals, `.`, `^`/`$`, `*`/`+`/`?`, `\d`/`\w`/`\s`, backslash escapes |
 | `std.rpc` | HTTP RPC client for cross-stage method calls |
-| `std.uuid` | UUID generation: `generate()` |
 | `std.verify` | Named proof bundles over the verification atoms |
 | `std.wal` | Write-ahead log with recovery as a typestate (`Wal<Unrecovered → Ready>`) |
 | `std.wire` | Schema-level wire values and encoders used by `serve`/`remote` marshaling |"#
@@ -1249,10 +1257,193 @@ Pseudo-random number generation.
 |----------|-----------|-------------|
 | `seed` | `(s: int)` | Seed the RNG |
 | `next` | `() int` | Next random int |
-| `between` | `(lo: int, hi: int) int` | Random int in [lo, hi) |
+| `between` | `(lo: int, hi: int) int` | Random int in [lo, hi] (both ends inclusive) |
 | `decimal` | `() float` | Random float in [0.0, 1.0) |
 | `decimal_between` | `(lo: float, hi: float) float` | Random float in [lo, hi) |
 | `coin` | `() bool` | Random boolean (50/50) |"#
+        .to_string()
+}
+
+fn stdlib_base64() -> String {
+    r#"# std.base64
+
+Import: `import std.base64`
+
+Base64 encoding (RFC 4648). Decoding accepts missing trailing padding.
+
+## Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `encode` | `(s: string) string` | Standard base64 of a string |
+| `decode` | `(s: string) string` | Decode standard base64 to a string |
+| `encode_url_safe` | `(s: string) string` | URL-safe alphabet (`-` and `_` instead of `+` and `/`) |
+| `decode_url_safe` | `(s: string) string` | Decode URL-safe base64 |
+| `encode_bytes` | `(b: bytes) string` | Standard base64 of a byte buffer (exact for every byte value) |
+| `decode_bytes` | `(s: string) bytes` | Decode standard base64 to a byte buffer |
+
+```
+base64.encode("hello world")                   // "aGVsbG8gd29ybGQ="
+base64.encode_bytes("hi".to_bytes())           // "aGk="
+```"#
+        .to_string()
+}
+
+fn stdlib_env() -> String {
+    r#"# std.env
+
+Import: `import std.env`
+
+Process environment variables. None of these raise.
+
+## Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `get` | `(name: string) string` | Value, or `""` when unset |
+| `get_or` | `(name: string, default_val: string) string` | Value, or `default_val` when unset |
+| `exists` | `(name: string) bool` | Whether the variable is set |
+| `set` | `(name: string, value: string)` | Set a variable for this process |
+| `remove` | `(name: string) bool` | Unset a variable |
+| `list_names` | `() [string]` | Names of all set variables |
+
+```
+let port = env.get_or("PORT", "8080")
+```
+
+Note: `env.get` is infallible, so `env.get("X") catch "default"` is a compile error; use `get_or`."#
+        .to_string()
+}
+
+fn stdlib_hash() -> String {
+    r#"# std.hash
+
+Import: `import std.hash`
+
+Data-integrity hashes over `bytes`, implemented in pure Pluto.
+
+## Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `crc32c` | `(data: bytes) int` | CRC-32C (Castagnoli; the Kafka/iSCSI/ext4 checksum, not zlib's CRC-32) |
+| `new_crc32c` | `() Crc32c` | Incremental CRC-32C: `update(mut self, data: bytes)`, `finish(self) int` |
+| `sha256` | `(data: bytes) bytes` | SHA-256 digest (32 bytes) |
+| `sha256_hex` | `(data: bytes) string` | SHA-256 digest as lowercase hex |
+| `new_sha256` | `() Sha256` | Incremental SHA-256: `update(mut self, data: bytes)`, `finish(self) bytes` |
+| `fnv1a64` | `(data: bytes) int` | FNV-1a 64-bit; fast, non-cryptographic (cache keys, partitioning) |
+| `to_hex` | `(data: bytes) string` | Lowercase hex encoding |
+
+```
+hash.crc32c("123456789".to_bytes())       // 3808858755
+hash.sha256_hex("abc".to_bytes())         // "ba7816bf...f20015ad"
+
+let mut c = hash.new_crc32c()
+c.update(part1)
+c.update(part2)
+let sum = c.finish()                      // same as hash.crc32c(part1 + part2)
+```"#
+        .to_string()
+}
+
+fn stdlib_log() -> String {
+    r#"# std.log
+
+Import: `import std.log`
+
+Leveled logging. Each line carries the level and a millisecond timestamp
+(`[WARN] 1792807908284 message`). Messages below the current level are dropped.
+
+## Types
+
+`enum Level { Debug, Info, Warn, Error }`
+
+## Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `set_level` | `(level: log.Level)` | Minimum level to emit |
+| `get_level` | `() log.Level` | Current minimum level |
+| `debug` / `info` / `warn` | `(message: string)` | Log at that level |
+| `log_error` | `(message: string)` | Log at Error level (`error` is a keyword) |
+
+```
+log.set_level(log.Level.Warn)
+log.info("hidden")
+log.warn("shown")
+```"#
+        .to_string()
+}
+
+fn stdlib_path() -> String {
+    r#"# std.path
+
+Import: `import std.path`
+
+Path string manipulation (`/`-separated). Pure string operations; no filesystem access.
+
+## Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `join` | `(base: string, rel: string) string` | Join with exactly one `/` |
+| `basename` | `(p: string) string` | Last component (`""` for a trailing `/`) |
+| `dirname` | `(p: string) string` | Everything before the last `/` (`.` if none, `/` for root) |
+| `ext` | `(p: string) string` | Extension including the dot, or `""` |
+| `split_ext` | `(p: string) string` | Basename without its extension |
+| `is_absolute` | `(p: string) bool` | Starts with `/` |
+| `has_trailing_slash` | `(p: string) bool` | Ends with `/` |
+| `normalize` | `(p: string) string` | Collapse `//`, `.` and `..` (leading `..` kept in relative paths) |
+
+```
+path.join("/home/", "user")         // "/home/user"
+path.ext("a.tar.gz")                // ".gz"
+path.normalize("a/./b/../c")        // "a/c"
+```"#
+        .to_string()
+}
+
+fn stdlib_regex() -> String {
+    r##"# std.regex
+
+Import: `import std.regex`
+
+A small backtracking matcher. Supported syntax: literals, `.` (any char),
+`^` and `$` anchors, `*` `+` `?` on a single token, the classes `\d` `\w` `\s`,
+and `\x` for a literal `x`. No groups, alternation or character sets. In a
+Pluto string literal the backslash is written `\\` (`"\\d+"`).
+
+## Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `matches` | `(pattern: string, text: string) bool` | Pattern matches somewhere in `text` |
+| `find` | `(pattern: string, text: string) int` | Byte index of the first match, or `-1` |
+| `find_all` | `(pattern: string, text: string) [int]` | Byte indices of all non-overlapping matches |
+| `replace` | `(pattern, replacement, text: string) string` | Replace the first match |
+| `replace_all` | `(pattern, replacement, text: string) string` | Replace every match |
+| `split` | `(pattern: string, text: string) [string]` | Split `text` on matches |
+
+```
+regex.find("\\d+", "ab12cd")             // 2
+regex.replace_all("\\d", "#", "a1b22")   // "a#b##"
+```"##
+        .to_string()
+}
+
+fn stdlib_uuid() -> String {
+    r#"# std.uuid
+
+Import: `import std.uuid`
+
+## Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `generate` | `() string` | A version-4 UUID string (`8-4-4-4-12` hex digits) |
+
+Built on `std.random`, so it is not cryptographically random, and `random.seed`
+makes the sequence reproducible. Don't use it for secrets or unguessable tokens."#
         .to_string()
 }
 
@@ -1309,4 +1500,20 @@ Time utilities.
 | `sleep` | `(ms: int)` | Sleep for N milliseconds |
 | `elapsed` | `(start: int) int` | Milliseconds elapsed since `start` (monotonic) |"#
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_stdlib_docs;
+
+    #[test]
+    fn every_listed_stdlib_module_has_docs() {
+        // Each module named in the unknown-module message must resolve.
+        let err = get_stdlib_docs(Some("no_such_module")).unwrap_err();
+        let listed = err.split("Available: ").nth(1).unwrap();
+        for name in listed.split(',').map(str::trim) {
+            let doc = get_stdlib_docs(Some(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(doc.starts_with(&format!("# std.{name}")), "{name}: {doc}");
+        }
+    }
 }
