@@ -397,10 +397,10 @@ where
         T: Eq + std::hash::Hash + Clone,
     {
         fn visit_expr(&mut self, expr: &Spanned<Expr>) {
-            if let Some(item) = (self.mapper)(&expr.node) {
-                if self.seen.insert(item.clone()) {
-                    self.items.push(item);
-                }
+            if let Some(item) = (self.mapper)(&expr.node)
+                && self.seen.insert(item.clone())
+            {
+                self.items.push(item);
             }
             walk_expr(self, expr);
         }
@@ -433,10 +433,10 @@ where
         T: Eq + std::hash::Hash + Clone,
     {
         fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
-            if let Some(item) = (self.mapper)(&stmt.node) {
-                if self.seen.insert(item.clone()) {
-                    self.items.push(item);
-                }
+            if let Some(item) = (self.mapper)(&stmt.node)
+                && self.seen.insert(item.clone())
+            {
+                self.items.push(item);
             }
             walk_stmt(self, stmt);
         }

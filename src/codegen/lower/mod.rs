@@ -5427,10 +5427,10 @@ struct SenderVarCollector<'a> {
 
 impl Visitor for SenderVarCollector<'_> {
     fn visit_stmt(&mut self, stmt: &crate::span::Spanned<Stmt>) {
-        if let Stmt::LetChan { sender, .. } = &stmt.node {
-            if self.seen.insert(sender.node.clone()) {
-                self.names.push(sender.node.clone());
-            }
+        if let Stmt::LetChan { sender, .. } = &stmt.node
+            && self.seen.insert(sender.node.clone())
+        {
+            self.names.push(sender.node.clone());
         }
         walk_stmt(self, stmt);
     }
@@ -5731,12 +5731,11 @@ pub fn lower_function(
     }
 
     // Emit requires checks at function entry
-    if let Some(contracts) = fn_contracts.get(&fn_lookup) {
-        if !contracts.requires.is_empty() {
-            let requires = contracts.requires.clone();
-            ctx.emit_requires_checks(&requires)?;
-        }
-
+    if let Some(contracts) = fn_contracts.get(&fn_lookup)
+        && !contracts.requires.is_empty()
+    {
+        let requires = contracts.requires.clone();
+        ctx.emit_requires_checks(&requires)?;
     }
 
     // Marshal cycle guard (#425): generated __marshal_<T> functions recurse
@@ -5916,22 +5915,22 @@ impl Visitor for LocalDeclCollector<'_> {
             }
             Stmt::Match { expr, arms } => {
                 let scrutinee = infer_type_for_expr(&expr.node, self.env, &self.known);
-                if let PlutoType::Enum(enum_name) = scrutinee {
-                    if let Some(info) = self.env.enums.get(&enum_name) {
-                        let variants = info.variants.clone();
-                        for arm in arms {
-                            let crate::parser::ast::MatchPattern::Variant { variant_name, bindings, .. } = &arm.pattern else {
-                                continue;
-                            };
-                            let Some((_, fields)) = variants.iter().find(|(n, _)| *n == variant_name.node) else {
-                                continue;
-                            };
-                            for (field, rename) in bindings {
-                                if let Some((_, fty)) = fields.iter().find(|(n, _)| *n == field.node) {
-                                    self.push(gen_binding_slot(field), fty.clone());
-                                    let name = rename.as_ref().map_or(&field.node, |r| &r.node);
-                                    self.known.insert(name.clone(), fty.clone());
-                                }
+                if let PlutoType::Enum(enum_name) = scrutinee
+                    && let Some(info) = self.env.enums.get(&enum_name)
+                {
+                    let variants = info.variants.clone();
+                    for arm in arms {
+                        let crate::parser::ast::MatchPattern::Variant { variant_name, bindings, .. } = &arm.pattern else {
+                            continue;
+                        };
+                        let Some((_, fields)) = variants.iter().find(|(n, _)| *n == variant_name.node) else {
+                            continue;
+                        };
+                        for (field, rename) in bindings {
+                            if let Some((_, fty)) = fields.iter().find(|(n, _)| *n == field.node) {
+                                self.push(gen_binding_slot(field), fty.clone());
+                                let name = rename.as_ref().map_or(&field.node, |r| &r.node);
+                                self.known.insert(name.clone(), fty.clone());
                             }
                         }
                     }
@@ -7008,8 +7007,8 @@ fn infer_type_for_expr_match(
         };
 
         // Get variant info to find field types
-        if let Some(enum_info) = env.enums.get(enum_name) {
-            if let Some((_, variant_fields)) = enum_info.variants.iter()
+        if let Some(enum_info) = env.enums.get(enum_name)
+            && let Some((_, variant_fields)) = enum_info.variants.iter()
                 .find(|(name, _)| name == &arm_variant_name.node)
             {
                 // Create temporary var_types with bindings
@@ -7025,7 +7024,6 @@ fn infer_type_for_expr_match(
                 }
                 return infer_type_for_expr(&arm.value.node, env, &temp_var_types);
             }
-        }
     }
 
     // Default to void if no arms (shouldn't happen after typeck)
@@ -7422,10 +7420,10 @@ fn infer_type_for_expr(expr: &Expr, env: &TypeEnv, var_types: &HashMap<String, P
         }
         Expr::StaticTraitCall { trait_name, method_name, .. } => {
             // Look up the method signature in the trait
-            if let Some(trait_info) = env.traits.get(&trait_name.node) {
-                if let Some((_, sig)) = trait_info.methods.iter().find(|(n, _)| n == &method_name.node) {
-                    return sig.return_type.clone();
-                }
+            if let Some(trait_info) = env.traits.get(&trait_name.node)
+                && let Some((_, sig)) = trait_info.methods.iter().find(|(n, _)| n == &method_name.node)
+            {
+                return sig.return_type.clone();
             }
             // Fallback to Void if not found (shouldn't happen after typeck)
             PlutoType::Void

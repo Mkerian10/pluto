@@ -525,10 +525,10 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             for trait_decl in &program.traits {
                 if trait_decl.node.name.node == *trait_name {
                     for trait_method in &trait_decl.node.methods {
-                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node) {
-                            if let Some(fc) = extract_fn_contracts(&trait_method.contracts) {
-                                fn_contracts.insert(mangle_method(&c.name.node, &trait_method.name.node), fc);
-                            }
+                        if trait_method.body.is_some() && !class_method_names.contains(&trait_method.name.node)
+                            && let Some(fc) = extract_fn_contracts(&trait_method.contracts)
+                        {
+                            fn_contracts.insert(mangle_method(&c.name.node, &trait_method.name.node), fc);
                         }
                     }
                 }
@@ -1482,10 +1482,10 @@ struct SpawnClosureCollector<'a> {
 
 impl Visitor for SpawnClosureCollector<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
-        if let Expr::Spawn { call, .. } = &expr.node {
-            if let Expr::ClosureCreate { fn_name, .. } = &call.node {
-                self.names.insert(fn_name.clone());
-            }
+        if let Expr::Spawn { call, .. } = &expr.node
+            && let Expr::ClosureCreate { fn_name, .. } = &call.node
+        {
+            self.names.insert(fn_name.clone());
         }
         walk_expr(self, expr);
     }
@@ -1649,21 +1649,21 @@ fn collect_wire_types(
             if env.object_types.contains(n) {
                 return;
             }
-            if out.insert(n.clone()) {
-                if let Some(info) = env.classes.get(n) {
-                    for (_, fty, _) in &info.fields {
-                        collect_wire_types(env, fty, out);
-                    }
+            if out.insert(n.clone())
+                && let Some(info) = env.classes.get(n)
+            {
+                for (_, fty, _) in &info.fields {
+                    collect_wire_types(env, fty, out);
                 }
             }
         }
         PlutoType::Enum(n) => {
-            if out.insert(n.clone()) {
-                if let Some(info) = env.enums.get(n) {
-                    for (_, fields) in &info.variants {
-                        for (_, fty) in fields {
-                            collect_wire_types(env, fty, out);
-                        }
+            if out.insert(n.clone())
+                && let Some(info) = env.enums.get(n)
+            {
+                for (_, fields) in &info.variants {
+                    for (_, fty) in fields {
+                        collect_wire_types(env, fty, out);
                     }
                 }
             }

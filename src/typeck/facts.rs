@@ -615,10 +615,10 @@ pub(crate) fn typed_path(expr: &Expr, env: &TypeEnv) -> Option<(String, PlutoTyp
         Expr::Ident(name) => {
             // Mirror identifier inference: a flow-narrowed nullable reads at
             // its narrowed type.
-            if let Some(narrowed) = env.narrowed_vars.lookup(name) {
-                if !matches!(narrowed, PlutoType::Nullable(_)) {
-                    return Some((name.clone(), narrowed.clone()));
-                }
+            if let Some(narrowed) = env.narrowed_vars.lookup(name)
+                && !matches!(narrowed, PlutoType::Nullable(_))
+            {
+                return Some((name.clone(), narrowed.clone()));
             }
             env.lookup(name).map(|ty| (name.clone(), ty.clone()))
         }
@@ -1317,10 +1317,10 @@ pub(crate) fn affine_bounds(a: &Affine, facts: &FactEnv) -> Result<(Option<i128>
         let mut lo = Some(a.k);
         let mut hi = Some(a.k);
         for (i, (_, _, tl, th)) in contribs.iter().enumerate() {
-            if let Some((x, y)) = skip {
-                if i == x || i == y {
-                    continue;
-                }
+            if let Some((x, y)) = skip
+                && (i == x || i == y)
+            {
+                continue;
             }
             lo = add_opt(lo, *tl);
             hi = add_opt(hi, *th);
@@ -1872,10 +1872,10 @@ pub(crate) fn facts_from_diff(op: BinOp, d: &Affine) -> Vec<Fact> {
         // c·x + k != 0 ⇒ x != -k/c when that quotient is an exact i64
         // (otherwise the inequation is vacuously true — no fact).
         if op == BinOp::Neq {
-            if d.k % c == 0 {
-                if let Ok(sol) = i64::try_from(-d.k / c) {
-                    return vec![Fact::NeConst(path.clone(), sol)];
-                }
+            if d.k % c == 0
+                && let Ok(sol) = i64::try_from(-d.k / c)
+            {
+                return vec![Fact::NeConst(path.clone(), sol)];
             }
             return Vec::new();
         }
@@ -1913,20 +1913,20 @@ pub(crate) fn facts_from_diff(op: BinOp, d: &Affine) -> Vec<Fact> {
     }
 
     // Pure-difference relation facts: x - y cmp 0.
-    if d.k == 0 {
-        if let Some((x, y)) = d.as_diff() {
-            let rel = match op {
-                BinOp::Lt => Some((x, RelOp::Lt, y)),
-                BinOp::LtEq => Some((x, RelOp::Le, y)),
-                BinOp::Gt => Some((y, RelOp::Lt, x)),
-                BinOp::GtEq => Some((y, RelOp::Le, x)),
-                BinOp::Eq => Some((x, RelOp::Eq, y)),
-                BinOp::Neq => Some((x, RelOp::Ne, y)),
-                _ => None,
-            };
-            if let Some((a, op, b)) = rel {
-                return vec![Fact::Rel(a.to_string(), op, b.to_string())];
-            }
+    if d.k == 0
+        && let Some((x, y)) = d.as_diff()
+    {
+        let rel = match op {
+            BinOp::Lt => Some((x, RelOp::Lt, y)),
+            BinOp::LtEq => Some((x, RelOp::Le, y)),
+            BinOp::Gt => Some((y, RelOp::Lt, x)),
+            BinOp::GtEq => Some((y, RelOp::Le, x)),
+            BinOp::Eq => Some((x, RelOp::Eq, y)),
+            BinOp::Neq => Some((x, RelOp::Ne, y)),
+            _ => None,
+        };
+        if let Some((a, op, b)) = rel {
+            return vec![Fact::Rel(a.to_string(), op, b.to_string())];
         }
     }
 

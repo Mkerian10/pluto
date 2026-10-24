@@ -280,11 +280,11 @@ mod tests {
         resolve_cross_refs(&mut program);
 
         // The call in main should now point to greet's UUID
-        if let Stmt::Expr(ref e) = program.functions[1].node.body.node.stmts[0].node {
-            if let Expr::Call { target_id: ref tid, .. } = e.node {
-                assert_eq!(*tid, Some(target_id));
-                return;
-            }
+        if let Stmt::Expr(ref e) = program.functions[1].node.body.node.stmts[0].node
+            && let Expr::Call { target_id: ref tid, .. } = e.node
+        {
+            assert_eq!(*tid, Some(target_id));
+            return;
         }
         panic!("expected Call expr");
     }
@@ -322,11 +322,11 @@ mod tests {
 
         resolve_cross_refs(&mut program);
 
-        if let Stmt::Expr(ref e) = program.functions[0].node.body.node.stmts[0].node {
-            if let Expr::StructLit { target_id: ref tid, .. } = e.node {
-                assert_eq!(*tid, Some(class_id));
-                return;
-            }
+        if let Stmt::Expr(ref e) = program.functions[0].node.body.node.stmts[0].node
+            && let Expr::StructLit { target_id: ref tid, .. } = e.node
+        {
+            assert_eq!(*tid, Some(class_id));
+            return;
         }
         panic!("expected StructLit expr");
     }
@@ -363,12 +363,12 @@ mod tests {
 
         resolve_cross_refs(&mut program);
 
-        if let Stmt::Expr(ref e) = program.functions[0].node.body.node.stmts[0].node {
-            if let Expr::EnumUnit { enum_id: ref eid, variant_id: ref vid, .. } = e.node {
-                assert_eq!(*eid, Some(enum_id));
-                assert_eq!(*vid, Some(variant_id));
-                return;
-            }
+        if let Stmt::Expr(ref e) = program.functions[0].node.body.node.stmts[0].node
+            && let Expr::EnumUnit { enum_id: ref eid, variant_id: ref vid, .. } = e.node
+        {
+            assert_eq!(*eid, Some(enum_id));
+            assert_eq!(*vid, Some(variant_id));
+            return;
         }
         panic!("expected EnumUnit expr");
     }
@@ -406,12 +406,12 @@ mod tests {
 
         resolve_cross_refs(&mut program);
 
-        if let Stmt::Expr(ref e) = program.functions[0].node.body.node.stmts[0].node {
-            if let Expr::EnumData { enum_id: ref eid, variant_id: ref vid, .. } = e.node {
-                assert_eq!(*eid, Some(enum_id));
-                assert_eq!(*vid, Some(variant_id));
-                return;
-            }
+        if let Stmt::Expr(ref e) = program.functions[0].node.body.node.stmts[0].node
+            && let Expr::EnumData { enum_id: ref eid, variant_id: ref vid, .. } = e.node
+        {
+            assert_eq!(*eid, Some(enum_id));
+            assert_eq!(*vid, Some(variant_id));
+            return;
         }
         panic!("expected EnumData expr");
     }
@@ -512,11 +512,11 @@ mod tests {
 
         resolve_cross_refs(&mut program);
 
-        if let Stmt::Expr(ref e) = program.functions[0].node.body.node.stmts[0].node {
-            if let Expr::Call { target_id, .. } = &e.node {
-                assert_eq!(*target_id, None);
-                return;
-            }
+        if let Stmt::Expr(ref e) = program.functions[0].node.body.node.stmts[0].node
+            && let Expr::Call { target_id, .. } = &e.node
+        {
+            assert_eq!(*target_id, None);
+            return;
         }
         panic!("expected Call expr");
     }
@@ -541,11 +541,11 @@ mod tests {
 
         resolve_cross_refs(&mut program);
 
-        if let Stmt::Expr(ref e) = program.functions[1].node.body.node.stmts[0].node {
-            if let Expr::ClosureCreate { target_id, .. } = &e.node {
-                assert_eq!(*target_id, Some(lifted_id));
-                return;
-            }
+        if let Stmt::Expr(ref e) = program.functions[1].node.body.node.stmts[0].node
+            && let Expr::ClosureCreate { target_id, .. } = &e.node
+        {
+            assert_eq!(*target_id, Some(lifted_id));
+            return;
         }
         panic!("expected ClosureCreate expr");
     }
@@ -571,11 +571,11 @@ mod tests {
 
         resolve_cross_refs(&mut program);
 
-        if let Stmt::Expr(ref e) = program.functions[1].node.body.node.stmts[0].node {
-            if let Expr::Call { target_id, .. } = &e.node {
-                assert_eq!(*target_id, Some(math_add_id));
-                return;
-            }
+        if let Stmt::Expr(ref e) = program.functions[1].node.body.node.stmts[0].node
+            && let Expr::Call { target_id, .. } = &e.node
+        {
+            assert_eq!(*target_id, Some(math_add_id));
+            return;
         }
         panic!("expected Call expr");
     }
@@ -601,11 +601,11 @@ mod tests {
 
         resolve_cross_refs(&mut program);
 
-        if let Stmt::Expr(ref e) = program.functions[1].node.body.node.stmts[0].node {
-            if let Expr::Call { target_id, .. } = &e.node {
-                assert_eq!(*target_id, Some(identity_int_id));
-                return;
-            }
+        if let Stmt::Expr(ref e) = program.functions[1].node.body.node.stmts[0].node
+            && let Expr::Call { target_id, .. } = &e.node
+        {
+            assert_eq!(*target_id, Some(identity_int_id));
+            return;
         }
         panic!("expected Call expr");
     }
@@ -657,11 +657,11 @@ mod tests {
 
         resolve_cross_refs(&mut program);
 
-        if let Stmt::Expr(ref e) = program.functions[0].node.body.node.stmts[0].node {
-            if let Expr::Call { target_id, .. } = &e.node {
-                assert_eq!(*target_id, Some(method_id));
-                return;
-            }
+        if let Stmt::Expr(ref e) = program.functions[0].node.body.node.stmts[0].node
+            && let Expr::Call { target_id, .. } = &e.node
+        {
+            assert_eq!(*target_id, Some(method_id));
+            return;
         }
         panic!("expected Call expr");
     }

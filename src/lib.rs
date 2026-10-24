@@ -879,11 +879,11 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
     let no_cache = std::env::var_os("PLUTO_RUNTIME_NO_CACHE").is_some();
 
     // Tier 2: Check persistent disk cache (skipped when the cache is disabled).
-    if !no_cache {
-        if let Some(cached) = check_disk_cache(&cache_dir, &cache_key) {
-            runtime_log(&format!("runtime: cache hit ({cache_key})"));
-            return Ok(cached);
-        }
+    if !no_cache
+        && let Some(cached) = check_disk_cache(&cache_dir, &cache_key)
+    {
+        runtime_log(&format!("runtime: cache hit ({cache_key})"));
+        return Ok(cached);
     }
     runtime_log(&format!(
         "runtime: compiling fresh ({cache_key}){}",
@@ -1137,12 +1137,12 @@ fn compile_runtime_object(test_mode: bool, gc: GcBackend) -> Result<PathBuf, Com
 
     // Return the disk-cached path if it was stored successfully, otherwise the
     // freshly built temp path. With the cache disabled, always use the fresh one.
-    if !no_cache {
-        if let Some(cached) = check_disk_cache(&cache_dir, &cache_key) {
-            let _ = std::fs::remove_file(&runtime_o);
-            let _ = std::fs::remove_dir(&dir);
-            return Ok(cached);
-        }
+    if !no_cache
+        && let Some(cached) = check_disk_cache(&cache_dir, &cache_key)
+    {
+        let _ = std::fs::remove_file(&runtime_o);
+        let _ = std::fs::remove_dir(&dir);
+        return Ok(cached);
     }
     Ok(runtime_o)
 }
@@ -1512,15 +1512,15 @@ pub fn compile_system_file_with_stdlib(
             if let Some(app) = &prog.app { remote_fields.extend(app.node.inject_fields.iter()); }
             for s in &prog.stages { remote_fields.extend(s.node.inject_fields.iter()); }
             for f in remote_fields {
-                if f.is_remote {
-                    if let TypeExpr::Named(n) = &f.ty.node {
-                        let svc = unqual(n);
-                        // The consumer's interface class, if defined in this member.
-                        let iface = prog.classes.iter()
-                            .find(|c| unqual(&c.node.name.node) == svc)
-                            .map(|c| &c.node);
-                        consumed.push((svc, member.name.node.clone(), iface, member.module_name.span));
-                    }
+                if f.is_remote
+                    && let TypeExpr::Named(n) = &f.ty.node
+                {
+                    let svc = unqual(n);
+                    // The consumer's interface class, if defined in this member.
+                    let iface = prog.classes.iter()
+                        .find(|c| unqual(&c.node.name.node) == svc)
+                        .map(|c| &c.node);
+                    consumed.push((svc, member.name.node.clone(), iface, member.module_name.span));
                 }
             }
         }

@@ -1638,11 +1638,11 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
                 let becomes_scoped = deps
                     .iter()
                     .any(|d| effective.get(d) == Some(&Lifecycle::Scoped));
-                if becomes_scoped {
-                    if let Some(e) = effective.get_mut(class_name) {
-                        *e = Lifecycle::Scoped;
-                        changed = true;
-                    }
+                if becomes_scoped
+                    && let Some(e) = effective.get_mut(class_name)
+                {
+                    *e = Lifecycle::Scoped;
+                    changed = true;
                 }
             }
         }
@@ -1864,27 +1864,27 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
                         inferred = min_lifecycle(inferred, dep_info.lifecycle);
                     }
                 }
-                if let Some(info) = env.classes.get_mut(class_name) {
-                    if inferred != info.lifecycle {
-                        info.lifecycle = inferred;
-                        env.lifecycle_overridden.insert(class_name.clone());
-                    }
+                if let Some(info) = env.classes.get_mut(class_name)
+                    && inferred != info.lifecycle
+                {
+                    info.lifecycle = inferred;
+                    env.lifecycle_overridden.insert(class_name.clone());
                 }
             }
         }
 
         // Validate app bracket deps don't reference overridden classes
         for field in &app_spanned.node.inject_fields {
-            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
-                if env.lifecycle_overridden.contains(type_name) {
-                    return Err(CompileError::type_err(
-                        format!(
-                            "app bracket dependency '{}' has overridden lifecycle; use scope blocks to access scoped/transient instances",
-                            field.name.node
-                        ),
-                        field.ty.span,
-                    ));
-                }
+            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node
+                && env.lifecycle_overridden.contains(type_name)
+            {
+                return Err(CompileError::type_err(
+                    format!(
+                        "app bracket dependency '{}' has overridden lifecycle; use scope blocks to access scoped/transient instances",
+                        field.name.node
+                    ),
+                    field.ty.span,
+                ));
             }
         }
 
@@ -1946,27 +1946,27 @@ pub(crate) fn validate_di_graph(program: &Program, env: &mut TypeEnv) -> Result<
                         inferred = min_lifecycle(inferred, dep_info.lifecycle);
                     }
                 }
-                if let Some(info) = env.classes.get_mut(class_name) {
-                    if inferred != info.lifecycle {
-                        info.lifecycle = inferred;
-                        env.lifecycle_overridden.insert(class_name.clone());
-                    }
+                if let Some(info) = env.classes.get_mut(class_name)
+                    && inferred != info.lifecycle
+                {
+                    info.lifecycle = inferred;
+                    env.lifecycle_overridden.insert(class_name.clone());
                 }
             }
         }
 
         // Validate stage bracket deps don't reference overridden classes
         for field in &stage_spanned.node.inject_fields {
-            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node {
-                if env.lifecycle_overridden.contains(type_name) {
-                    return Err(CompileError::type_err(
-                        format!(
-                            "stage bracket dependency '{}' has overridden lifecycle; use scope blocks to access scoped/transient instances",
-                            field.name.node
-                        ),
-                        field.ty.span,
-                    ));
-                }
+            if let crate::parser::ast::TypeExpr::Named(ref type_name) = field.ty.node
+                && env.lifecycle_overridden.contains(type_name)
+            {
+                return Err(CompileError::type_err(
+                    format!(
+                        "stage bracket dependency '{}' has overridden lifecycle; use scope blocks to access scoped/transient instances",
+                        field.name.node
+                    ),
+                    field.ty.span,
+                ));
             }
         }
 

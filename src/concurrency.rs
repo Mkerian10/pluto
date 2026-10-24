@@ -196,10 +196,10 @@ impl Visitor for AccessCollector<'_> {
                 let key = (self.current_fn.to_string(), method.span.start);
                 if let Some(crate::typeck::env::MethodResolution::Class { mangled_name }) = self.env.method_resolutions.get(&key) {
                     // Extract class name from mangled name (format: "ClassName$method")
-                    if let Some(class_name) = mangled_name.split('$').next() {
-                        if self.di_singletons.contains(class_name) {
-                            self.accesses.insert(class_name.to_string());
-                        }
+                    if let Some(class_name) = mangled_name.split('$').next()
+                        && self.di_singletons.contains(class_name)
+                    {
+                        self.accesses.insert(class_name.to_string());
                     }
                     self.edges.insert(mangled_name.clone());
                 }

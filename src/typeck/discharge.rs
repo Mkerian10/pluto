@@ -2027,11 +2027,11 @@ fn summarize_function(
     // Param name → declared type, aligned positionally with the registered
     // signature (the receiver rides in params[0] for methods).
     let mut param_types: HashMap<String, PlutoType> = HashMap::new();
-    if let Some(sig) = env.functions.get(key) {
-        if sig.params.len() == func.params.len() {
-            for (p, t) in func.params.iter().zip(sig.params.iter()) {
-                param_types.insert(p.name.node.clone(), t.clone());
-            }
+    if let Some(sig) = env.functions.get(key)
+        && sig.params.len() == func.params.len()
+    {
+        for (p, t) in func.params.iter().zip(sig.params.iter()) {
+            param_types.insert(p.name.node.clone(), t.clone());
         }
     }
     let bound = collect_bound_names(func);
@@ -2488,15 +2488,15 @@ pub(crate) fn post_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileErr
             // unconditionally (check.rs's Assert arm — asserts feed flow
             // facts in every function, invariants or not); only the ghost
             // mirror for invariant discharge lives here.
-            if !contains_impure_call(expr, env) {
-                if let Some(scope) = env.invariant_scope.take() {
-                    let ghost = condition_facts_with(&expr.node, &|e| scope.resolve(env, e));
-                    let mut scope = scope;
-                    for f in ghost.then_facts {
-                        scope.ghost_facts.assume(f);
-                    }
-                    env.invariant_scope = Some(scope);
+            if !contains_impure_call(expr, env)
+                && let Some(scope) = env.invariant_scope.take()
+            {
+                let ghost = condition_facts_with(&expr.node, &|e| scope.resolve(env, e));
+                let mut scope = scope;
+                for f in ghost.then_facts {
+                    scope.ghost_facts.assume(f);
                 }
+                env.invariant_scope = Some(scope);
             }
         }
         Stmt::Select { .. } | Stmt::Scope { .. } => {
@@ -2867,17 +2867,17 @@ fn stage_call_ensures(stmt: &Stmt, env: &mut TypeEnv) {
             // appropriate bound.
             match op {
                 BinOp::Gt | BinOp::GtEq => {
-                    if let Some(hi) = phi {
-                        if let Some(dd) = affine_add_const(&cur, hi) {
-                            staged.extend(facts_from_diff(*op, &dd));
-                        }
+                    if let Some(hi) = phi
+                        && let Some(dd) = affine_add_const(&cur, hi)
+                    {
+                        staged.extend(facts_from_diff(*op, &dd));
                     }
                 }
                 BinOp::Lt | BinOp::LtEq => {
-                    if let Some(lo) = plo {
-                        if let Some(dd) = affine_add_const(&cur, lo) {
-                            staged.extend(facts_from_diff(*op, &dd));
-                        }
+                    if let Some(lo) = plo
+                        && let Some(dd) = affine_add_const(&cur, lo)
+                    {
+                        staged.extend(facts_from_diff(*op, &dd));
                     }
                 }
                 BinOp::Eq => {
@@ -2886,15 +2886,15 @@ fn stage_call_ensures(stmt: &Stmt, env: &mut TypeEnv) {
                             staged.extend(facts_from_diff(BinOp::Eq, &dd));
                         }
                     } else {
-                        if let Some(hi) = phi {
-                            if let Some(dd) = affine_add_const(&cur, hi) {
-                                staged.extend(facts_from_diff(BinOp::GtEq, &dd));
-                            }
+                        if let Some(hi) = phi
+                            && let Some(dd) = affine_add_const(&cur, hi)
+                        {
+                            staged.extend(facts_from_diff(BinOp::GtEq, &dd));
                         }
-                        if let Some(lo) = plo {
-                            if let Some(dd) = affine_add_const(&cur, lo) {
-                                staged.extend(facts_from_diff(BinOp::LtEq, &dd));
-                            }
+                        if let Some(lo) = plo
+                            && let Some(dd) = affine_add_const(&cur, lo)
+                        {
+                            staged.extend(facts_from_diff(BinOp::LtEq, &dd));
                         }
                     }
                 }
@@ -3055,14 +3055,13 @@ fn ghost_len_binding(env: &mut TypeEnv, name: &str, value: &Expr) {
         scope
             .ghost_facts
             .assume(Fact::Bound(ghost.clone(), Interval::at_least(0)));
-        if a.terms.len() == 1 && a.k == 0 {
-            if let Some((term, &c)) = a.terms.iter().next() {
-                if c == 1 {
-                    scope
-                        .ghost_facts
-                        .assume(Fact::Rel(ghost, RelOp::Eq, term.clone()));
-                }
-            }
+        if a.terms.len() == 1 && a.k == 0
+            && let Some((term, &c)) = a.terms.iter().next()
+                && c == 1
+        {
+            scope
+                .ghost_facts
+                .assume(Fact::Rel(ghost, RelOp::Eq, term.clone()));
         }
     }
     env.invariant_scope = Some(scope);
@@ -3081,10 +3080,10 @@ fn pre_field_assign(
 ) -> Result<(), CompileError> {
     // An illegal write (immutable binding) is rejected by the mutability
     // checks with a better message — no proof obligation on it.
-    if let Some(root) = super::check::root_variable(&object.node) {
-        if root != "self" && env.is_immutable(root) {
-            return Ok(());
-        }
+    if let Some(root) = super::check::root_variable(&object.node)
+        && root != "self" && env.is_immutable(root)
+    {
+        return Ok(());
     }
     let resolved = typed_path(&object.node, env);
     let (opath, cls) = match resolved {
@@ -3141,42 +3140,42 @@ fn pre_field_assign(
     // here is to reject the write outright — havocking instead would push
     // the failure to the next boundary with a diagnostic that no longer
     // names the aliasing binding.
-    if let Some(scope) = env.invariant_scope.as_ref() {
-        if scope.class_name == cls && scope.fields.iter().any(|f| f == &field.node) {
-            let target = opath
-                .clone()
-                .unwrap_or_else(|| "<expression>".to_string());
-            let root = target
-                .split('.')
-                .next()
-                .unwrap_or(target.as_str())
-                .to_string();
-            let mut clauses: Vec<String> = scope
-                .invariants
-                .iter()
-                .map(|s| format!("invariant '{}'{}", s.desc, s.blame()))
-                .collect();
-            clauses.extend(scope.ensures.iter().map(|s| {
-                format!(
-                    "ensures '{}'{}",
-                    s.desc,
-                    crate::parser::ast::provenance_blame(&s.provenance)
-                )
-            }));
-            let clause_list = clauses.join(", ");
-            return Err(CompileError::type_err(
-                format!(
-                    "cannot discharge the contracts of method '{}' of class '{cls}': \
-                     this write to '{target}.{}' goes through '{root}', another '{cls}' \
-                     binding that may alias 'self'. A write through an alias would \
-                     invalidate the symbolic tracking of 'self.{}' that the proof of \
-                     {clause_list} depends on. Perform the mutation through 'self', or \
-                     move the aliasing write out of this contract-carrying method",
-                    scope.method_name, field.node, field.node
-                ),
-                span,
-            ));
-        }
+    if let Some(scope) = env.invariant_scope.as_ref()
+        && scope.class_name == cls && scope.fields.iter().any(|f| f == &field.node)
+    {
+        let target = opath
+            .clone()
+            .unwrap_or_else(|| "<expression>".to_string());
+        let root = target
+            .split('.')
+            .next()
+            .unwrap_or(target.as_str())
+            .to_string();
+        let mut clauses: Vec<String> = scope
+            .invariants
+            .iter()
+            .map(|s| format!("invariant '{}'{}", s.desc, s.blame()))
+            .collect();
+        clauses.extend(scope.ensures.iter().map(|s| {
+            format!(
+                "ensures '{}'{}",
+                s.desc,
+                crate::parser::ast::provenance_blame(&s.provenance)
+            )
+        }));
+        let clause_list = clauses.join(", ");
+        return Err(CompileError::type_err(
+            format!(
+                "cannot discharge the contracts of method '{}' of class '{cls}': \
+                 this write to '{target}.{}' goes through '{root}', another '{cls}' \
+                 binding that may alias 'self'. A write through an alias would \
+                 invalidate the symbolic tracking of 'self.{}' that the proof of \
+                 {clause_list} depends on. Perform the mutation through 'self', or \
+                 move the aliasing write out of this contract-carrying method",
+                scope.method_name, field.node, field.node
+            ),
+            span,
+        ));
     }
 
     if env.assume_discharged {
@@ -3428,18 +3427,14 @@ fn collection_mutations(
     }
     impl Visitor for Scan<'_> {
         fn visit_expr(&mut self, expr: &Spanned<Expr>) {
-            if let Expr::MethodCall { object, method, .. } = &expr.node {
-                if let Some((path, ty)) = typed_path(&object.node, self.env) {
-                    if let Some(field) = path.strip_prefix("self.") {
-                        if !field.contains('.')
+            if let Expr::MethodCall { object, method, .. } = &expr.node
+                && let Some((path, ty)) = typed_path(&object.node, self.env)
+                    && let Some(field) = path.strip_prefix("self.")
+                        && !field.contains('.')
                             && self.coll_fields.iter().any(|f| f == field)
-                        {
-                            if let Some(d) = len_delta_of(&ty, &method.node) {
-                                self.out.push((field.to_string(), d, expr.span));
-                            }
-                        }
-                    }
-                }
+                            && let Some(d) = len_delta_of(&ty, &method.node)
+            {
+                self.out.push((field.to_string(), d, expr.span));
             }
             walk_expr(self, expr);
         }
@@ -3703,11 +3698,11 @@ fn join_syms(
     for f in &fields {
         let vals: Vec<Option<&Affine>> = surviving.iter().map(|s| s.sym.get(f)).collect();
         // 1) Exact agreement across all survivors.
-        if let Some(Some(first)) = vals.first() {
-            if !vals.is_empty() && vals.iter().all(|v| *v == Some(*first)) {
-                scope.sym.insert(f.clone(), (*first).clone());
-                continue;
-            }
+        if let Some(Some(first)) = vals.first()
+            && !vals.is_empty() && vals.iter().all(|v| *v == Some(*first))
+        {
+            scope.sym.insert(f.clone(), (*first).clone());
+            continue;
         }
         let fresh_term = scope.field_ghost(f, n);
         let mut joined: Option<Affine> = None;
@@ -3719,27 +3714,27 @@ fn join_syms(
                         .and_then(|d| d.terms.is_empty().then_some(d.k))
                 })
                 .collect();
-            if let Some(ds) = ds {
-                if !ds.is_empty() {
-                    let lo = *ds.iter().min().expect("non-empty");
-                    let hi = *ds.iter().max().expect("non-empty");
-                    if lo == hi {
-                        // 2a) Same constant offset on every path.
-                        joined = affine_add_const(base_aff, lo);
-                    } else if base_aff.terms.len() == 1 && base_aff.k == 0 {
-                        // 2b) Constant spread relative to a single-term base.
-                        let (t, &c) = base_aff.terms.iter().next().expect("len checked");
-                        if c == 1 {
-                            if lo >= 1 {
-                                rels.push(Fact::Rel(t.clone(), RelOp::Lt, fresh_term.clone()));
-                            } else if lo >= 0 {
-                                rels.push(Fact::Rel(t.clone(), RelOp::Le, fresh_term.clone()));
-                            }
-                            if hi <= -1 {
-                                rels.push(Fact::Rel(fresh_term.clone(), RelOp::Lt, t.clone()));
-                            } else if hi <= 0 {
-                                rels.push(Fact::Rel(fresh_term.clone(), RelOp::Le, t.clone()));
-                            }
+            if let Some(ds) = ds
+                && !ds.is_empty()
+            {
+                let lo = *ds.iter().min().expect("non-empty");
+                let hi = *ds.iter().max().expect("non-empty");
+                if lo == hi {
+                    // 2a) Same constant offset on every path.
+                    joined = affine_add_const(base_aff, lo);
+                } else if base_aff.terms.len() == 1 && base_aff.k == 0 {
+                    // 2b) Constant spread relative to a single-term base.
+                    let (t, &c) = base_aff.terms.iter().next().expect("len checked");
+                    if c == 1 {
+                        if lo >= 1 {
+                            rels.push(Fact::Rel(t.clone(), RelOp::Lt, fresh_term.clone()));
+                        } else if lo >= 0 {
+                            rels.push(Fact::Rel(t.clone(), RelOp::Le, fresh_term.clone()));
+                        }
+                        if hi <= -1 {
+                            rels.push(Fact::Rel(fresh_term.clone(), RelOp::Lt, t.clone()));
+                        } else if hi <= 0 {
+                            rels.push(Fact::Rel(fresh_term.clone(), RelOp::Le, t.clone()));
                         }
                     }
                 }
@@ -3842,11 +3837,11 @@ pub(crate) fn loop_affects(env: &TypeEnv, body: &Block) -> bool {
             if self.found {
                 return;
             }
-            if let Stmt::FieldAssign { object, .. } = &stmt.node {
-                if super::check::root_variable(&object.node) == Some("self") {
-                    self.found = true;
-                    return;
-                }
+            if let Stmt::FieldAssign { object, .. } = &stmt.node
+                && super::check::root_variable(&object.node) == Some("self")
+            {
+                self.found = true;
+                return;
             }
             walk_stmt(self, stmt);
         }
@@ -3929,11 +3924,11 @@ fn subtree_writes_self(stmt: &Stmt, span: Span) -> bool {
             if self.found {
                 return;
             }
-            if let Stmt::FieldAssign { object, .. } = &stmt.node {
-                if super::check::root_variable(&object.node) == Some("self") {
-                    self.found = true;
-                    return;
-                }
+            if let Stmt::FieldAssign { object, .. } = &stmt.node
+                && super::check::root_variable(&object.node) == Some("self")
+            {
+                self.found = true;
+                return;
             }
             walk_stmt(self, stmt);
         }

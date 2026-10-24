@@ -227,16 +227,16 @@ struct AmbientRewriter<'a> {
 impl VisitMut for AmbientRewriter<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
         // Check if this is an ambient identifier that needs rewriting
-        if let Expr::Ident(name) = &expr.node {
-            if self.active.contains(name) {
-                // Rewrite `logger` to `self.logger`
-                let field_name = name.clone();
-                expr.node = Expr::FieldAccess {
-                    object: Box::new(Spanned::new(Expr::Ident("self".into()), expr.span)),
-                    field: Spanned::new(field_name, expr.span),
-                };
-                return; // Don't recurse into the rewritten expression
-            }
+        if let Expr::Ident(name) = &expr.node
+            && self.active.contains(name)
+        {
+            // Rewrite `logger` to `self.logger`
+            let field_name = name.clone();
+            expr.node = Expr::FieldAccess {
+                object: Box::new(Spanned::new(Expr::Ident("self".into()), expr.span)),
+                field: Spanned::new(field_name, expr.span),
+            };
+            return; // Don't recurse into the rewritten expression
         }
 
         // Handle expressions that introduce new scopes
@@ -279,24 +279,24 @@ impl VisitMut for AmbientRewriter<'_> {
 
     fn visit_stmt_mut(&mut self, stmt: &mut Spanned<Stmt>) {
         // Handle ambient assignment rewriting
-        if let Stmt::Assign { target, value } = &mut stmt.node {
-            if self.active.contains(&target.node) {
-                // Rewrite `logger = x` to `self.logger = x`
-                let field = target.clone();
-                let dummy_val = Spanned::new(Expr::IntLit(0), Span::dummy());
-                let val = std::mem::replace(value, dummy_val);
-                let self_expr = Spanned::new(Expr::Ident("self".into()), field.span);
-                stmt.node = Stmt::FieldAssign {
-                    object: self_expr,
-                    field,
-                    value: val,
-                };
-                // Rewrite the value expression
-                if let Stmt::FieldAssign { value, .. } = &mut stmt.node {
-                    self.visit_expr_mut(value);
-                }
-                return; // Don't use walk_stmt_mut
+        if let Stmt::Assign { target, value } = &mut stmt.node
+            && self.active.contains(&target.node)
+        {
+            // Rewrite `logger = x` to `self.logger = x`
+            let field = target.clone();
+            let dummy_val = Spanned::new(Expr::IntLit(0), Span::dummy());
+            let val = std::mem::replace(value, dummy_val);
+            let self_expr = Spanned::new(Expr::Ident("self".into()), field.span);
+            stmt.node = Stmt::FieldAssign {
+                object: self_expr,
+                field,
+                value: val,
+            };
+            // Rewrite the value expression
+            if let Stmt::FieldAssign { value, .. } = &mut stmt.node {
+                self.visit_expr_mut(value);
             }
+            return; // Don't use walk_stmt_mut
         }
 
         // Handle statements that introduce new scopes

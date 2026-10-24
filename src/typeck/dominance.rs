@@ -745,15 +745,14 @@ impl<'a> Analyzer<'a> {
         match expr {
             Expr::Ident(name) => {
                 let ty = self.lookup(name)?;
-                if let PlutoType::Class(c) = ty {
-                    if name != "self"
+                if let PlutoType::Class(c) = ty
+                    && name != "self"
                         && (self.env.object_types.contains(c)
                             || self.env.remote_types.contains(c)
                             || self.env.domain_types.contains(c))
                     {
                         return None;
                     }
-                }
                 Some((name.clone(), ty.clone()))
             }
             Expr::FieldAccess { object, field } => {
@@ -770,10 +769,10 @@ impl<'a> Analyzer<'a> {
     /// Leaf resolver for the fact engine: int paths in this pass's
     /// vocabulary, with alias substitution for pure `let` bindings.
     fn resolve(&self, e: &Expr) -> Option<Affine> {
-        if let Expr::Ident(name) = e {
-            if let Some(a) = self.aliases.get(name) {
-                return Some(a.clone());
-            }
+        if let Expr::Ident(name) = e
+            && let Some(a) = self.aliases.get(name)
+        {
+            return Some(a.clone());
         }
         match self.path_of(e) {
             Some((path, PlutoType::Int)) => Some(Affine::term(path)),
@@ -1288,10 +1287,10 @@ impl<'a> Analyzer<'a> {
         if let Some(ty) = self.type_of_expr(&value.node) {
             self.define(name, ty);
         }
-        if !self.has_unsafe_call(&value.node) {
-            if let Some(aff) = to_affine_with(&value.node, &|e| self.resolve(e)) {
-                self.aliases.insert(name.to_string(), aff);
-            }
+        if !self.has_unsafe_call(&value.node)
+            && let Some(aff) = to_affine_with(&value.node, &|e| self.resolve(e))
+        {
+            self.aliases.insert(name.to_string(), aff);
         }
     }
 
@@ -1682,11 +1681,11 @@ impl<'a> Analyzer<'a> {
                 // Aliasing-in (issue #418): assigning a value another
                 // binding can still reach would let that binding mutate the
                 // guarded contents outside the fence afterwards.
-                if let Some(spec) = specs.iter().find(|s| s.aliasable) {
-                    if !self.is_fresh_collection_value(&value.node) {
-                        self.freshness_error(spec, span);
-                        return;
-                    }
+                if let Some(spec) = specs.iter().find(|s| s.aliasable)
+                    && !self.is_fresh_collection_value(&value.node)
+                {
+                    self.freshness_error(spec, span);
+                    return;
                 }
             }
             if self.error.is_none() {
@@ -1750,17 +1749,17 @@ impl<'a> Analyzer<'a> {
                         self.prove_guard(spec, span);
                     }
                 }
-            } else if let Expr::FieldAccess { field, .. } = &object.node {
-                if let Some(spec) = self.any_guard_named(&field.node) {
-                    let spec = spec.clone();
-                    self.foreign_write_error(&spec, span);
-                }
-            }
-        } else if let Expr::FieldAccess { field, .. } = &object.node {
-            if let Some(spec) = self.any_guard_named(&field.node) {
+            } else if let Expr::FieldAccess { field, .. } = &object.node
+                && let Some(spec) = self.any_guard_named(&field.node)
+            {
                 let spec = spec.clone();
                 self.foreign_write_error(&spec, span);
             }
+        } else if let Expr::FieldAccess { field, .. } = &object.node
+            && let Some(spec) = self.any_guard_named(&field.node)
+        {
+            let spec = spec.clone();
+            self.foreign_write_error(&spec, span);
         }
         if self.error.is_none() {
             self.kill_fields();
@@ -1815,14 +1814,14 @@ impl<'a> Analyzer<'a> {
 
         for cand in &candidates {
             let resolver = |e: &Expr| -> Option<Affine> {
-                if let Expr::FieldAccess { object, field } = e {
-                    if let Expr::Ident(root) = &object.node {
-                        if root == &spec.binder_name {
-                            return Some(Affine::term(format!("{cand}.{}", field.node)));
-                        }
-                        if root == "self" {
-                            return Some(Affine::term(format!("self.{}", field.node)));
-                        }
+                if let Expr::FieldAccess { object, field } = e
+                    && let Expr::Ident(root) = &object.node
+                {
+                    if root == &spec.binder_name {
+                        return Some(Affine::term(format!("{cand}.{}", field.node)));
+                    }
+                    if root == "self" {
+                        return Some(Affine::term(format!("self.{}", field.node)));
                     }
                 }
                 None

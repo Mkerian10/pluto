@@ -65,10 +65,10 @@ pub(crate) fn null_narrows(
             null_narrows(&operand.node, !truth, env, out);
         }
         _ => {
-            if let Some((name, is_neq, inner)) = null_check_target(cond, env) {
-                if is_neq == truth {
-                    out.push((name, inner));
-                }
+            if let Some((name, is_neq, inner)) = null_check_target(cond, env)
+                && is_neq == truth
+            {
+                out.push((name, inner));
             }
         }
     }
@@ -363,13 +363,13 @@ fn check_stmt(
                 ));
             }
             // Reject scope-tainted closures escaping via return
-            if let Some(expr) = value {
-                if !env.scope_tainted.is_empty() && is_scope_tainted_expr(&expr.node, expr.span, env) {
-                    return Err(CompileError::type_err(
-                        "closure capturing scope binding cannot escape scope block via return",
-                        expr.span,
-                    ));
-                }
+            if let Some(expr) = value
+                && !env.scope_tainted.is_empty() && is_scope_tainted_expr(&expr.node, expr.span, env)
+            {
+                return Err(CompileError::type_err(
+                    "closure capturing scope binding cannot escape scope block via return",
+                    expr.span,
+                ));
             }
         }
         Stmt::Assign { target, value } => {
@@ -426,17 +426,15 @@ fn check_stmt(
                 env.narrowed_vars.insert(target.node.clone(), var_type.clone());
             }
             // Reject scope-tainted closures escaping via assignment to outer variable
-            if !env.scope_tainted.is_empty() && is_scope_tainted_expr(&value.node, value.span, env) {
-                if let Some(scope_depth) = env.scope_body_depths.last() {
-                    if let Some((_, var_depth)) = env.lookup_with_depth(&target.node) {
-                        if var_depth < *scope_depth {
-                            return Err(CompileError::type_err(
-                                "closure capturing scope binding cannot escape scope block via assignment to outer variable",
-                                value.span,
-                            ));
-                        }
-                    }
-                }
+            if !env.scope_tainted.is_empty() && is_scope_tainted_expr(&value.node, value.span, env)
+                && let Some(scope_depth) = env.scope_body_depths.last()
+                    && let Some((_, var_depth)) = env.lookup_with_depth(&target.node)
+                        && var_depth < *scope_depth
+            {
+                return Err(CompileError::type_err(
+                    "closure capturing scope binding cannot escape scope block via assignment to outer variable",
+                    value.span,
+                ));
             }
             // Flow facts: a direct `xs.len()` reassignment transfers the
             // length term's facts (the old facts were killed above).
@@ -1170,10 +1168,10 @@ fn check_scope_stmt(
         let deps: Vec<String> = info.fields.iter()
             .filter(|(_, _, inj)| *inj)
             .filter_map(|(_, ty, _)| {
-                if let PlutoType::Class(dep_name) = ty {
-                    if classes_to_create.contains(dep_name) {
-                        return Some(dep_name.clone());
-                    }
+                if let PlutoType::Class(dep_name) = ty
+                    && classes_to_create.contains(dep_name)
+                {
+                    return Some(dep_name.clone());
                 }
                 None
             })
@@ -1204,12 +1202,12 @@ fn check_scope_stmt(
         }
         // Decrement in-degree for dependents
         for (class, deps) in &graph {
-            if deps.contains(&node) {
-                if let Some(deg) = in_degree.get_mut(class) {
-                    *deg -= 1;
-                    if *deg == 0 {
-                        topo_queue.push_back(class.clone());
-                    }
+            if deps.contains(&node)
+                && let Some(deg) = in_degree.get_mut(class)
+            {
+                *deg -= 1;
+                if *deg == 0 {
+                    topo_queue.push_back(class.clone());
                 }
             }
         }
@@ -1345,10 +1343,10 @@ fn is_scope_tainted_expr(expr: &Expr, span: crate::span::Span, env: &TypeEnv) ->
         return true;
     }
     // Variable that holds a tainted closure
-    if let Expr::Ident(name) = expr {
-        if env.scope_tainted.contains(name) {
-            return true;
-        }
+    if let Expr::Ident(name) = expr
+        && env.scope_tainted.contains(name)
+    {
+        return true;
     }
     false
 }

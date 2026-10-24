@@ -866,10 +866,10 @@ fn add_prefixed_items(
                 clause.node.name.node = prefix_name(module_name, &clause.node.name.node);
             }
             for arg in &mut clause.node.args {
-                if let Expr::Ident(name) = &mut arg.node {
-                    if is_module_type(name, module_prog) {
-                        *name = prefix_name(module_name, name);
-                    }
+                if let Expr::Ident(name) = &mut arg.node
+                    && is_module_type(name, module_prog)
+                {
+                    *name = prefix_name(module_name, name);
                 }
             }
         }
@@ -1372,8 +1372,8 @@ fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
     // module boundary; the property must be pub. The same rule covers
     // fn-level `provides` and extern `assume` references (phase 5).
     let check_property_ref = |name: &str, span: crate::span::Span| -> Result<(), CompileError> {
-        if let Some((module, item)) = name.split_once('.') {
-            if imports.contains(module)
+        if let Some((module, item)) = name.split_once('.')
+            && imports.contains(module)
                 && all_items.get(module).is_some_and(|a| a.contains(item))
                 && !pub_items.get(module).is_some_and(|p| p.contains(item))
             {
@@ -1382,7 +1382,6 @@ fn validate_module_visibility(graph: &ModuleGraph) -> Result<(), CompileError> {
                     span,
                 ));
             }
-        }
         Ok(())
     };
     for class in &graph.root.classes {
@@ -1561,10 +1560,10 @@ fn prefix_function_types(func: &mut Function, module_name: &str, module_prog: &P
 fn prefix_state_clause_expr(expr: &mut Expr, module_name: &str, module_prog: &Program) {
     match expr {
         Expr::BinOp { rhs, .. } => {
-            if let Expr::Ident(name) = &mut rhs.node {
-                if is_module_type(name, module_prog) {
-                    *name = prefix_name(module_name, name);
-                }
+            if let Expr::Ident(name) = &mut rhs.node
+                && is_module_type(name, module_prog)
+            {
+                *name = prefix_name(module_name, name);
             }
         }
         Expr::Ident(name) => {
@@ -1590,10 +1589,10 @@ fn prefix_provides_clauses(
             clause.node.name.node = prefix_name(module_name, &clause.node.name.node);
         }
         for arg in &mut clause.node.args {
-            if let Expr::Ident(name) = &mut arg.value.node {
-                if is_module_type(name, module_prog) {
-                    *name = prefix_name(module_name, name);
-                }
+            if let Expr::Ident(name) = &mut arg.value.node
+                && is_module_type(name, module_prog)
+            {
+                *name = prefix_name(module_name, name);
             }
         }
     }
@@ -1664,10 +1663,10 @@ impl VisitMut for ModuleRewriter<'_> {
             // import's) errors needs both sides renamed together.
             Expr::Catch { handlers, .. } => {
                 for handler in handlers.iter_mut() {
-                    if let CatchHandler::Typed { error_type, .. } = handler {
-                        if self.module_prog.errors.iter().any(|e| e.node.name.node == error_type.node) {
-                            error_type.node = prefix_name(self.module_name, &error_type.node);
-                        }
+                    if let CatchHandler::Typed { error_type, .. } = handler
+                        && self.module_prog.errors.iter().any(|e| e.node.name.node == error_type.node)
+                    {
+                        error_type.node = prefix_name(self.module_name, &error_type.node);
                     }
                 }
             }
@@ -1942,24 +1941,23 @@ impl VisitMut for QualifiedAccessRewriter<'_> {
             Expr::FieldAccess { object, field } => {
                 // Check for module-qualified enum access: status.State.Active
                 // Pattern: FieldAccess { object: FieldAccess { object: Ident(module), field: enum_name }, field: variant }
-                if let Expr::FieldAccess { object: inner_object, field: inner_field } = &object.node {
-                    if let Expr::Ident(module_name) = &inner_object.node {
-                        if let Some(canon) = self.aliases.get(module_name.as_str()) {
-                            // This is module.Enum.Variant - convert to EnumUnit
-                            let qualified_enum_name = prefix_name(canon, &inner_field.node);
-                            let enum_name_span = Span::new(inner_object.span.start, inner_field.span.end);
-                            let variant = field.clone();
+                if let Expr::FieldAccess { object: inner_object, field: inner_field } = &object.node
+                    && let Expr::Ident(module_name) = &inner_object.node
+                        && let Some(canon) = self.aliases.get(module_name.as_str())
+                {
+                    // This is module.Enum.Variant - convert to EnumUnit
+                    let qualified_enum_name = prefix_name(canon, &inner_field.node);
+                    let enum_name_span = Span::new(inner_object.span.start, inner_field.span.end);
+                    let variant = field.clone();
 
-                            expr.node = Expr::EnumUnit {
-                                enum_name: Spanned::new(qualified_enum_name, enum_name_span),
-                                variant,
-                                type_args: vec![],
-                                enum_id: None,
-                                variant_id: None,
-                            };
-                            return;
-                        }
-                    }
+                    expr.node = Expr::EnumUnit {
+                        enum_name: Spanned::new(qualified_enum_name, enum_name_span),
+                        variant,
+                        type_args: vec![],
+                        enum_id: None,
+                        variant_id: None,
+                    };
+                    return;
                 }
             }
             Expr::Call { name, .. } => {
@@ -2330,17 +2328,17 @@ fn resolve_qualified_access_in_expr(expr: &mut Expr, span: Span, module_names: &
 
             // Check if 2-segment pattern is Enum.Variant
             // Map unprefixed enum names to their full names (e.g., Status -> src.Status)
-            if segments.len() == 2 {
-                if let Some(full_enum_name) = enum_name_map.get(&segments[0].node) {
-                    *expr = Expr::EnumUnit {
-                        enum_name: Spanned::new(full_enum_name.clone(), segments[0].span),
-                        variant: segments[1].clone(),
-                        type_args: vec![],
-                        enum_id: None,
-                        variant_id: None,
-                    };
-                    return;
-                }
+            if segments.len() == 2
+                && let Some(full_enum_name) = enum_name_map.get(&segments[0].node)
+            {
+                *expr = Expr::EnumUnit {
+                    enum_name: Spanned::new(full_enum_name.clone(), segments[0].span),
+                    variant: segments[1].clone(),
+                    type_args: vec![],
+                    enum_id: None,
+                    variant_id: None,
+                };
+                return;
             }
 
             // Convert to nested FieldAccess chain (variable.field.field case)

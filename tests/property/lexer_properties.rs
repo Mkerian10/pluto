@@ -497,18 +497,18 @@ fn prop_unterminated_strings_fail() {
 #[test]
 fn prop_spans_cover_source() {
     proptest!(|(source in "\\PC{1,500}")| {
-        if let Ok(tokens) = lex(&source) {
-            if !tokens.is_empty() {
-                let first_start = tokens[0].span.start;
-                let last_end = tokens[tokens.len() - 1].span.end;
+        if let Ok(tokens) = lex(&source)
+            && !tokens.is_empty()
+        {
+            let first_start = tokens[0].span.start;
+            let last_end = tokens[tokens.len() - 1].span.end;
 
-                prop_assert!(first_start <= source.len());
-                prop_assert!(last_end <= source.len());
+            prop_assert!(first_start <= source.len());
+            prop_assert!(last_end <= source.len());
 
-                // If source starts with non-whitespace, first token should start at 0
-                if !source.starts_with(char::is_whitespace) && !source.starts_with("//") {
-                    prop_assert_eq!(first_start, 0, "First token should start at 0");
-                }
+            // If source starts with non-whitespace, first token should start at 0
+            if !source.starts_with(char::is_whitespace) && !source.starts_with("//") {
+                prop_assert_eq!(first_start, 0, "First token should start at 0");
             }
         }
     });

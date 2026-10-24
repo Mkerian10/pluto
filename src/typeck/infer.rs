@@ -616,17 +616,17 @@ pub(crate) fn infer_expr(
                 }
             }
             // Spawn-scope safety: reject spawn if it captures scope bindings
-            if !env.scope_bindings.is_empty() {
-                if let Expr::Closure { body, .. } = &call.node {
-                    let mut idents = std::collections::HashSet::new();
-                    super::check::collect_idents_in_block(&body.node, &mut idents);
-                    for name in &idents {
-                        if env.scope_bindings.contains(name) {
-                            return Err(CompileError::type_err(
-                                    format!("cannot spawn inside scope block: task would capture scope binding '{name}'"),
-                                    span,
-                                ));
-                        }
+            if !env.scope_bindings.is_empty()
+                && let Expr::Closure { body, .. } = &call.node
+            {
+                let mut idents = std::collections::HashSet::new();
+                super::check::collect_idents_in_block(&body.node, &mut idents);
+                for name in &idents {
+                    if env.scope_bindings.contains(name) {
+                        return Err(CompileError::type_err(
+                                format!("cannot spawn inside scope block: task would capture scope binding '{name}'"),
+                                span,
+                            ));
                     }
                 }
             }
@@ -682,15 +682,14 @@ pub(crate) fn infer_expr(
             // print(f?.x) }`) stays legal: the unwrap runs on the plain
             // nullable slot (no narrow-site recorded for the inner read), and
             // its none-branch is provably dead.
-            if let Expr::Ident(n) = &expr.node {
-                if let Some(narrowed) = env.narrowed_vars.lookup(n).cloned() {
-                    if !matches!(narrowed, PlutoType::Nullable(_)) {
-                        if let Some((_, depth)) = env.lookup_with_depth(n) {
-                            env.variable_reads.insert((n.clone(), depth));
-                        }
-                        return Ok(narrowed);
-                    }
+            if let Expr::Ident(n) = &expr.node
+                && let Some(narrowed) = env.narrowed_vars.lookup(n).cloned()
+                    && !matches!(narrowed, PlutoType::Nullable(_))
+            {
+                if let Some((_, depth)) = env.lookup_with_depth(n) {
+                    env.variable_reads.insert((n.clone(), depth));
                 }
+                return Ok(narrowed);
             }
             let inner_type = infer_expr(&expr.node, expr.span, env, None)?;
             match &inner_type {
@@ -1184,15 +1183,14 @@ fn infer_binop(
             // Shift amounts outside 0..63 are a defect (issue #441). A
             // constant amount is decided here; a non-constant one gets a
             // runtime check in codegen (elided when facts prove the range).
-            if matches!(op, BinOp::Shl | BinOp::Shr) {
-                if let Some(amount) = super::arith_fit::const_shift_amount(&rhs.node) {
-                    if !(0..=63).contains(&amount) {
-                        return Err(CompileError::type_err(
-                            format!("shift amount {amount} is out of range 0..63"),
-                            rhs.span,
-                        ));
-                    }
-                }
+            if matches!(op, BinOp::Shl | BinOp::Shr)
+                && let Some(amount) = super::arith_fit::const_shift_amount(&rhs.node)
+                    && !(0..=63).contains(&amount)
+            {
+                return Err(CompileError::type_err(
+                    format!("shift amount {amount} is out of range 0..63"),
+                    rhs.span,
+                ));
             }
             Ok(PlutoType::Int)
         }
@@ -3087,13 +3085,13 @@ fn infer_block_type(
             // block bodies) and the type must match the enclosing function
             if let Some(e) = opt {
                 let t = infer_expr(&e.node, e.span, env, env.current_function_return.clone().as_ref())?;
-                if let Some(expected) = env.current_function_return.clone() {
-                    if !super::types_compatible(&t, &expected, env) {
-                        return Err(CompileError::type_err(
-                            format!("return type mismatch: expected {expected}, found {t}"),
-                            e.span,
-                        ));
-                    }
+                if let Some(expected) = env.current_function_return.clone()
+                    && !super::types_compatible(&t, &expected, env)
+                {
+                    return Err(CompileError::type_err(
+                        format!("return type mismatch: expected {expected}, found {t}"),
+                        e.span,
+                    ));
                 }
             }
             Ok(PlutoType::Void)
@@ -3142,27 +3140,27 @@ fn unify_branch_types(
     }
 
     // Handle none literal coercion: Nullable(Void) → any Nullable(T)
-    if matches!(t1, PlutoType::Nullable(inner) if **inner == PlutoType::Void) {
-        if matches!(t2, PlutoType::Nullable(_)) {
-            return Ok(t2.clone());
-        }
+    if matches!(t1, PlutoType::Nullable(inner) if **inner == PlutoType::Void)
+        && matches!(t2, PlutoType::Nullable(_))
+    {
+        return Ok(t2.clone());
     }
-    if matches!(t2, PlutoType::Nullable(inner) if **inner == PlutoType::Void) {
-        if matches!(t1, PlutoType::Nullable(_)) {
-            return Ok(t1.clone());
-        }
+    if matches!(t2, PlutoType::Nullable(inner) if **inner == PlutoType::Void)
+        && matches!(t1, PlutoType::Nullable(_))
+    {
+        return Ok(t1.clone());
     }
 
     // If one is T and other is T?, allow it (widen to T?)
-    if let PlutoType::Nullable(inner2) = t2 {
-        if t1 == inner2.as_ref() {
-            return Ok(t2.clone());  // Widen to T?
-        }
+    if let PlutoType::Nullable(inner2) = t2
+        && t1 == inner2.as_ref()
+    {
+        return Ok(t2.clone());  // Widen to T?
     }
-    if let PlutoType::Nullable(inner1) = t1 {
-        if t2 == inner1.as_ref() {
-            return Ok(t1.clone());  // Widen to T?
-        }
+    if let PlutoType::Nullable(inner1) = t1
+        && t2 == inner1.as_ref()
+    {
+        return Ok(t1.clone());  // Widen to T?
     }
 
     // Otherwise, types are incompatible
@@ -3190,10 +3188,10 @@ fn field_types_compatible(actual: &PlutoType, expected: &PlutoType, env: &TypeEn
         return env.class_implements_trait(cn, tn);
     }
     // T → T? (auto-wrap): recurse into the nullable inner type
-    if let PlutoType::Nullable(inner) = expected {
-        if field_types_compatible(actual, inner, env) {
-            return true;
-        }
+    if let PlutoType::Nullable(inner) = expected
+        && field_types_compatible(actual, inner, env)
+    {
+        return true;
     }
     // none → T? (Nullable(Void) is the none literal)
     if actual == &PlutoType::Nullable(Box::new(PlutoType::Void))

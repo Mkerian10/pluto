@@ -144,14 +144,14 @@ impl InProcessServer {
             }
         }
 
-        if filter.is_none() || filter == Some(DeclKind::App) {
-            if let Some(app) = &program.app {
-                results.push(DeclSummary {
-                    uuid: app.node.id,
-                    name: app.node.name.node.clone(),
-                    kind: DeclKind::App,
-                });
-            }
+        if (filter.is_none() || filter == Some(DeclKind::App))
+            && let Some(app) = &program.app
+        {
+            results.push(DeclSummary {
+                uuid: app.node.id,
+                name: app.node.name.node.clone(),
+                kind: DeclKind::App,
+            });
         }
 
         results
@@ -577,14 +577,12 @@ impl Visitor for XrefCollector {
                     if let crate::parser::ast::MatchPattern::Variant {
                         enum_name, variant_name, enum_id, variant_id, ..
                     } = &arm.pattern
-                    {
-                        if *enum_id == Some(self.target_id)
-                            || *variant_id == Some(self.target_id)
+                        && (*enum_id == Some(self.target_id)
+                            || *variant_id == Some(self.target_id))
                         {
                             self.sites
                                 .push((enum_name.span.start, variant_name.span.end));
                         }
-                    }
                 }
             }
             _ => {}
@@ -928,10 +926,10 @@ impl CompilerService for InProcessServer {
         }
 
         // Search app
-        if let Some(app) = &program.app {
-            if app.node.id == id {
-                return Ok(DeclDetail::App(Self::build_app_detail(&app.node, false)));
-            }
+        if let Some(app) = &program.app
+            && app.node.id == id
+        {
+            return Ok(DeclDetail::App(Self::build_app_detail(&app.node, false)));
         }
 
         Err(ServiceError::DeclarationNotFound(id))
@@ -1008,17 +1006,16 @@ impl CompilerService for InProcessServer {
                 }
             }
 
-            if filter.is_none() || filter == Some(DeclKind::App) {
-                if let Some(app) = &program.app {
-                    if app.node.name.node == name {
-                        results.push(DeclMatch {
-                            uuid: app.node.id,
-                            name: app.node.name.node.clone(),
-                            kind: DeclKind::App,
-                            module_path: path.clone(),
-                        });
-                    }
-                }
+            if (filter.is_none() || filter == Some(DeclKind::App))
+                && let Some(app) = &program.app
+                    && app.node.name.node == name
+            {
+                results.push(DeclMatch {
+                    uuid: app.node.id,
+                    name: app.node.name.node.clone(),
+                    kind: DeclKind::App,
+                    module_path: path.clone(),
+                });
             }
         }
 
@@ -1196,10 +1193,10 @@ impl CompilerService for InProcessServer {
                 if let Some(e) = program.errors.iter().find(|e| e.node.id == uuid) {
                     return Ok(crate::pretty::pretty_print_error(&e.node, include_uuids));
                 }
-                if let Some(app) = &program.app {
-                    if app.node.id == uuid {
-                        return Ok(crate::pretty::pretty_print_app(&app.node, include_uuids));
-                    }
+                if let Some(app) = &program.app
+                    && app.node.id == uuid
+                {
+                    return Ok(crate::pretty::pretty_print_app(&app.node, include_uuids));
                 }
 
                 Err(ServiceError::DeclarationNotFound(uuid))
