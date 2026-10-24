@@ -241,12 +241,23 @@ for i in 0..=10 {
 
 ### Match (pattern matching)
 ```
+// statement: each arm runs a block
 match value {
-    Enum.Variant1 => expr
-    Enum.Variant2 { field } => expr
+    Enum.Variant1 {
+        print("one")
+    }
+    Enum.Variant2 { field } {
+        print(field)
+    }
+}
+
+// expression: comma-separated `=> value` arms
+let n = match value {
+    Enum.Variant1 => 0,
+    Enum.Variant2 { field } => field
 }
 ```
-Match requires exhaustive coverage of all variants.
+Match requires exhaustive coverage of all variants (or a `_` arm).
 
 ### Return
 ```
@@ -365,9 +376,12 @@ trait Printable {
     fn to_string(self) string
 }
 
-impl Printable for Point {
+class Point impl Printable {
+    x: int
+    y: int
+
     fn to_string(self) string {
-        return "({self.x}, {self.y})"
+        return f"({self.x}, {self.y})"
     }
 }
 ```
@@ -607,11 +621,20 @@ class Pair<A, B> {
 let p = Pair<string, int> { first: "hello", second: 42 }
 ```
 
+### Bounds, explicit type arguments, generic traits
+```
+fn largest<T: Shape>(a: T, b: T) int { ... }   // bounds: T: Trait1 + Trait2
+let empty = fresh<int>()                       // explicit type args when T can't be inferred
+
+trait Convert<T> {
+    fn convert(self) T
+}
+class Box<V> impl Convert<V> { ... }
+```
+Generic classes take bracket deps like any class (`class Repo<T>[db: Db]`).
+
 ### Restrictions
-- No type bounds (yet)
-- No explicit type args on function calls (always inferred)
-- No generic trait impls
-- No DI on generic classes"#
+- A bare generic function is not a value: `let f = identity` is rejected; wrap it in a closure with concrete types, `let f = (x: int) => identity(x)`"#
         .to_string()
 }
 
@@ -679,7 +702,7 @@ fn divide(a: float, b: float) float
 }
 ```
 - `requires` clauses go between the signature and body `{`
-- Postconditions are handled by class invariants, not `ensures`
+- `ensures` clauses state a method's postcondition, relating its exit state to its entry state with `old(expr)`; like invariants they are proven at compile time and never checked at runtime
 
 ### Trait contracts
 ```
@@ -726,11 +749,26 @@ let result = task.get()!          // propagate error
 let result = task.get() catch 0   // or handle it
 ```
 
+### Task control
+- `task.detach()` lets a task run on without anyone calling `get()`
+- `task.cancel()` requests cancellation
+
+### Sharing
+- Arguments are copied into the task, so a value passed to `spawn` is not shared with the caller
+- `object` instances are the exception: they are shared by identity, and each instance's methods run one at a time
+
+### Channels
+```
+let (tx, rx) = chan<int>(4)    // buffered channel, capacity 4
+tx.send(1)!                    // send is fallible (ChannelClosed)
+tx.close()
+for v in rx {                  // receives until the channel is closed
+    print(v)
+}
+```
+
 ### Restrictions
-- `spawn` only works with direct function calls (not method calls or closures)
-- No `.cancel()` or `.detach()` yet
-- No structured concurrency yet
-- Shared mutable heap is the programmer's responsibility"#
+- `spawn` takes a function or method call (`spawn f(x)`, `spawn obj.m()`), not an arbitrary expression"#
         .to_string()
 }
 
