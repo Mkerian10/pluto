@@ -61,11 +61,6 @@ pub fn assert_span(source: &str, token_idx: usize, start: usize, end: usize) {
     );
 }
 
-/// Get token count (useful for quick checks)
-pub fn token_count(source: &str) -> usize {
-    lex_ok(source).len()
-}
-
 mod whitespace;
 mod numbers;
 mod strings;
