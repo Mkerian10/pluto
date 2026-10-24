@@ -103,11 +103,13 @@ fn types_doc() -> String {
 - `float` — 64-bit IEEE 754 floating point
 - `bool` — boolean (`true` / `false`)
 - `string` — heap-allocated UTF-8 string
+- `byte` — unsigned 8-bit integer (0–255)
+- `bytes` — mutable byte buffer
 - `void` — no value (used as return type)
 
 ### Composite types
 - `[T]` — array of `T` (e.g., `[int]`, `[string]`)
-- `Map<K, V>` — hash map. Keys must be hashable: int, float, bool, string, enum
+- `Map<K, V>` — hash map. Keys must be hashable: int, float, bool, string, byte, enum
 - `Set<T>` — hash set. Elements must be hashable
 - `T?` — nullable type. Can hold a value of type `T` or `none`
 - `Task<T>` — handle to a spawned concurrent task returning `T`
@@ -116,7 +118,7 @@ fn types_doc() -> String {
 ### User-defined types
 - `class` — nominal class with fields, methods, and optional DI bracket deps
 - `enum` — tagged union with unit and data-carrying variants
-- `trait` — structural interface (duck typing)
+- `trait` — interface a class implements explicitly (`class C impl Trait`); trait-typed values dispatch through a vtable
 - `error` — typed error declaration
 
 ### Literals
@@ -158,16 +160,16 @@ never trap.
 `&`, `|`, `^`, `~` (bitwise NOT), `<<`, `>>`
 
 ### Assignment
-`=`, `+=`, `-=`, `*=`, `/=`
+`=`, `+=`, `-=`, `*=`, `/=`, `%=`
 
-### Type cast
-`expr as type` — postfix cast. Allowed: int↔float, int↔bool
+### Conversions
+There is no `as` cast. Conversions are named methods: `n.to_float()`, `f.to_int()` (returns `int?`), `n.to_byte()`, `b.to_int()`; see the gotchas topic.
 
 ### Error propagation (postfix)
-`expr!` — propagate error to caller (like Rust's `?`). Only in fallible functions.
+`expr!` — propagate the error to the caller (like Rust's `?`); using it makes the enclosing function fallible. An error that escapes `main` aborts the program.
 
 ### Null propagation (postfix)
-`expr?` — unwrap nullable, early-return `none` if null. Only in functions returning `T?`.
+`expr?` — unwrap a nullable, returning `none` early if it is null. Allowed in functions returning `T?` or nothing.
 
 ### Indexing
 - `arr[i]` — array/string index (0-based)
@@ -178,7 +180,7 @@ never trap.
 `expr.method(args)` — call method on object
 
 ### Precedence (high to low)
-1. Postfix: `.method()`, `[index]`, `!`, `?`, `as`
+1. Postfix: `.method()`, `[index]`, `!`, `?`
 2. Prefix: `!`, `-`, `~`
 3. Multiplicative: `*`, `/`, `%`
 4. Additive: `+`, `-`
@@ -191,7 +193,7 @@ never trap.
 11. Logical AND: `&&`
 12. Logical OR: `||`
 
-**Important:** `!expr.method()` parses as `(!expr).method()`, not `!(expr.method())`. Use parentheses: `!(expr.method())`."#
+Postfix binds tighter than prefix, so `!s.is_empty()` is `!(s.is_empty())` and `-x.abs()` is `-(x.abs())`."#
         .to_string()
 }
 
@@ -407,7 +409,7 @@ app MyApp {
     }
 }
 ```
-- Exactly one `app` per program
+- At most one `app` per program; a program without DI can use a plain top-level `fn main()` instead
 - The compiler resolves all DI dependencies and wires them at compile time
 
 ### Tests
@@ -559,9 +561,8 @@ let result = apply((x: int) => x * 2, 5)
 ```
 
 ### Capture semantics
-- Closures capture variables by value (snapshot at creation time)
-- Heap-allocated types (strings, arrays, classes) share the underlying data
-- Captured values cannot be mutated from inside the closure
+- Closures capture variables by value (snapshot at creation time): reassigning a captured variable inside the closure changes only the closure's copy
+- Heap values (arrays, maps, sets, class instances) are captured as references, so mutating their contents (`xs.push(...)`) is visible on both sides
 
 ### Passing closures
 ```
@@ -587,7 +588,7 @@ fn first<T>(arr: [T]) T {
     return arr[0]
 }
 ```
-- Type parameters inferred from arguments (no explicit type args at call site)
+- Type parameters are inferred from arguments; pass them explicitly (`fresh<int>()`) when they can't be
 - Monomorphized at compile time (concrete copies generated)
 
 ### Generic classes
@@ -655,8 +656,8 @@ let point = math.Point { x: 1.0, y: 2.0 }
 ```
 
 ### Module sources
-- **Directory module:** `<name>/` directory containing `.pluto` files (auto-merged)
-- **File module:** `<name>.pluto` sibling file
+- **Directory module:** `<name>/` directory containing `.pt` (or `.pluto`) files, merged into one module
+- **File module:** a `<name>.pt` (or `<name>.pluto`) file next to the importer; `.pluto` is preferred when both exist
 - **Stdlib:** `std.<name>` (e.g., `std.fs`, `std.math`)
 
 ### Visibility
@@ -678,41 +679,62 @@ Note: Use `--stdlib <path>` flag to specify stdlib location when compiling."#
 fn contracts_doc() -> String {
     r#"## Contracts
 
-### Class invariants
+Four primitives. Invariants and `ensures` are compile-time proofs only;
+`requires` is proven where it can be and checked where it can't; `assert` is
+always a runtime check.
+
+### Class invariants (compile-time proof)
 ```
 class Account {
-    balance: float
+    balance: int
 
-    invariant self.balance >= 0.0
+    invariant self.balance >= 0
 
-    fn withdraw(mut self, amount: float) {
+    fn withdraw(mut self, amount: int)
+        requires amount >= 0
+        requires amount <= self.balance
+    {
         self.balance = self.balance - amount
     }
 }
 ```
-- Checked after construction and after every method call
-- Violation aborts the program (not a catchable error)
+- Every construction and every write must be statically proven to preserve
+  the invariant, or compilation fails. Without the two `requires` above,
+  `withdraw` is a compile error ("cannot prove invariant ... holds").
+- There is no runtime invariant check (except when decoding wire values).
+- Provable fragment: linear int arithmetic over the class's own int fields;
+  `invariant self.b >= 0.0` on a float field is rejected.
 
-### Function preconditions
+### Preconditions (`requires`)
 ```
-fn divide(a: float, b: float) float
-    requires b != 0.0
+fn divide(a: int, b: int) int
+    requires b != 0
 {
     return a / b
 }
 ```
-- `requires` clauses go between the signature and body `{`
-- `ensures` clauses state a method's postcondition, relating its exit state to its entry state with `old(expr)`; like invariants they are proven at compile time and never checked at runtime
+- Clauses go between the signature and the body `{`
+- Proven at call sites where the argument is known; otherwise checked on entry,
+  aborting with `requires violation in divide: b != 0`
+
+### Postconditions (`ensures`, compile-time proof)
+`ensures` relates a method's exit state to its entry state with `old(expr)`,
+e.g. `ensures self.balance == old(self.balance) - amount`. It is proven at every
+normal exit and never checked at runtime.
+
+### `assert`
+`assert x > 0` is always checked at runtime (aborting with
+`assertion failed: x > 0`) and gives the prover the fact afterwards.
 
 ### Trait contracts
 ```
 trait Positive {
-    fn value(self) int
-        requires self.is_valid()
+    fn value(self, x: int) int
+        requires x >= 0
 }
 ```
 - Implementing classes inherit the trait's contracts
-- Classes cannot add `requires` to trait methods (Liskov principle)
+- An implementation cannot add `requires` of its own (Liskov principle)
 
 ### Decidable fragment
 Contracts are restricted to a decidable expression subset:
