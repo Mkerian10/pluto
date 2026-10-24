@@ -343,6 +343,30 @@ fn main() {
     assert_eq!(out, "true\nfalse\n42\n\"hello\"\n");
 }
 
+#[test]
+fn json_construct_float() {
+    let out = run_project_with_stdlib(&[(
+        "main.pluto",
+        r#"import std.json
+
+fn main() {
+    let f = json.float(2.5)
+    print(f.is_float())
+    print(f.is_int())
+    print(f.get_float() == 2.5)
+    print(f.to_string())
+    print(json.float(-0.125).to_string())
+    let mut obj = json.object()
+    obj.set("x", json.float(1.5))
+    print(obj.to_string())
+    let back = json.parse(json.float(0.1).to_string())!
+    print(back.get_float() == 0.1)
+}
+"#,
+    )]);
+    assert_eq!(out, "true\nfalse\ntrue\n2.5\n-0.125\n{\"x\":1.5}\ntrue\n");
+}
+
 // ============================================================
 // Construct object programmatically
 // ============================================================
