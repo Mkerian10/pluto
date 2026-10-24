@@ -2845,11 +2845,10 @@ static __thread long __pluto_fs_saved_errno = 0;
     do {                                                                      \
         if (__pluto_green_self())                                             \
             return __pluto_green_fs_offload(                                  \
-                (long (*)(long, long, long))(rawfn),                          \
-                (long)(a0), (long)(a1), (long)(a2));                          \
+                (rawfn), (long)(a0), (long)(a1), (long)(a2));                 \
     } while (0)
 #else
-#define FS_GREEN_OFFLOAD(rawfn, a0, a1, a2) do { } while (0)
+#define FS_GREEN_OFFLOAD(rawfn, a0, a1, a2) do { (void)(rawfn); } while (0)
 #endif
 
 long __pluto_fs_last_errno(void) {
@@ -2896,8 +2895,17 @@ long __pluto_fs_open_append(void *path_str) {
     return fs_raw_open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
 }
 
+// Three-long adapter so close can go through the worker pool without calling
+// a one-argument function through a three-argument pointer.
+long __pluto_fs_close(long fd);
+static long fs_close_offload(long fd, long unused1, long unused2) {
+    (void)unused1;
+    (void)unused2;
+    return __pluto_fs_close(fd);   // worker re-enters off-fiber -> inline
+}
+
 long __pluto_fs_close(long fd) {
-    FS_GREEN_OFFLOAD(__pluto_fs_close, fd, 0, 0);   // worker re-enters off-fiber -> inline
+    FS_GREEN_OFFLOAD(fs_close_offload, fd, 0, 0);
     __pluto_gc_enter_safe_region();
     int rc = close((int)fd);
     long err = (long)errno;
@@ -3014,13 +3022,20 @@ void *__pluto_fs_read(long fd, long max_bytes) {
     return result;
 }
 
+// Three-long adapter for offloading write (see fs_close_offload).
+long __pluto_fs_write(long fd, void *data_str);
+static long fs_write_offload(long fd, long data_str, long unused) {
+    (void)unused;
+    return __pluto_fs_write(fd, (void *)data_str);
+}
+
 // Loops to completion (issue #367 short-write fix). Returns the byte count
 // written (== len) on success, -errno on the first failing write.
 long __pluto_fs_write(long fd, void *data_str) {
     // string_data does not allocate (it reads the string's inline bytes), so the
     // whole op is offloadable via its own pointer: the worker re-enters off-fiber
     // and takes the inline path. data_str stays alive via the parked fiber's arg.
-    FS_GREEN_OFFLOAD(__pluto_fs_write, fd, data_str, 0);
+    FS_GREEN_OFFLOAD(fs_write_offload, fd, data_str, 0);
     const char *data;
     long len;
     __pluto_string_data(data_str, &data, &len);
