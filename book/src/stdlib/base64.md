@@ -34,6 +34,20 @@ let decoded = base64.decode("aGVsbG8gd29ybGQ=")
 // "hello world"
 ```
 
+### encode_bytes / decode_bytes
+
+```
+base64.encode_bytes(b: bytes) string
+base64.decode_bytes(s: string) bytes
+```
+
+Standard base64 over a `bytes` buffer, exact for every byte value (the string forms are for text).
+
+```
+let enc = base64.encode_bytes("hi".to_bytes())    // "aGk="
+let raw = base64.decode_bytes(enc)                // 2 bytes
+```
+
 ### encode_url_safe
 
 ```

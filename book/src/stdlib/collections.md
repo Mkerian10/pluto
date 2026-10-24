@@ -200,6 +200,56 @@ collections.for_each(["alice", "bob"], (name: string) => {
 })
 ```
 
+## Sorting
+
+All sorts return a new array and leave the input untouched. They are stable (equal elements keep their order) and run in O(n log n).
+
+### sort_by
+
+```
+collections.sort_by<T>(arr: [T], less: fn(T, T) bool) [T]
+```
+
+Sorts with `less(a, b)`, which returns true when `a` should come strictly before `b`.
+
+```
+let desc = collections.sort_by([1, 3, 2], (a: int, b: int) => a > b)    // [3, 2, 1]
+```
+
+### sort / sort_floats / sort_strings
+
+```
+collections.sort(arr: [int]) [int]
+collections.sort_floats(arr: [float]) [float]
+collections.sort_strings(arr: [string]) [string]
+```
+
+Ascending order. Strings sort byte-wise, as `strings.compare` does.
+
+```
+collections.sort([3, 1, 2])                          // [1, 2, 3]
+collections.sort_strings(["pear", "apple", "fig"])   // ["apple", "fig", "pear"]
+```
+
+## Fallible Callbacks
+
+```
+collections.try_map<T, U>(arr: [T], f: fn(T) U!) [U]
+collections.try_filter<T>(arr: [T], f: fn(T) bool!) [T]
+collections.try_fold<T, U>(arr: [T], initial: U, f: fn(U, T) U!) U
+collections.try_for_each<T>(arr: [T], f: fn(T)!)
+```
+
+Variants of `map`, `filter`, `fold` and `for_each` whose callback may raise. The first error stops the walk and propagates to the caller, so a call must be handled with `!` or `catch`. Infallible callbacks are accepted too.
+
+```
+let halves = collections.try_map([4, 8], halve)!    // [2, 4]
+let safe = collections.try_map(inputs, halve) catch err {
+    let none_left: [int] = []
+    none_left
+}
+```
+
 ## Example: Pipeline
 
 ```
