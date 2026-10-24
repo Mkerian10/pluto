@@ -883,7 +883,7 @@ Import: `import std.strings`
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `substring` | `(s: string, start: int, end: int) string` | Extract substring by byte indices |
+| `substring` | `(s: string, start: int, length: int) string` | `length` bytes starting at byte offset `start` (`substring("hello, world", 7, 5)` is `"world"`) |
 | `contains` | `(haystack: string, needle: string) bool` | Check if string contains substring |
 | `starts_with` | `(s: string, prefix: string) bool` | Check prefix |
 | `ends_with` | `(s: string, suffix: string) bool` | Check suffix |
@@ -1253,15 +1253,15 @@ Used by `zip` and `enumerate`.
 | `map` | `<T, U>(arr: [T], f: fn(T) U) [U]` | Transform each element |
 | `filter` | `<T>(arr: [T], f: fn(T) bool) [T]` | Keep elements matching predicate |
 | `fold` | `<T, U>(arr: [T], init: U, f: fn(U, T) U) U` | Left fold with accumulator |
-| `reduce` | `<T>(arr: [T], f: fn(T, T) T) T` | Reduce without initial value |
+| `reduce` | `<T>(arr: [T], f: fn(T, T) T) T` | Reduce without initial value; an empty array aborts with an index-out-of-bounds error (use `fold` when it may be empty) |
 | `any` | `<T>(arr: [T], f: fn(T) bool) bool` | True if any element matches |
 | `all` | `<T>(arr: [T], f: fn(T) bool) bool` | True if all elements match |
-| `for_each` | `<T>(arr: [T], f: fn(T) void)` | Execute side effect for each |
+| `for_each` | `<T>(arr: [T], f: fn(T))` | Execute side effect for each |
 | `flat_map` | `<T, U>(arr: [T], f: fn(T) [U]) [U]` | Map then flatten |
 | `count` | `<T>(arr: [T], f: fn(T) bool) int` | Count matching elements |
 | `reverse` | `<T>(arr: [T]) [T]` | Reverse array |
-| `take` | `<T>(arr: [T], n: int) [T]` | Take first N elements |
-| `drop` | `<T>(arr: [T], n: int) [T]` | Drop first N elements |
+| `take` | `<T>(arr: [T], n: int) [T]` | Take first N elements (clamped to the array length; N <= 0 gives `[]`) |
+| `drop` | `<T>(arr: [T], n: int) [T]` | Drop first N elements (clamped; N <= 0 keeps everything) |
 | `zip` | `<A, B>(a: [A], b: [B]) [Pair<A, B>]` | Zip two arrays into pairs |
 | `enumerate` | `<T>(arr: [T]) [Pair<int, T>]` | Pair each element with its index |
 | `flatten` | `<T>(arr: [[T]]) [T]` | Flatten nested array |
