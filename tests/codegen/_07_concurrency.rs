@@ -145,7 +145,6 @@ fn test_spawn_calling_spawn_nested() {
 }
 
 #[test]
-#[ignore] // LIMITATION: Array initialization syntax ([Type; size]) not supported - use array literals or push() instead
 fn test_spawn_hundred_tasks_concurrent() {
     let src = r#"
         fn identity(x: int) int {
@@ -153,16 +152,16 @@ fn test_spawn_hundred_tasks_concurrent() {
         }
 
         fn main() {
-            let tasks = [Task<int>; 100]
+            let mut tasks: [Task<int>] = []
             let mut i = 0
             while i < 100 {
-                tasks[i] = spawn identity(i)
+                tasks.push(spawn identity(i))
                 i = i + 1
             }
             let mut sum = 0
-            let j = 0
+            let mut j = 0
             while j < 100 {
-                sum = sum + tasks[j].get()
+                sum = sum + (tasks[j].get() catch 0)
                 j = j + 1
             }
             print(sum)

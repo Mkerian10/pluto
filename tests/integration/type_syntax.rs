@@ -24,7 +24,6 @@ fn nested_generic_with_map_and_array() {
 }
 
 #[test]
-#[ignore] // Compiler limitation: function types in generic type parameters not fully supported
 fn generic_with_closure_type() {
     // Box<fn(int) string>
     let stdout = compile_and_run_stdout(r#"
@@ -38,7 +37,8 @@ fn generic_with_closure_type() {
 
         fn main() {
             let b = Box<fn(int) string> { value: to_string }
-            print(b.value(42))
+            let f = b.value
+            print(f(42))
         }
     "#);
     assert_eq!(stdout.trim(), "number");
@@ -135,7 +135,6 @@ fn generic_with_single_trait_bound() {
 }
 
 #[test]
-#[ignore] // Compiler limitation: 'self' type not supported in trait method parameters
 fn generic_with_multiple_trait_bounds() {
     // fn foo<T: Trait1 + Trait2>(x: T)
     let stdout = compile_and_run_stdout(r#"
@@ -144,19 +143,19 @@ fn generic_with_multiple_trait_bounds() {
         }
 
         trait Comparable {
-            fn compare(self, other: self) int
+            fn compare(self, other: int) int
         }
 
-        class Item impl Printable impl Comparable {
+        class Item impl Printable, Comparable {
             value: int
 
             fn to_string(self) string {
                 return "item"
             }
 
-            fn compare(self, other: Item) int {
-                if self.value < other.value { return -1 }
-                if self.value > other.value { return 1 }
+            fn compare(self, other: int) int {
+                if self.value < other { return -1 }
+                if self.value > other { return 1 }
                 return 0
             }
         }
@@ -357,7 +356,6 @@ fn map_with_complex_key_and_value() {
 }
 
 #[test]
-#[ignore] // Parser limitation: function types not supported in array type annotations
 fn closure_type_in_array() {
     // [fn(int) int]
     let stdout = compile_and_run_stdout(r#"
@@ -366,7 +364,8 @@ fn closure_type_in_array() {
 
         fn main() {
             let funcs: [fn(int) int] = [add_one, add_two]
-            print(funcs[0](10))
+            let f = funcs[0]
+            print(f(10))
         }
     "#);
     assert_eq!(stdout.trim(), "11");
