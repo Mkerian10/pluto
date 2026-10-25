@@ -10,8 +10,16 @@ let x=1}"#, "undefined variable 'x'"); }
 
 // Class field init order - correctly detected
 #[test]
-#[ignore] // source is a one-liner the newline healer cannot fix (struct literal split); rewrite when revisiting
-fn field_init_order() { compile_should_fail_with(r#"class C{x:int y:int} fn main(){let c=C{y:c.x,x:1}}"#, "undefined variable 'c'"); }
+fn field_init_order() {
+    compile_should_fail_with(r#"class C {
+    x: int
+    y: int
+}
+
+fn main() {
+    let c = C { y: c.x, x: 1 }
+}"#, "undefined variable 'c'");
+}
 
 // Static init order - Pluto doesn't have static keyword
 #[test]

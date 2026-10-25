@@ -21,8 +21,20 @@ fn use_loop_var_after() { compile_should_fail_with(r#"fn main(){for i in 0..10{}
 
 // Access match binding outside
 #[test]
-#[ignore] // Syntax error in test code
-fn match_binding_outside() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:1}{E.A{x}{}}let y=x}"#, "undefined"); }
+fn match_binding_outside() {
+    compile_should_fail_with(r#"enum E {
+    A { x: int }
+}
+
+fn main() {
+    let e = E.A { x: 1 }
+    match e {
+        E.A { x } {
+        }
+    }
+    let y = x
+}"#, "undefined variable 'x'");
+}
 
 // Nested scope lifetime
 #[test]

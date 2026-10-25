@@ -17,8 +17,20 @@ fn access_from_for_scope() { compile_should_fail_with(r#"fn main(){for i in 0..1
 
 // Access match binding outside match
 #[test]
-#[ignore] // struct-literal scrutinee (match E.A{x:1} {...}) not supported: match restricts struct literals in scrutinee position
-fn access_match_binding_outside() { compile_should_fail_with(r#"enum E{A{x:int}} fn main(){match E.A{x:1}{E.A{x}{}}let y=x}"#, "undefined"); }
+fn access_match_binding_outside() {
+    compile_should_fail_with(r#"enum E {
+    A { x: int }
+}
+
+fn main() {
+    let e = E.A { x: 1 }
+    match e {
+        E.A { x } {
+        }
+    }
+    let y = x
+}"#, "undefined variable 'x'");
+}
 
 // Access closure parameter outside closure
 #[test]
@@ -35,8 +47,20 @@ fn access_other_function_local() { compile_should_fail_with(r#"fn f(){let x=1} f
 
 // Access method local from another method
 #[test]
-#[ignore] // Syntax error: methods must be inside class body
-fn access_other_method_local() { compile_should_fail_with(r#"class C{} fn foo(self){let x=1} fn bar(self){let y=x} fn main(){}"#, "undefined"); }
+fn access_other_method_local() {
+    compile_should_fail_with(r#"class C {
+    fn foo(self) {
+        let x = 1
+    }
+
+    fn bar(self) {
+        let y = x
+    }
+}
+
+fn main() {
+}"#, "undefined variable 'x'");
+}
 
 // Access for loop variable after loop
 #[test]
@@ -58,8 +82,23 @@ fn self_reference() { compile_should_fail_with(r#"fn main(){let x=x+1}"#, "undef
 
 // Access match arm binding in different arm
 #[test]
-#[ignore] // struct-literal scrutinee (match E.A{x:1} {...}) not supported: match restricts struct literals in scrutinee position
-fn access_other_arm_binding() { compile_should_fail_with(r#"enum E{A{x:int}B{y:int}} fn main(){match E.A{x:1}{E.A{x}{}E.B{y}{let z=x}}}"#, "undefined"); }
+fn access_other_arm_binding() {
+    compile_should_fail_with(r#"enum E {
+    A { x: int }
+    B { y: int }
+}
+
+fn main() {
+    let e = E.A { x: 1 }
+    match e {
+        E.A { x } {
+        }
+        E.B { y } {
+            let z = x
+        }
+    }
+}"#, "undefined variable 'x'");
+}
 
 // Access spawn closure scope
 #[test]

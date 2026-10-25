@@ -73,8 +73,15 @@ fn closure_in_generic() { compile_should_fail_with(r#"class Box<T>{value:T} fn m
 
 // Closure captures from multiple scopes
 #[test]
-#[ignore] // one-liner source with nested-scope statements the healer cannot split; rewrite when revisiting
-fn multi_scope_capture() { compile_and_run(r#"fn main(){let x=1 if true{let y=2 let f=()=>x+y}}"#); }
+fn multi_scope_capture() {
+    compile_and_run(r#"fn main() {
+    let x = 1
+    if true {
+        let y = 2
+        let f = () => x + y
+    }
+}"#);
+}
 
 // Closure with contracts (requires/ensures not on closures)
 #[test]
