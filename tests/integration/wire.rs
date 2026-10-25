@@ -287,20 +287,19 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Wire format tests - mark as ignored
 fn wire_record_roundtrip() {
     let out = run_wire_test(r#"
 import std.wire
 
 fn main() {
     let fmt = wire.json_wire_format()
-    let mut keys: [string] = []
-    keys.push("name")
-    keys.push("age")
-    let mut vals: [wire.WireValue] = []
-    vals.push(wire.wire_string("Alice"))
-    vals.push(wire.wire_int(30))
-    let v = wire.wire_record(keys, vals)
+    let mut in_keys: [string] = []
+    in_keys.push("name")
+    in_keys.push("age")
+    let mut in_vals: [wire.WireValue] = []
+    in_vals.push(wire.wire_string("Alice"))
+    in_vals.push(wire.wire_int(30))
+    let v = wire.wire_record(in_keys, in_vals)
     let s = fmt.serialize(v)
     print(s)
     let r = fmt.deserialize(s) catch wire.wire_null()
@@ -325,16 +324,15 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Wire format tests - mark as ignored
 fn wire_empty_record_roundtrip() {
     let out = run_wire_test(r#"
 import std.wire
 
 fn main() {
     let fmt = wire.json_wire_format()
-    let mut keys: [string] = []
-    let mut vals: [wire.WireValue] = []
-    let v = wire.wire_record(keys, vals)
+    let mut in_keys: [string] = []
+    let mut in_vals: [wire.WireValue] = []
+    let v = wire.wire_record(in_keys, in_vals)
     let s = fmt.serialize(v)
     print(s)
     let r = fmt.deserialize(s) catch wire.wire_null()
@@ -357,7 +355,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Wire format tests - mark as ignored
 fn wire_variant_roundtrip() {
     let out = run_wire_test(r#"
 import std.wire
@@ -379,7 +376,7 @@ fn main() {
                 wire.WireValue.Bytes { value } { print("wrong") }
                 wire.WireValue.Array { elements } { print("wrong") }
                 wire.WireValue.Record { keys, values } { print("wrong") }
-                wire.WireValue.Variant { name, data } { print("wrong") }
+                wire.WireValue.Variant { name: n2, data: d2 } { print("wrong") }
                 wire.WireValue.Null { print("wrong") }
             }
         }
@@ -401,7 +398,6 @@ fn main() {
 // ── Nested structure round-trips ───────────────────────────────────────────────
 
 #[test]
-#[ignore] // Wire format tests - mark as ignored
 fn wire_nested_array_in_record() {
     let out = run_wire_test(r#"
 import std.wire
@@ -411,13 +407,13 @@ fn main() {
     let mut items: [wire.WireValue] = []
     items.push(wire.wire_int(10))
     items.push(wire.wire_int(20))
-    let mut keys: [string] = []
-    keys.push("items")
-    keys.push("count")
-    let mut vals: [wire.WireValue] = []
-    vals.push(wire.wire_array(items))
-    vals.push(wire.wire_int(2))
-    let v = wire.wire_record(keys, vals)
+    let mut in_keys: [string] = []
+    in_keys.push("items")
+    in_keys.push("count")
+    let mut in_vals: [wire.WireValue] = []
+    in_vals.push(wire.wire_array(items))
+    in_vals.push(wire.wire_int(2))
+    let v = wire.wire_record(in_keys, in_vals)
     let s = fmt.serialize(v)
     print(s)
     let r = fmt.deserialize(s) catch wire.wire_null()
@@ -433,7 +429,7 @@ fn main() {
                 wire.WireValue.Bool { value } { print("wrong") }
                 wire.WireValue.Str { value } { print("wrong") }
                 wire.WireValue.Bytes { value } { print("wrong") }
-                wire.WireValue.Record { keys, values } { print("wrong") }
+                wire.WireValue.Record { keys: k2, values: v2 } { print("wrong") }
                 wire.WireValue.Variant { name, data } { print("wrong") }
                 wire.WireValue.Null { print("wrong") }
             }
