@@ -42,9 +42,6 @@ struct LowerContext<'a> {
     runtime: &'a RuntimeRegistry,
     vtable_ids: &'a HashMap<(String, String), DataId>,
     source: &'a str,
-    /// Function contracts: fn_mangled_name → FnContracts (used during function setup)
-    #[allow(dead_code)]
-    fn_contracts: &'a HashMap<String, FnContracts>,
     /// Module-level globals holding DI singleton pointers, used by scope blocks.
     singleton_globals: &'a HashMap<String, DataId>,
     /// Module-level globals holding rwlock pointers for synchronized singletons.
@@ -5472,7 +5469,6 @@ pub fn lower_serve_handler(
     runtime: &RuntimeRegistry,
     vtable_ids: &HashMap<(String, String), DataId>,
     source: &str,
-    fn_contracts: &HashMap<String, FnContracts>,
     singleton_globals: &HashMap<String, DataId>,
     rwlock_globals: &HashMap<String, DataId>,
     coverage_lookup: &HashMap<(u32, usize, u32), u32>,
@@ -5492,7 +5488,6 @@ pub fn lower_serve_handler(
         runtime,
         vtable_ids,
         source,
-        fn_contracts,
         singleton_globals,
         rwlock_globals,
         coverage_lookup,
@@ -5660,7 +5655,6 @@ pub fn lower_function(
         runtime,
         vtable_ids,
         source,
-        fn_contracts,
         singleton_globals,
         rwlock_globals,
         coverage_lookup,
@@ -6057,7 +6051,6 @@ pub fn lower_generator_next(
     runtime: &RuntimeRegistry,
     vtable_ids: &HashMap<(String, String), DataId>,
     source: &str,
-    fn_contracts: &HashMap<String, FnContracts>,
     singleton_globals: &HashMap<String, DataId>,
     rwlock_globals: &HashMap<String, DataId>,
     coverage_lookup: &HashMap<(u32, usize, u32), u32>,
@@ -6179,7 +6172,6 @@ pub fn lower_generator_next(
         runtime,
         vtable_ids,
         source,
-        fn_contracts,
         singleton_globals,
         rwlock_globals,
         coverage_lookup,

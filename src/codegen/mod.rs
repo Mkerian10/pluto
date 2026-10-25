@@ -661,7 +661,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
             let mut next_builder_ctx = FunctionBuilderContext::new();
             {
                 let builder = cranelift_frontend::FunctionBuilder::new(&mut next_ctx.func, &mut next_builder_ctx);
-                lower_generator_next(f, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+                lower_generator_next(f, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
             }
             module
                 .define_function(next_id, &mut next_ctx)
@@ -1073,7 +1073,7 @@ pub fn codegen(program: &Program, env: &TypeEnv, source: &str, coverage_map: Opt
         let mut builder_ctx = FunctionBuilderContext::new();
         {
             let builder = cranelift_frontend::FunctionBuilder::new(&mut fn_ctx.func, &mut builder_ctx);
-            lower_serve_handler(served, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &fn_contracts, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
+            lower_serve_handler(served, builder, env, &mut module, &func_ids, &runtime, &vtable_ids, source, &singleton_data_ids, &rwlock_data_ids, &coverage_lookup)?;
         }
         module
             .define_function(hid, &mut fn_ctx)

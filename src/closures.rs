@@ -2,7 +2,9 @@ use uuid::Uuid;
 
 use crate::diagnostics::CompileError;
 use crate::parser::ast::*;
-use crate::span::{Span, Spanned};
+use crate::span::Spanned;
+#[cfg(test)]
+use crate::span::Span;
 use crate::typeck::env::{FuncSig, TypeEnv};
 use crate::typeck::types::{PlutoType, pluto_type_to_type_expr};
 use crate::visit::{walk_expr_mut, walk_stmt_mut, VisitMut};
@@ -336,7 +338,7 @@ fn lift_in_block(
 }
 
 // Helper functions for tests (maintain old signature)
-#[allow(dead_code)]
+#[cfg(test)]
 fn lift_in_stmt(
     stmt: &mut Stmt,
     env: &mut TypeEnv,
@@ -354,7 +356,7 @@ fn lift_in_stmt(
     Ok(())
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn lift_in_expr(
     expr: &mut Expr,
     span: Span,
