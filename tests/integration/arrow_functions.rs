@@ -89,7 +89,7 @@ fn arrow_empty_body_accepted() {
 }
 
 #[test]
-#[ignore] // Compiler bug: Calling closures from arrays doesn't work. Error: "print() does not support type fn(int) int"
+#[ignore] // Not supported: calling an indexed element directly (`funcs[1](5)`) is a parse error; bind it first (`let f = funcs[1]`)
 fn arrow_capture_in_loop() {
     let stdout = compile_and_run_stdout(r#"
         fn main() {
@@ -131,7 +131,7 @@ fn arrow_as_struct_field() {
 }
 
 #[test]
-#[ignore] // Compiler bug: Calling closures from arrays doesn't work. Error: "print() does not support type fn(int) int"
+#[ignore] // Not supported: calling an indexed element directly (`funcs[1](5)`) is a parse error; bind it first (`let f = funcs[1]`)
 fn arrow_in_array_literal() {
     let stdout = compile_and_run_stdout(r#"
         fn main() {
@@ -148,7 +148,6 @@ fn arrow_in_array_literal() {
 }
 
 #[test]
-#[ignore] // Test bug: Uses match as expression, which is not supported in Pluto (only match statements)
 fn arrow_complex_nesting() {
     // Closure inside match arm inside another closure
     let stdout = compile_and_run_stdout(r#"
@@ -158,13 +157,15 @@ fn arrow_complex_nesting() {
         }
 
         fn main() {
-            let outer = (opt: Option<int>) => {
-                return match opt {
-                    Option.Some { value } => {
+            let outer = (opt: Option<int>) int => {
+                match opt {
+                    Option.Some { value } {
                         let inner = (x: int) => x + value
-                        inner(10)
+                        return inner(10)
                     }
-                    Option.None => 0
+                    Option.None {
+                        return 0
+                    }
                 }
             }
             let result = outer(Option<int>.Some { value: 5 })
