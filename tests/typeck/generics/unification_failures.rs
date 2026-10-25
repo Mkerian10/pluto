@@ -263,5 +263,4 @@ fn instance_param_mismatch() { compile_should_fail_with(r#"class Box<T>{value:T}
 
 // Bound-constrained unification
 #[test]
-#[ignore] // Syntax error: old impl syntax without class body
-fn bound_limits_unification() { compile_should_fail_with(r#"trait T{} class C{x:int} impl T fn f<U:T>(x:U)U{return x} fn main(){f(42)}"#, "does not satisfy"); }
+fn bound_limits_unification() { compile_should_fail_with(r#"trait T{} class C impl T{x:int} fn f<U:T>(x:U)U{return x} fn main(){f(42)}"#, "does not satisfy"); }
