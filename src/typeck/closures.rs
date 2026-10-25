@@ -8,7 +8,7 @@ use super::env::TypeEnv;
 use super::types::PlutoType;
 use super::resolve::resolve_type;
 use super::infer::infer_expr;
-use super::check::check_block;
+use super::check::{all_paths_return, check_block};
 
 pub(crate) fn infer_closure(
     params: &[Param],
@@ -102,6 +102,16 @@ pub(crate) fn infer_closure(
     let saved_function_return = env.current_function_return.take();
     env.current_function_return = Some(final_ret.clone());
     check_block(&body.node, env, &final_ret)?;
+    // Same rule as functions: a non-void closure must return (or raise) on
+    // every path. Without this a fall-through body reached codegen with no
+    // return value and crashed the compiler. Expression-bodied closures
+    // desugar to a single `return`, so they always satisfy this.
+    if !matches!(final_ret, PlutoType::Void) && !all_paths_return(&body.node) {
+        return Err(CompileError::type_err(
+            format!("missing return statement in closure with return type {}", final_ret),
+            body.span,
+        ));
+    }
     env.current_function_return = saved_function_return;
     env.current_generator_elem = saved_gen_elem;
     env.loop_depth = saved_loop_depth;

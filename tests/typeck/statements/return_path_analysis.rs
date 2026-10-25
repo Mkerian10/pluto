@@ -100,5 +100,26 @@ fn generic_missing_return() { compile_should_fail_with(r#"fn f<T>(x:T)T{let y=x}
 
 // Closure missing return
 #[test]
-#[ignore] // Syntax error: closure body requires => before block
-fn closure_missing_return() { compile_should_fail_with(r#"fn main(){let f=(x:int)int{let y=x}}"#, "missing return"); }
+fn closure_missing_return() {
+    // Used to crash codegen ("block0 is not filled") instead of erroring.
+    compile_should_fail_with(r#"fn main() {
+    let f = (x: int) int => {
+        let y = x
+    }
+    print(f(3))
+}"#, "missing return statement in closure with return type int");
+}
+
+#[test]
+fn closure_returns_on_all_paths() {
+    compile_and_run(r#"fn main() {
+    let f = (x: int) int => {
+        if x > 0 {
+            return 1
+        } else {
+            return 2
+        }
+    }
+    print(f(3))
+}"#);
+}
