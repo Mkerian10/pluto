@@ -1032,7 +1032,6 @@ fn main() {
 }
 
 #[test]
-#[ignore] // Compiler bug: QualifiedAccess panic in contracts validation (self.field in trait requires)
 fn trait_contract_self_field_rejected() {
     compile_should_fail_with(
         r#"
@@ -1054,7 +1053,7 @@ fn main() {
     print(b.check())
 }
 "#,
-        "field access on non-class type",
+        "cannot access field 'value' through trait 'Bad'",
     );
 }
 
